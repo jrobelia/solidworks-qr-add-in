@@ -24,10 +24,7 @@ namespace SolidWorksQrAddIn.Host
         private readonly IFeature _sketchFeature;
         private readonly IModelDocExtension? _ext;
         private readonly bool _undoRecording;
-        private readonly bool _prevAddToDB;
-        private readonly bool _prevDisplayWhenAdded;
-        private readonly bool _prevAutoInference;
-        private readonly bool _prevInferenceMode;
+        private readonly SketchManagerFlagSnapshot _previousFlags;
         private bool _committed;
         private bool _aborted;
         private bool _flagsRestored;
@@ -35,20 +32,21 @@ namespace SolidWorksQrAddIn.Host
         private CleanupOutcome? _abortOutcome;
         private int _lineCount;
 
-        public SwSketchInsertion(
+        /// <param name="previousFlags">
+        /// The sketch-manager flag values from before the session — restored
+        /// on every exit path.
+        /// </param>
+        internal SwSketchInsertion(
             IModelDoc2 doc, ISketchManager mgr, IFeature sketchFeature,
             IModelDocExtension? ext, bool undoRecording,
-            bool prevAddToDB, bool prevDisplayWhenAdded, bool prevAutoInference, bool prevInferenceMode)
+            SketchManagerFlagSnapshot previousFlags)
         {
             _doc = doc;
             _mgr = mgr;
             _sketchFeature = sketchFeature;
             _ext = ext;
             _undoRecording = undoRecording;
-            _prevAddToDB = prevAddToDB;
-            _prevDisplayWhenAdded = prevDisplayWhenAdded;
-            _prevAutoInference = prevAutoInference;
-            _prevInferenceMode = prevInferenceMode;
+            _previousFlags = previousFlags;
 
             // Bulk-insert mode for the session: verified live, the interactive
             // path sporadically refuses CreateLine on coincident endpoints of a
@@ -108,36 +106,18 @@ namespace SolidWorksQrAddIn.Host
         {
             try
             {
-                // Exit edit mode, then delete ONLY this session's sketch feature.
+                // Exit edit mode, then delete ONLY this session's sketch
+                // feature — the same stages the begin-time abandon path runs.
                 // Never a blind Undo — prior user work must survive.
-                try { _mgr.InsertSketch(false); }
-                catch (Exception ex)
-                {
+                var exitError = OwnedSketchCleanup.ExitSketchEditMode(_mgr);
+                if (exitError != null)
                     return CleanupOutcome.Failed(
-                        $"could not exit sketch edit mode: {ex.Message}");
-                }
+                        $"could not exit sketch edit mode: {exitError}");
 
-                try
-                {
-                    _doc.ClearSelection2(true);
-                    var ext = _doc.Extension as IModelDocExtension
-                        ?? throw new SketchHostException("The document exposed no extension interface.");
-                    bool selected = ext.SelectByID2(
-                        _sketchFeature.Name, "SKETCH", 0, 0, 0, false, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
-                    if (!selected)
-                        return CleanupOutcome.Failed(
-                            $"could not select sketch feature '{_sketchFeature.Name}' for deletion");
-                    bool deleted = ext.DeleteSelection2(0);
-                    if (!deleted)
-                        return CleanupOutcome.Failed(
-                            $"DeleteSelection2 failed for '{_sketchFeature.Name}'");
-                    return CleanupOutcome.Cleaned;
-                }
-                catch (Exception ex)
-                {
-                    return CleanupOutcome.Failed($"deleting '{_sketchFeature.Name}' failed: {ex.Message}");
-                }
+                var deleteError = OwnedSketchCleanup.DeleteSketchFeature(_doc, _sketchFeature);
+                return deleteError == null
+                    ? CleanupOutcome.Cleaned
+                    : CleanupOutcome.Failed(deleteError);
             }
             finally
             {
@@ -165,10 +145,7 @@ namespace SolidWorksQrAddIn.Host
         {
             if (_flagsRestored) return;
             _flagsRestored = true;
-            try { _mgr.AddToDB = _prevAddToDB; } catch { }
-            try { _mgr.DisplayWhenAdded = _prevDisplayWhenAdded; } catch { }
-            try { _mgr.AutoInference = _prevAutoInference; } catch { }
-            try { _mgr.InferenceMode = _prevInferenceMode; } catch { }
+            _previousFlags.Restore(_mgr);
         }
 
         /// <summary>

@@ -25,6 +25,24 @@ Everything is x64 (`Directory.Build.props` sets `Platforms=x64` and defaults
 `Platform` to x64, so single-project builds produce the same `bin\x64\...` path
 as the solution build).
 
+### Pinned NuGet assets — verified during restore
+
+Package versions are pinned in the project files **and** locked: every project
+commits a `packages.lock.json` (`RestorePackagesWithLockFile` in
+`Directory.Build.props`) recording the resolved version + content hash of each
+package — QRCoder 1.8.0 and Clipper2 2.0.0 for the runtime, the test-SDK
+packages for the suite. Verify a checkout resolves exactly the locked assets:
+
+```powershell
+dotnet restore SolidWorksQrAddIn.sln --locked-mode
+```
+
+`--locked-mode` fails (NU1004/NU140x) when a project file asks for something
+the lock file does not contain, instead of silently resolving a different
+asset — `pack-deploy.ps1` runs it before every pack build. After an
+intentional version change, regenerate the locks with a plain
+`dotnet restore --force` and commit the updated `packages.lock.json` files.
+
 ### Configuring the SolidWorks SDK reference location
 
 The interop assemblies (`sldworks`, `swconst`, `swpublished`) come from the
@@ -78,10 +96,11 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   orientation, material-area parity, deterministic signature.
 - **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
   clearing, exact content, size/growth field parsing (mm / % per side) with
-  useful errors and verbatim-kept rejected text, current-request insertion,
-  fresh host revalidation (no stale cross-document support), create blocked
-  while editing, single-window lifecycle (focus-or-recreate, close, release)
-  via the `IQrSketchWindow` seam.
+  useful errors and verbatim-kept rejected text, a plain Ready status with no
+  version/cell/size readouts, current-request insertion, fresh host
+  revalidation (no stale cross-document support), create blocked while
+  editing, single-window lifecycle (focus-or-recreate, close, release) and
+  session→window sync of probe-driven edits via the `IQrSketchWindow` seam.
 - **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
   payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
   two-direction scaling, preserved ring→hole→island nesting, finite overlap
@@ -98,7 +117,7 @@ the documented-but-not-executed HKLM/RegAsm alternative, load/unload, and the
 "close SolidWorks before replacing binaries" rule). The short version:
 
 ```powershell
-.\scripts\pack-deploy.ps1                          # builds Release, packs + verifies deploy\
+.\scripts\pack-deploy.ps1                          # locked-mode restore, Release build, packs + verifies deploy\
 robocopy deploy\SolidWorksQrAddIn "$env:LOCALAPPDATA\SolidWorksQrAddIn" /MIR
 cd "$env:LOCALAPPDATA\SolidWorksQrAddIn"
 .\register-addin-hkcu.ps1                          # HKCU only, no admin; -DeployDir defaults to the script folder

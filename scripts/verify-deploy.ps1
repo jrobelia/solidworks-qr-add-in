@@ -70,15 +70,29 @@ if (Test-Path $addinDll) {
         }
         $asm = [Reflection.Assembly]::ReflectionOnlyLoadFrom($addinDll)
         Write-Host "       assembly: $($asm.GetName().FullName)"
+
+        # The expected CLSID comes from the folder's own Core.dll
+        # (AddinIdentity.Clsid, braced "{...}") — never a literal repeated here.
+        $expectedClsid = $null
+        $identity = $core.GetType('SolidWorksQrAddIn.Core.Registration.AddinIdentity')
+        if ($identity -ne $null) {
+            $field = $identity.GetField('Clsid', [Reflection.BindingFlags]'Public,Static')
+            if ($field -ne $null) { $expectedClsid = [string]$field.GetValue($null) }
+        }
+
         $t = $asm.GetType('SolidWorksQrAddIn.SwAddin')
         $guid = [Reflection.CustomAttributeData]::GetCustomAttributes($t) |
             Where-Object { $_.AttributeType.FullName -eq 'System.Runtime.InteropServices.GuidAttribute' } |
             ForEach-Object { $_.ConstructorArguments[0].Value } | Select-Object -First 1
-        if ($guid) {
-            $match = ($guid.Trim('{}') -ieq 'DA932451-66B9-4092-9534-292AD913DEAC')
+        if ($guid -and $expectedClsid) {
+            # GuidAttribute.Value is UNBRACED; AddinIdentity.Clsid is braced —
+            # normalise both before comparing.
+            $match = ($guid.Trim('{}') -ieq $expectedClsid.Trim('{}'))
             Write-Host ("       add-in CLSID: {0}  ({1})" -f $guid,
-                $(if ($match) { 'matches AddinIdentity.Clsid' } else { 'MISMATCH - not this add-in' }))
-            if (-not $match) { $problems += "deployed add-in CLSID $guid does not match the plan" }
+                $(if ($match) { 'matches AddinIdentity.Clsid' } else { "MISMATCH - expected $expectedClsid" }))
+            if (-not $match) { $problems += "deployed add-in CLSID $guid does not match AddinIdentity.Clsid $expectedClsid" }
+        } elseif ($guid -and -not $expectedClsid) {
+            Write-Host "       add-in CLSID: $guid  (AddinIdentity.Clsid unreadable - not compared)"
         }
     } catch {
         Write-Host "       (identity read skipped: $($_.Exception.Message))"

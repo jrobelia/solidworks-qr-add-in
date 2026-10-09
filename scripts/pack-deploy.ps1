@@ -52,7 +52,13 @@ $repo = Split-Path $scriptDir -Parent
 if (-not $OutputDir) { $OutputDir = Join-Path $repo 'deploy\SolidWorksQrAddIn' }
 
 # --- build (release, x64) ----------------------------------------------------
+# Restore in locked mode first: the committed packages.lock.json files pin the
+# NuGet assets (QRCoder 1.8.0, Clipper2 2.0.0) — a drifted project file fails
+# the pack instead of silently resolving a different asset (spec requirement).
 if (-not $SkipBuild) {
+    Write-Host "== restore: dotnet restore SolidWorksQrAddIn.sln --locked-mode =="
+    & dotnet restore (Join-Path $repo 'SolidWorksQrAddIn.sln') --locked-mode | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "dotnet restore --locked-mode failed ($LASTEXITCODE) - packages.lock.json drift?" }
     Write-Host "== build: dotnet build src\SolidWorksQrAddIn -c Release =="
     & dotnet build (Join-Path $repo 'src\SolidWorksQrAddIn\SolidWorksQrAddIn.csproj') -c Release | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "dotnet build failed ($LASTEXITCODE)" }

@@ -18,9 +18,12 @@ in this repo at `licenses/`):
 
 Selected-asset note: NuGet resolves `lib/net40/QRCoder.dll` for the net48
 target and `lib/netstandard2.0/Clipper2Lib.dll` (net48 supports .NET Standard
-2.0). Verified from `obj/project.assets.json` on the baseline toolchain
-(.NET SDK 10.0.103). No SolidWorks assemblies are redistributed: the add-in
-references the installed SDK interop assemblies with `EmbedInteropTypes=true`
+2.0). The resolved versions and package content hashes are locked in the
+committed `packages.lock.json` files (`RestorePackagesWithLockFile`) and
+verified during restore with `dotnet restore --locked-mode` — a drifted
+project file fails the restore/pack rather than pulling a different asset.
+No SolidWorks assemblies are redistributed: the add-in references the
+installed SDK interop assemblies with `EmbedInteropTypes=true`
 at build time only — nothing is copied or shipped (RESEARCH.md §2).
 
 Development/test-only packages (not shipped with the add-in):

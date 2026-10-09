@@ -21,6 +21,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>Close the window (same as the user's close affordance).</summary>
         void Close();
 
+        /// <summary>
+        /// Re-pull the session's field texts, picture and status into the
+        /// view. The session calls this whenever its state changed without
+        /// the window driving it — a probe-driven edit, a create outcome —
+        /// so the shown fields and bitmap can never diverge from the session.
+        /// </summary>
+        void SyncFromSession();
+
         /// <summary>Raised when the window closes, however that happened.</summary>
         event EventHandler? Closed;
     }
