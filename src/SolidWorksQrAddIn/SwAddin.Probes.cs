@@ -5,6 +5,9 @@ using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Registration;
 using SolidWorksQrAddIn.Host;
+using SolidWorksQrAddIn.UI;
+using SolidWorks.Interop.sldworks;
+using SolidWorks.Interop.swconst;
 
 namespace SolidWorksQrAddIn
 {
@@ -177,5 +180,178 @@ namespace SolidWorksQrAddIn
 
         public string AddinStateProbe() =>
             _connected ? $"CONNECTED group={AddinIdentity.CommandGroupUserId}" : "NOT-CONNECTED";
+
+        // ---------------- undo-recording diagnostic (verification only) ----------------
+
+        /// <summary>
+        /// Arrangement matrix for the named-undo investigation. Every
+        /// arrangement draws one two-segment sketch on a FRESH part document
+        /// it creates and closes itself, then presses EditUndo2 and reports
+        /// whether that removed the sketch.
+        ///   -1 ping (thread context report, no document)
+        ///    0 control: no recording, interactive-mode line
+        ///    1 start BEFORE InsertSketch, AddToDB off, finish after exit
+        ///    2 start BEFORE InsertSketch, AddToDB on,  finish after exit
+        ///    3 start AFTER  InsertSketch, AddToDB off, finish after exit
+        ///    4 start AFTER  InsertSketch, AddToDB on,  finish after exit (= product shape)
+        ///    5 start after InsertSketch,  AddToDB on,  finish WHILE sketch open
+        ///    6 = 4 but FinishRecordingUndoObject (v1)
+        ///    7 = 4 but the whole arrangement runs on the add-in's WPF STA
+        ///        thread — the real Create-button call context
+        ///    8 start before InsertSketch, AddToDB on,  finish while open
+        ///    9 empty recording: start + finish, no sketch at all
+        ///   10 start after lines drawn (mid-sketch), AddToDB on, finish after exit
+        ///   11 = 4 but FinishRecordingUndoObject2(name, MakeHidden=true)
+        ///   12 = 1 but the whole arrangement runs on the WPF STA thread
+        ///   13 control on WPF STA thread: no recording, interactive line
+        ///   14 start before the SELECTION itself, AddToDB on, finish after exit
+        /// </summary>
+        public string UndoArrangementProbe(int arrangement)
+        {
+            if (!_connected || _sw == null)
+                return NotConnectedError;
+            if (arrangement == -1)
+            {
+                var t = System.Threading.Thread.CurrentThread;
+                return $"PING thread='{t.Name}' id={t.ManagedThreadId} " +
+                       $"apt={t.GetApartmentState()} swVisible={_sw.Visible}";
+            }
+            try
+            {
+                int inner = arrangement;
+                if (arrangement == 7) inner = 4;
+                else if (arrangement == 12) inner = 1;
+                else if (arrangement == 13) inner = 0;
+                if (arrangement is 7 or 12 or 13)
+                {
+                    _wpf ??= new AddInWpfThread();
+                    return $"ARR{arrangement}(inner={inner}) " +
+                           _wpf.Invoke(() => RunUndoArrangement(inner));
+                }
+                return $"ARR{arrangement} " + RunUndoArrangement(inner);
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Executes one arrangement against a fresh document. Reports the
+        /// finish call's verdict and the actual undo behaviour. Runs on
+        /// whatever thread the caller picked — that choice is itself one of
+        /// the variables under test.
+        /// </summary>
+        private string RunUndoArrangement(int arrangement)
+        {
+            var sw = _sw!;
+            string template = sw.GetUserPreferenceStringValue(
+                (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+            if (string.IsNullOrEmpty(template))
+                return "no-template";
+            var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+            if (doc == null) return "no-doc";
+            try
+            {
+                var ext = (IModelDocExtension)doc.Extension;
+                var mgr = (ISketchManager)doc.SketchManager;
+                int featsBefore = CountSketchFeatures(doc);
+
+                bool recBefore   = arrangement is 1 or 2 or 8 or 14;
+                bool recAfter    = arrangement is 3 or 4 or 5 or 6 or 10 or 11;
+                bool addToDb     = arrangement is 2 or 4 or 5 or 6 or 8 or 10 or 11 or 14;
+                bool finishOpen  = arrangement is 5 or 8;        // finish before exiting edit
+                bool v1          = arrangement == 6;
+                bool hidden      = arrangement == 11;
+                bool noRecording = arrangement == 0;
+                bool emptyRec    = arrangement == 9;
+
+                string finishResult = "not-called";
+                string sketchName = "";
+
+                void StartRec()
+                {
+                    try { ext.StartRecordingUndoObject(); }
+                    catch (Exception ex) { finishResult = "startEX:" + ex.GetType().Name; }
+                }
+                void FinishRec()
+                {
+                    try
+                    {
+                        bool ok = v1
+                            ? ext.FinishRecordingUndoObject("QRDiag")
+                            : ext.FinishRecordingUndoObject2("QRDiag", hidden);
+                        finishResult = ok ? "TRUE" : "false";
+                    }
+                    catch (Exception ex) { finishResult = "finishEX:" + ex.GetType().Name; }
+                }
+
+                if (emptyRec)
+                {
+                    StartRec();
+                    FinishRec();
+                }
+                else
+                {
+                    if (arrangement == 14) StartRec();   // widest scope: wraps selection too
+                    ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (recBefore && arrangement != 14) StartRec();
+                    mgr.InsertSketch(true);
+                    if (mgr.ActiveSketch is IFeature f) sketchName = f.Name;
+                    if (addToDb)
+                    {
+                        try { mgr.AddToDB = true; } catch { }
+                        try { mgr.DisplayWhenAdded = false; } catch { }
+                    }
+                    if (recAfter && arrangement != 10) StartRec();
+                    mgr.CreateLine(-0.005, -0.005, 0, 0.005, -0.005, 0);
+                    mgr.CreateLine(0.005, -0.005, 0, 0.005, 0.005, 0);
+                    if (arrangement == 10) StartRec();   // mid-sketch, after geometry
+                    if (finishOpen) FinishRec();
+                    try { if (addToDb) mgr.AddToDB = false; } catch { }
+                    mgr.InsertSketch(false);             // exit edit mode
+                    if (!finishOpen && !noRecording) FinishRec();
+                }
+
+                bool present = FindSketch(doc, sketchName) != null;
+                // One undo press, then re-check — the observable contract.
+                string undo = "skipped";
+                if (present)
+                {
+                    try { doc.EditUndo2(1); } catch (Exception ex) { undo = "undoEX:" + ex.GetType().Name; }
+                    bool gone = FindSketch(doc, sketchName) == null;
+                    undo = $"undoRemoved={gone} featsDelta={CountSketchFeatures(doc) - featsBefore}";
+                }
+                else undo = $"sketch-missing featsDelta={CountSketchFeatures(doc) - featsBefore}";
+
+                var t = System.Threading.Thread.CurrentThread;
+                return $"finish={finishResult} sketch='{sketchName}' {undo} " +
+                       $"thread={t.GetApartmentState()}#{t.ManagedThreadId}";
+            }
+            finally
+            {
+                try { sw.CloseDoc(doc.GetTitle()); } catch { }
+            }
+        }
+
+        private static int CountSketchFeatures(IModelDoc2 doc)
+        {
+            int n = 0;
+            for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+                if (string.Equals(f.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase))
+                    n++;
+            return n;
+        }
+
+        private static IFeature? FindSketch(IModelDoc2 doc, string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+                if (string.Equals(f.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return f;
+            return null;
+        }
     }
 }

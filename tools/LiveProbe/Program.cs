@@ -87,6 +87,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "perf", StringComparison.OrdinalIgnoreCase))
                 return PerfMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "undo", StringComparison.OrdinalIgnoreCase))
+                return UndoMatrixMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -627,6 +630,94 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             Console.WriteLine(_failures == 0 ? "# PERF DONE" : $"# {_failures} perf check(s) failed");
             return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe undo [deployDir] [progId]` — runs the
+        /// FinishRecordingUndoObject(2) arrangement matrix through
+        /// <see cref="IAddInProbe.UndoArrangementProbe"/> on a session-free
+        /// instance. Each arrangement prints one line: the finish call's
+        /// verdict and whether one EditUndo2 removed the sketch. If an older
+        /// registered build auto-loaded, it is unloaded and replaced with the
+        /// requested DLL so the matrix always runs against this build.
+        /// </summary>
+        private static int UndoMatrixMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            Console.WriteLine("# FinishRecordingUndoObject arrangement matrix");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                var probe = TryGetProbe(sw);
+                // A previously REGISTERED build may have auto-loaded — it has
+                // no UndoArrangementProbe. Ping it; if the method is absent,
+                // unload the registered copy and load the requested DLL.
+                bool pingOk = false;
+                if (probe != null)
+                {
+                    try
+                    {
+                        string ping = probe.UndoArrangementProbe(-1);
+                        Console.WriteLine("# " + ping);
+                        pingOk = ping.StartsWith("PING");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"# probe ping failed ({ex.GetType().Name}) — reloading add-in");
+                    }
+                }
+                if (!pingOk)
+                {
+                    try { sw.UnloadAddIn(dllPath); } catch { }
+                    // The registered copy may sit in a different folder —
+                    // unload by its known deployed path too.
+                    string registered = Path.Combine(
+                        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    if (!string.Equals(registered, dllPath, StringComparison.OrdinalIgnoreCase))
+                        try { sw.UnloadAddIn(registered); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                }
+                if (probe == null) { Console.WriteLine("# FATAL: no probe object"); return 1; }
+                Console.WriteLine("# " + probe.AddinStateProbe());
+                Console.WriteLine("# ping: " + probe.UndoArrangementProbe(-1));
+
+                foreach (var arr in new[] { 9, 0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 14, 13, 12, 7 })
+                    Console.WriteLine(probe.UndoArrangementProbe(arr));
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
         }
 
         // ================= ticket 5: support + coordinate convention =================
@@ -1896,8 +1987,15 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         private static ISldWorks? AttachOrLaunch(string progId)
         {
-            var t = Type.GetTypeFromProgID(progId);
-            if (t == null) { Console.WriteLine($"FAIL  ProgID {progId} not registered"); return null; }
+            // Accepts a ProgID ("SldWorks.Application.31") or a "{clsid}" —
+            // some installed versions register a versioned ProgID whose
+            // CLSID lookup fails; the raw CLSID still activates.
+            Type? t = null;
+            if (progId.StartsWith("{") && Guid.TryParse(progId, out var clsid))
+                t = Type.GetTypeFromCLSID(clsid);
+            else
+                t = Type.GetTypeFromProgID(progId);
+            if (t == null) { Console.WriteLine($"FAIL  ProgID/CLSID {progId} not registered"); return null; }
             return Activator.CreateInstance(t) as ISldWorks;
         }
 
@@ -1981,6 +2079,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrSizeProbe(string sizeText) => Invoke("SetQrSizeProbe", sizeText);
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
+            public string UndoArrangementProbe(int arrangement) => Invoke("UndoArrangementProbe", arrangement);
             public string PreviewSignatureProbe() => Invoke("PreviewSignatureProbe");
         }
     }

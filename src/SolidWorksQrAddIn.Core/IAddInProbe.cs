@@ -94,6 +94,17 @@ namespace SolidWorksQrAddIn.Core
         string CreateQrFromWindowProbe();
 
         /// <summary>
+        /// Undo-recording diagnostic (verification-only): creates a fresh
+        /// throwaway part document, creates one small sketch under the
+        /// requested arrangement of StartRecordingUndoObject /
+        /// FinishRecordingUndoObject(2) / InsertSketch / AddToDB, then
+        /// presses EditUndo2 and reports whether the sketch was removed.
+        /// Returns a single-line "ARR …" result string. -1 is a ping that
+        /// reports the executing thread — no document is touched.
+        /// </summary>
+        string UndoArrangementProbe(int arrangement);
+
+        /// <summary>
         /// Fingerprint of the session's current picture:
         /// "PIC &lt;w&gt;x&lt;h&gt; dark=&lt;n&gt; sha=&lt;hash&gt;" or "NO-PICTURE"
         /// when the current content is invalid. Lets the harness prove the
