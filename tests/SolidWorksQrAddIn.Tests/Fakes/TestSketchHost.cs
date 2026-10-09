@@ -103,8 +103,12 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
+        /// <summary>Times CaptureState was invoked — proves the host was (not) consulted.</summary>
+        public int CaptureCount { get; private set; }
+
         public SketchHostState CaptureState()
         {
+            CaptureCount++;
             var doc = Document;
             var kind = doc == null
                 ? HostDocumentKind.None
