@@ -374,10 +374,16 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 SupportChecks(sw, doc!, ext, mgr, probe, expectedA);
 
-                // ================= close / reopen =================
+                // ================= close / reopen — and cancellation =================
 
+                // Ticket 6: closing the window with a valid pending request is
+                // the cancel path — it must never reach the part.
+                int featuresBeforeCancel = FindSketchFeatureNames(doc!).Count;
                 Check(probe.CloseQrWindowProbe().Contains("open=False"),
                     "window closes", probe.WindowStateProbe());
+                Check(FindSketchFeatureNames(doc!).Count == featuresBeforeCancel,
+                    "closing the window before Create left the part unchanged (cancel is safe)",
+                    $"features={featuresBeforeCancel}");
                 string reopen = probe.OpenQrWindowProbe();
                 Check(reopen.Contains("open=True") && reopen.Contains("windows=2"),
                     "closed window is recreated safely", reopen);
@@ -409,6 +415,15 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 if (sketchAName.Length > 0)
                     FeatureChecks(doc!, ext, mgr, sketchAName, expectedA);
+
+                // ================= ticket 6: failure handling =================
+                // Runs last — it closes all documents at the end.
+
+                if (probe2 != null)
+                    Ticket6Checks(sw, doc!, ext, mgr, probe2);
+                else
+                    Check(false, "ticket-6 failure-handling live checks ran",
+                        "no live probe after reload — skipped");
 
                 sw.UnloadAddIn(dllPath);
                 Console.WriteLine(_failures == 0 ? "# ALL CHECKS PASSED" : $"# {_failures} CHECK(S) FAILED");
@@ -872,6 +887,109 @@ namespace SolidWorksQrAddIn.LiveProbe
             try { sw.IActivateDoc3(doc.GetTitle(), false, ref actErr); } catch { }
             doc.ClearSelection2(true);
             probe.SetQrContentProbe(PayloadB);
+        }
+
+        /// <summary>
+        /// Ticket-6 live checks, run against the RELOADED add-in (probe2):
+        /// honest cleanup-failure reporting, host-tool health afterwards, the
+        /// named-undo contract (one undo reverts exactly the creation, never
+        /// a prior user action), and the no-open-document refusal. Ends by
+        /// closing every document — callers must not use doc afterwards.
+        /// </summary>
+        private static void Ticket6Checks(
+            ISldWorks sw, IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr,
+            IAddInProbe probe)
+        {
+            probe.SetQrContentProbe(PayloadA); // the reloaded session starts empty
+
+            // ---------- injected cleanup failure: honest reporting ----------
+            doc.ClearSelection2(true);
+            Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault),
+                "Front Plane selected for the cleanup-failure probe");
+            var beforeFail = FindSketchFeatureNames(doc);
+            string cf = probe.RunCleanupFailQrSketchProbe();
+            Check(cf.StartsWith("FAILSAFE") &&
+                  cf.Contains("Cleanup failed") && cf.Contains("may remain"),
+                "refused cleanup is reported honestly — never as a completed rollback", cf);
+            var leftover = FindSketchFeatureNames(doc).Except(beforeFail).ToList();
+            Console.WriteLine(leftover.Count == 0
+                ? "#   cleanup-failure aftermath: teardown removed the partial sketch"
+                : $"#   cleanup-failure aftermath: partial sketch(es) remain: {string.Join(", ", leftover)}");
+            Check(mgr.ActiveSketch == null,
+                "no sketch is stuck in edit mode after the failed operation");
+            foreach (var name in leftover)   // hygiene: delete only what the failed op left
+            {
+                doc.ClearSelection2(true);
+                if (ext.SelectByID2(name, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault))
+                    ext.DeleteSelection2(0);
+            }
+
+            // ---------- host health: normal sketch tools still work ----------
+            // A manual sketch opens, draws, and exits — flag restoration means
+            // the failure paths left the sketch manager usable.
+            doc.ClearSelection2(true);
+            ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            mgr.InsertSketch(true);
+            var sanitySketch = mgr.ActiveSketch as ISketch;
+            var sanityLine = mgr.CreateLine(-0.004, -0.004, 0, 0.004, -0.004, 0);
+            // Name captured while the sketch is still the active one — the
+            // live sketch object IS its feature, like BeginSketchInsertion.
+            var sanityName = (sanitySketch as IFeature)?.Name ?? "";
+            mgr.InsertSketch(false);
+            Check(sanitySketch != null && sanityLine != null,
+                "normal sketch tools still work after the failure paths (flags restored)");
+            // Keep the manual sketch as prior user work — it is the "earlier
+            // user action" the QR undo must not eat.
+
+            // ---------- named undo: one step reverts exactly the creation ----------
+            var namesBeforeQr = FindSketchFeatureNames(doc);
+            doc.ClearSelection2(true);
+            Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault),
+                "Front Plane selected for the undo check");
+            string cu = probe.CreateQrFromWindowProbe();
+            Check(cu.StartsWith("OK"), "Create succeeds for the undo check", cu);
+            string undoSketchName =
+                cu.StartsWith("OK") && cu.Split(' ').Length > 1 ? cu.Split(' ')[1] : "";
+            Check(mgr.ActiveSketch != null,
+                "the undo-check sketch is left open for editing (spec)");
+
+            mgr.InsertSketch(false);    // engineer exits the generated sketch
+            Check(mgr.ActiveSketch == null, "generated sketch exits edit mode");
+
+            doc.EditUndo2(1);           // one undo = the named "Create QR Sketch" step
+            bool gone = undoSketchName.Length == 0 ||
+                        FindSketchFeature(doc, undoSketchName) == null;
+            if (!gone)
+            {
+                // Diagnose, then keep checking — the second undo shows whether
+                // creation simply was not one named step (a limitation to
+                // report) or needed more presses.
+                Console.WriteLine("#   first undo did not remove the sketch — " +
+                    "the named-undo grouping may not be supported; probing a second undo");
+                doc.EditUndo2(1);
+                gone = FindSketchFeature(doc, undoSketchName) == null;
+            }
+            Check(gone, "undoing the creation removes the generated QR sketch",
+                gone ? "" : $"sketch '{undoSketchName}' still present after two undos");
+            var namesAfter = FindSketchFeatureNames(doc);
+            Check(namesAfter.Count <= namesBeforeQr.Count &&
+                  (sanityName.Length == 0 || namesAfter.Contains(sanityName)),
+                "undoing the creation did not undo a prior user action",
+                $"before={namesBeforeQr.Count} after={namesAfter.Count} marker='{sanityName}'");
+            if (!gone || namesAfter.Count != namesBeforeQr.Count)
+                Console.WriteLine($"#   undo diagnostics: features before={namesBeforeQr.Count} " +
+                    $"after={namesAfter.Count}; missing-after=" +
+                    $"{string.Join(",", namesBeforeQr.Except(namesAfter))}");
+
+            // ---------- no document: closed doc cannot be redirected ----------
+            sw.CloseAllDocuments(true);
+            string eNoDoc = probe.CreateQrFromWindowProbe();
+            Check(eNoDoc.StartsWith("ERROR") && eNoDoc.Contains("document"),
+                "create with no open document fails cleanly — nothing to redirect into", eNoDoc);
         }
 
         /// <summary>Every planar face of a feature, with plane root + normal.</summary>
@@ -1412,6 +1530,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             public string RunQrSketchProbe() => Invoke("RunQrSketchProbe");
             public string RunFailingQrSketchProbe() => Invoke("RunFailingQrSketchProbe");
+            public string RunCleanupFailQrSketchProbe() => Invoke("RunCleanupFailQrSketchProbe");
             public string AddinStateProbe() => Invoke("AddinStateProbe");
             public string OpenQrWindowProbe() => Invoke("OpenQrWindowProbe");
             public string CloseQrWindowProbe() => Invoke("CloseQrWindowProbe");

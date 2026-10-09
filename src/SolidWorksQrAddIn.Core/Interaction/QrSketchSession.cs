@@ -269,8 +269,19 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
             // _current.Succeeded ⇒ both fields parsed — these are exactly the
             // values the current result was generated and validated with.
-            var result = _command.Execute(
-                host, _content, _sizeMm!.Value, _growthFraction!.Value);
+            // The window/command boundary must never let a host exception
+            // escape toward SolidWorks — a failure result is the contract.
+            CommandResult result;
+            try
+            {
+                result = _command.Execute(
+                    host, _content, _sizeMm!.Value, _growthFraction!.Value);
+            }
+            catch (Exception ex)
+            {
+                result = CommandResult.Failure(
+                    $"The sketch could not be created: {ex.Message}");
+            }
             StatusText = result.Message;
             return result;
         }

@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -114,32 +113,110 @@ namespace SolidWorksQrAddIn.Host
             bool prevAutoInference = mgr.AutoInference;
             bool prevInferenceMode = mgr.InferenceMode;
 
-            ISketch active;
+            // Group the whole creation into ONE named undo step when the host
+            // supports it — undoing it then reverts exactly this operation,
+            // never an earlier user action. A recording scope is NOT a
+            // rollback mechanism: failure cleanup still tracks and deletes the
+            // new sketch itself (spec: never a blind Undo).
+            var ext = doc.Extension as IModelDocExtension;
+            bool recording = false;
             try
             {
-                mgr.InsertSketch(true); // enters edit mode on the selected plane
-                active = mgr.ActiveSketch as ISketch;
-                if (active == null)
+                if (ext != null)
                 {
-                    try { mgr.InsertSketch(false); } catch { /* leave as found */ }
-                    throw new SketchHostException(
-                        "SolidWorks entered sketch edit mode without an active sketch.");
+                    ext.StartRecordingUndoObject();
+                    recording = true;
                 }
             }
-            catch (SketchHostException) { throw; }
             catch (Exception ex)
             {
-                throw new SketchHostException(
-                    "SolidWorks could not start a sketch on the selected plane.", ex);
+                Diag.Log($"StartRecordingUndoObject failed: {ex.Message}");
             }
 
-            // ISketch is also the sketch's IFeature — this is how we track and
-            // delete ONLY the sketch this session created.
-            var sketchFeature = active as IFeature
-                ?? throw new SketchHostException("The active sketch did not expose a feature.");
-            return new SwSketchInsertion(
-                doc, mgr, sketchFeature,
-                prevAddToDB, prevDisplayWhenAdded, prevAutoInference, prevInferenceMode);
+            IFeature? sketchFeature = null;
+            try
+            {
+                mgr.InsertSketch(true); // enters edit mode on the selected support
+                var active = mgr.ActiveSketch as ISketch;
+                if (active == null)
+                    throw new SketchHostException(
+                        "SolidWorks entered sketch edit mode without an active sketch.");
+
+                // ISketch is also the sketch's IFeature — this is how we track
+                // and delete ONLY the sketch this session created.
+                sketchFeature = active as IFeature;
+                if (sketchFeature == null)
+                    throw new SketchHostException("The active sketch did not expose a feature.");
+
+                try
+                {
+                    return new SwSketchInsertion(
+                        doc, mgr, sketchFeature, ext, recording,
+                        prevAddToDB, prevDisplayWhenAdded, prevAutoInference, prevInferenceMode);
+                }
+                catch (Exception ex)
+                {
+                    throw new SketchHostException(
+                        $"SolidWorks could not start the sketch session: {ex.Message}", ex);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Anything that failed at/after entering edit mode left the
+                // caller with no session handle — the half-entered sketch is
+                // ours to clean up here. The recording scope is closed either
+                // way so nothing later is swallowed into it.
+                string leftover = AbandonNewSketch(doc, mgr, sketchFeature);
+                FinishUndoQuietly(ext, recording);
+                var why = ex is SketchHostException
+                    ? ex.Message
+                    : $"SolidWorks could not start a sketch on the selected support: {ex.Message}";
+                throw new SketchHostException(why + leftover);
+            }
+        }
+
+        /// <summary>
+        /// Begin-time cleanup: exit the half-entered edit session and delete
+        /// only the sketch feature this begin created. Returns "" when the
+        /// document is clean, or a "may remain" note appended to the thrown
+        /// message — honest reporting, never a claimed rollback.
+        /// </summary>
+        private static string AbandonNewSketch(IModelDoc2 doc, ISketchManager mgr, IFeature? created)
+        {
+            var note = "";
+            try { mgr.InsertSketch(false); }
+            catch (Exception ex)
+            {
+                note = $" Could not exit sketch edit mode: {ex.Message}.";
+            }
+            if (created == null)
+                return note;
+            try
+            {
+                doc.ClearSelection2(true);
+                var ext = doc.Extension as IModelDocExtension;
+                bool selected = ext != null && ext.SelectByID2(
+                    created.Name, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                bool deleted = selected && ext!.DeleteSelection2(0);
+                if (!deleted)
+                    note += $" The partial sketch '{created.Name}' could not be removed " +
+                            "and may remain in the feature tree.";
+            }
+            catch (Exception ex)
+            {
+                note += $" The partial sketch '{created.Name}' could not be removed " +
+                        $"({ex.Message}) and may remain in the feature tree.";
+            }
+            return note;
+        }
+
+        /// <summary>Closes the undo scope on the failed-begin path; never throws.</summary>
+        private static void FinishUndoQuietly(IModelDocExtension? ext, bool recording)
+        {
+            if (!recording || ext == null) return;
+            try { ext.FinishRecordingUndoObject2(SketchHostContract.CreationUndoName, false); }
+            catch (Exception ex) { Diag.Log($"FinishRecordingUndoObject2 (abandoned begin) failed: {ex.Message}"); }
         }
     }
 }

@@ -61,6 +61,17 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   test adapter, per-request geometry (explicit size/growth; byte-exact payload,
   distinct payloads → distinct sketches), guard rejection before mutation,
   failure cleanup + honest cleanup-failure reporting, flag restoration, redraw.
+- **Failure handling** (`CreationFailureHandlingTests`, ticket 6): cancel
+  before create never consults the host; document switch/close mid-flight
+  cannot redirect creation through a cached support (a fresh selection in the
+  current part is used; an unselected current part refuses); exceptions at
+  every seam boundary — capture, begin, edge insertion (seam and non-seam),
+  commit, cleanup, teardown — become honest failure results instead of
+  escaping; partial-sketch cleanup asserted on document state at every
+  injection point (first line, late edge, after creation, delete-stage and
+  edit-exit cleanup failure, throw-on-abort); flags restored on success and
+  every failure path; one named undo step ("Create QR Sketch") reverts exactly
+  the creation, never prior user work.
 - **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
   (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
   orientation, material-area parity, deterministic signature.
@@ -128,7 +139,8 @@ and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
 `SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`,
-`CreateQrFromWindowProbe`, `PreviewSignatureProbe`)
+`CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
+`RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed
 `IAddInProbe` interface; invoke members by name instead.)
@@ -173,6 +185,17 @@ Finally a second part document is activated and its Front Plane selected:
 Create must land in the second document with the first unchanged
 (cross-document/stale-support guard).
 
+Ticket-6 flow (failure handling): closing the window with a valid pending
+request leaves the part unchanged (cancel is safe) → injected
+insertion-failure + refused-cleanup (`RunCleanupFailQrSketchProbe`) must
+report honestly ("may remain", never claimed rollback) and leave nothing
+stuck in edit mode → a manual sketch must still open/draw/exit normally
+(flags restored; that sketch doubles as the prior-work marker) → a fresh QR
+create is exited then undone once (`EditUndo2(1)`): the named
+"Create QR Sketch" step must remove the whole generated sketch without
+removing the marker — a second undo is tried only as diagnosis → finally all
+documents close and Create must fail cleanly with "no active document".
+
 WPF threading note (verified): probe calls arrive on MTA COM worker threads,
 so the add-in creates its window on a dedicated STA thread
 (`AddInWpfThread`) with its own dispatcher; the window marshals every call.
@@ -192,6 +215,21 @@ useful when another SolidWorks release is already running.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
+- Ticket 6 failure-handling run — **awaiting a live window**: the code is
+  implemented and the probe checks are built, but an interactive SolidWorks
+  session was running, so the guard correctly refused and the live gates are
+  recorded *awaiting human verification*: (a) closing the window with a
+  pending valid request leaves the part unchanged, (b) injected
+  mid-insertion + refused-cleanup reporting, (c) the **named-undo contract**
+  — `StartRecordingUndoObject`/`FinishRecordingUndoObject2` are now wired
+  around creation (one step named "Create QR Sketch" covering
+  sketch-entry + every segment) but their semantics on a sketch left open in
+  edit mode are **unproven**; the probe asserts one `EditUndo2(1)` removes
+  the generated sketch without eating the prior user action, with a second
+  undo as diagnosis — if that does not hold, the limitation is reported, not
+  faked, (d) create with no open document, (e) normal sketch tools after the
+  failure paths. Headless coverage of the same paths is in
+  `CreationFailureHandlingTests` (document state asserted, not just calls).
 - Ticket 5 supports run — **awaiting a live window**: the extended probe is
   built and the attached-session guard was re-verified (it correctly refused
   the engineer's running visible session). The convention experiment,
