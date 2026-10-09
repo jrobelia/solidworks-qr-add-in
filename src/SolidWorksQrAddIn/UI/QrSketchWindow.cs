@@ -16,7 +16,9 @@ namespace SolidWorksQrAddIn.UI
     /// <see cref="QrSketchSession"/>. All content→picture→create behaviour
     /// lives in the session (headlessly tested); this class only:
     ///
-    ///   - pushes TextBox text verbatim into <see cref="QrSketchSession.SetContent"/>,
+    ///   - pushes the three field texts verbatim into the session
+    ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
+    ///     <see cref="QrSketchSession.SetGrowthText"/>) on every edit,
     ///   - blits <see cref="QrSketchSession.Picture"/> (a Gray8 raster) into an
     ///     Image via BitmapSource.Create — the same grown contour result that
     ///     sketch insertion consumes,
@@ -34,6 +36,8 @@ namespace SolidWorksQrAddIn.UI
         private readonly QrSketchSession _session;
         private readonly Func<ISketchHost> _hostProvider;
         private readonly TextBox _contentBox;
+        private readonly TextBox _sizeBox;
+        private readonly TextBox _growthBox;
         private readonly Image _picture;
         private readonly TextBlock _status;
         private bool _isOpen;
@@ -70,6 +74,34 @@ namespace SolidWorksQrAddIn.UI
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             };
             panel.Children.Add(_contentBox);
+
+            // Spec window budget: content, size, growth, picture, Create.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Final grown QR outline size (mm) — the grown QR outline " +
+                       "width, excluding the clear margin:",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _sizeBox = new TextBox
+            {
+                ToolTip = "The finished QR outline width in millimetres after outline " +
+                          "growth — the 4-cell white margin around it is not included.",
+            };
+            panel.Children.Add(_sizeBox);
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Outline growth (% of cell width per side):",
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _growthBox = new TextBox
+            {
+                ToolTip = "How far each dark cell grows past its own outline on every " +
+                          "side, as a percentage of one cell's width. Resolves " +
+                          "corner-only contacts between diagonal cells.",
+            };
+            panel.Children.Add(_growthBox);
 
             var frame = new Border
             {
@@ -111,10 +143,22 @@ namespace SolidWorksQrAddIn.UI
                 _session.SetContent(_contentBox.Text);
                 RefreshView();
             };
+            _sizeBox.TextChanged += (_, __) =>
+            {
+                _session.SetSizeText(_sizeBox.Text);
+                RefreshView();
+            };
+            _growthBox.TextChanged += (_, __) =>
+            {
+                _session.SetGrowthText(_growthBox.Text);
+                RefreshView();
+            };
             Closed += (_, __) => _isOpen = false;
 
-            // A recreated window picks up the session's existing content.
+            // A recreated window picks up the session's existing inputs.
             _contentBox.Text = _session.Content;
+            _sizeBox.Text = _session.SizeText;
+            _growthBox.Text = _session.GrowthText;
             RefreshView();
         }
 

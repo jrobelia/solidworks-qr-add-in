@@ -29,8 +29,11 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
   residual corner-only contacts reject (`InvalidGeometry`) before any host
   mutation.
 
-## Tested range — fixed payload `SW-QR-MVP` (version 1, N = 21)
+## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 
+Since ticket 4 the size and growth are engineer-entered fields — the
+25 mm / 3% request below is the window's *initial* value, and the same
+guards apply to every entered value before any host mutation.
 Empirically bisected on the generated result:
 
 - At **size 25 mm**: accepted growth ≈ **2.10% … 47.80%** per side
@@ -40,7 +43,7 @@ Empirically bisected on the generated result:
   cell — effective growth is reported in `QrSketchInfo.GrowthFractionPerSide`
   (the requested 3% maps to exactly 0.03 at U = 10 000).
 
-Fixed request itself: 25 mm / 3% → pitch 1.1871 mm, growth 0.0356 mm/side,
+The window's initial request: 25 mm / 3% → pitch 1.1871 mm, growth 0.0356 mm/side,
 final outline exactly 25 mm, smallest delivered contour edge 1.116 mm,
 narrowest one-cell light channel 1.116 mm, 27 contours / 252 segments /
 8 regions / 16 holes / 3 nested finder islands.

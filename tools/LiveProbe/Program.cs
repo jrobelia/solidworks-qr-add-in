@@ -16,7 +16,8 @@ using SolidWorks.Interop.swconst;
 namespace SolidWorksQrAddIn.LiveProbe
 {
     /// <summary>
-    /// Live verification harness for ticket 3 (modeless content/picture window).
+    /// Live verification harness for ticket 4 (custom size + outline growth),
+    /// retaining the ticket-3 and ticket-2 checks.
     ///   SolidWorksQrAddIn.LiveProbe.exe &lt;deployDir&gt;
     /// where deployDir contains the registered SolidWorksQrAddIn.dll.
     ///
@@ -26,13 +27,16 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// + window code paths the WPF window uses. Prints PASS/FAIL lines; exit
     /// code 0 when every check passes.
     ///
-    /// Ticket-3 checks: window open/focus (no duplicates), modeless host
-    /// interactivity, per-payload pictures matching the module-rendered grown
-    /// result (signature), payload A sketch, payload B sketch after exit,
-    /// first-sketch integrity, invalid-content refusal with stale picture
-    /// cleared, blocked create while a sketch is edited, close/reopen,
-    /// disconnect release, plus the retained insertion-failure and feature-use
-    /// regressions from ticket 2.
+    /// Ticket-4 checks: fresh-window 25 mm/3% fields; native outline measured
+    /// at the default 25 mm and at a custom 40 mm; a growth change preserving
+    /// the entered outline size; input edits leaving the open and earlier
+    /// sketches untouched; unparseable/zero/negative/out-of-range rejections
+    /// with no part mutation and verbatim-kept field text; picture re-renders
+    /// from the new request. Retained: window open/focus, modeless host
+    /// interactivity, per-payload picture signatures, payload A/B sketches,
+    /// first-sketch integrity, invalid-content refusal, blocked create while
+    /// editing, close/reopen, disconnect release, and the ticket-2
+    /// insertion-failure + feature-use regressions.
     /// </summary>
     public static class Program
     {
@@ -47,15 +51,29 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (!cond) _failures++;
         }
 
-        // The module's own expectation for each payload — native sketches and
+        // The module's own expectation for each request — native sketches and
         // the preview picture must reproduce exactly this geometry/rendering.
-        private static QrSketch ExpectedOf(string content) => QrSketchGenerator
-            .Generate(content, QrSketchSession.SizeMm, QrSketchSession.GrowthFractionPerSide)
-            .Sketch!;
+        private static QrSketch ExpectedOf(string content) => ExpectedOf(content,
+            QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide);
+
+        private static QrSketch ExpectedOf(string content, double sizeMm, double growthFraction) =>
+            QrSketchGenerator.Generate(content, sizeMm, growthFraction).Sketch!;
 
         private static string ExpectedSignatureOf(string content) =>
             QrPictureRenderer.Render(ExpectedOf(content), QrSketchSession.PreviewPixelsAcross)
                 .Signature();
+
+        private static string ExpectedSignatureOf(string content, double sizeMm, double growthFraction) =>
+            QrPictureRenderer.Render(ExpectedOf(content, sizeMm, growthFraction),
+                QrSketchSession.PreviewPixelsAcross).Signature();
+
+        /// <summary>
+        /// true only while the attached instance is a fresh, invisible
+        /// COM-launched one — the only kind it is safe to ExitApp. An
+        /// instance that is already visible (or already holds documents) is
+        /// somebody's interactive session: the probe refuses to mutate it.
+        /// </summary>
+        private static bool _spawnedFresh;
 
         public static int Main(string[] args)
         {
@@ -63,6 +81,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 ? args[0]
                 : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                     "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
             string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
 
             var expectedA = ExpectedOf(PayloadA);
@@ -82,11 +101,27 @@ namespace SolidWorksQrAddIn.LiveProbe
             ISldWorks? sw = null;
             try
             {
-                sw = AttachOrLaunch();
+                sw = AttachOrLaunch(progId);
                 if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
 
                 Console.WriteLine($"# SolidWorks revision {sw.RevisionNumber()}  visible={sw.Visible}");
                 WaitForStartup(sw);
+
+                // Safety: a VISIBLE instance or one that already holds
+                // documents is an interactive session the probe must never
+                // mutate or exit — bail without touching it.
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached to a SolidWorks session that is " +
+                        $"visible={sw.Visible} with {openDocs} open document(s) — probably a " +
+                        "user's interactive session. Refusing to run; pass a ProgID with no " +
+                        "running instance (e.g. SldWorks.Application.30) so a fresh " +
+                        "invisible instance is spawned.");
+                    return 1;
+                }
+                _spawnedFresh = true;
 
                 // --- add-in discovery / load ---
                 var probe = TryGetProbe(sw);
@@ -120,6 +155,11 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 Check(probe.WindowStateProbe().Contains("open=True"),
                     "window reports itself open", probe.WindowStateProbe());
+
+                // Ticket 4: the fresh window starts at 25 mm and 3% per side.
+                string freshState = probe.WindowStateProbe();
+                Check(freshState.Contains("size=25") && freshState.Contains("growth=3"),
+                    "fresh window shows the initial 25 mm size and 3% growth", freshState);
 
                 // --- modeless proof: SolidWorks stays interactive while the
                 //     window is open — documents and selection drive normally.
@@ -185,6 +225,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 if (sketchA != null)
                 {
                     VerifyNativeSketch(sketchA, expectedA, "A");
+                    CheckOutline(sketchA, 25.0, "native outline measures the entered 25 mm (default size)");
                     sketchAName = createA.Split(' ')[1];
 
                     string again = probe.CreateQrFromWindowProbe();
@@ -195,6 +236,106 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                     mgr.InsertSketch(false); // engineer exits the sketch
                     Check(mgr.ActiveSketch == null, "sketch A exits edit mode cleanly");
+                }
+
+                // ================= ticket 4: size + growth fields =================
+
+                // Invalid inputs are rejected with a useful error, the request
+                // is invalidated (no stale request can be created), the text
+                // is kept verbatim, and the part is never mutated.
+                int featureCountBeforeInvalid = FindSketchFeatureNames(doc!).Count;
+                string bad1 = probe.SetQrSizeProbe("abc");
+                Check(bad1.StartsWith("INVALID") && bad1.Contains("InvalidSize"),
+                    "unparseable size is rejected", bad1);
+                Check(probe.WindowStateProbe().Contains("hasRequest=False"),
+                    "invalid size invalidates the request (no stale request remains)");
+                Check(probe.WindowStateProbe().Contains("size=abc"),
+                    "rejected size text is kept verbatim — never replaced");
+                string eInv = probe.CreateQrFromWindowProbe();
+                Check(eInv.StartsWith("ERROR"),
+                    "create refuses while inputs are invalid", eInv);
+                Check(FindSketchFeatureNames(doc!).Count == featureCountBeforeInvalid,
+                    "invalid inputs never mutate the part");
+                Check(probe.SetQrSizeProbe("0").StartsWith("INVALID"),
+                    "zero size is rejected", probe.SetQrSizeProbe("0"));
+                Check(probe.SetQrSizeProbe("-5").StartsWith("INVALID"),
+                    "negative size is rejected");
+                Check(probe.SetQrGrowthProbe("abc").StartsWith("INVALID"),
+                    "unparseable growth is rejected");
+                Check(probe.SetQrGrowthProbe("0").StartsWith("INVALID"),
+                    "zero growth is rejected");
+                Check(probe.SetQrGrowthProbe("50").StartsWith("INVALID"),
+                    "growth at 50% is rejected (must be less than 50% per side)");
+
+                // Restore growth first — the whole current request is
+                // re-validated on every edit, so a rejected growth left in
+                // the field keeps every later edit invalid too.
+                probe.SetQrGrowthProbe("3");
+
+                // Custom size: 40 mm. The normalized picture is scale-invariant
+                // (same QR, same 4-cell margin from the grown extents), so the
+                // signature stays sigA; the request's final size is 40 mm.
+                string s40 = probe.SetQrSizeProbe("40");
+                Check(s40.StartsWith("VALID") && s40.Contains("size=40.000"),
+                    "custom size 40 mm accepted and drives the request", s40);
+                Check(probe.PreviewSignatureProbe().Contains($"sha={sigA}"),
+                    "size edit re-renders the picture from the new request");
+
+                // Growth change preserves the entered outline size (pitch
+                // recalculation) but changes the grown picture.
+                string g8 = probe.SetQrGrowthProbe("8");
+                Check(g8.StartsWith("VALID") && g8.Contains("size=40.000"),
+                    "growth 8% accepted — outline size still the entered 40 mm", g8);
+                var expectedA8 = ExpectedOf(PayloadA, 40.0, 0.08);
+                Check(probe.PreviewSignatureProbe().Contains($"sha={ExpectedSignatureOf(PayloadA, 40.0, 0.08)}"),
+                    "growth edit re-renders the picture from the grown result");
+
+                doc!.ClearSelection2(true);
+                Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault),
+                    "Front Plane re-selected for the custom-size create");
+                string createC = probe.CreateQrFromWindowProbe();
+                Check(createC.StartsWith("OK"), "Create Sketch succeeds at 40 mm / 8%", createC);
+                var sketchC = mgr.ActiveSketch as ISketch;
+                Check(sketchC != null, "custom-size sketch remains open for manual editing");
+                if (sketchC != null)
+                {
+                    VerifyNativeSketch(sketchC, expectedA8, "C(40mm,8%)");
+                    CheckOutline(sketchC, 40.0,
+                        "native outline measures the entered 40 mm — not 25");
+                }
+
+                // Editing inputs while a sketch is open must not resize or
+                // regenerate that sketch.
+                probe.SetQrSizeProbe("30");
+                probe.SetQrGrowthProbe("12");
+                if (sketchC != null)
+                {
+                    Check(((object[])sketchC.GetSketchSegments()).Length == expectedA8.Info.SegmentCount,
+                        "editing the inputs did not touch the open sketch");
+                    CheckOutline(sketchC, 40.0, "open sketch keeps its 40 mm outline after input edits");
+                }
+                mgr.InsertSketch(false); // engineer exits the custom-size sketch
+                Check(mgr.ActiveSketch == null, "custom-size sketch exits edit mode cleanly");
+
+                // Back to the defaults — valid→invalid→valid transitions keep
+                // working, and later creates honour the restored request.
+                Check(probe.SetQrSizeProbe("25").StartsWith("VALID"),
+                    "size 25 re-accepted after the rejected edits");
+                Check(probe.SetQrGrowthProbe("3").StartsWith("VALID"),
+                    "growth 3% re-accepted");
+                Check(probe.PreviewSignatureProbe().Contains($"sha={sigA}"),
+                    "picture is back to the default-request rendering");
+
+                if (sketchAName.Length > 0)
+                {
+                    var featA2 = FindSketchFeature(doc!, sketchAName);
+                    var skA2 = featA2?.GetSpecificFeature2() as ISketch;
+                    Check(skA2 != null &&
+                          ((object[])skA2.GetSketchSegments()).Length == expectedA.Info.SegmentCount,
+                        "earlier sketch unchanged after the size/growth edits");
+                    if (skA2 != null)
+                        CheckOutline(skA2, 25.0, "earlier sketch keeps its 25 mm outline");
                 }
 
                 // ================= payload B: second sketch, first unchanged =================
@@ -276,7 +417,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { sw?.ExitApp(); } catch { }
+                // Only exit an instance this probe spawned fresh; never exit
+                // an attached session.
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
             }
         }
 
@@ -312,6 +455,44 @@ namespace SolidWorksQrAddIn.LiveProbe
             (double minX, double maxX, double minY, double maxY) b, double tol) =>
             Math.Abs(a.minX - b.minX) < tol && Math.Abs(a.maxX - b.maxX) < tol &&
             Math.Abs(a.minY - b.minY) < tol && Math.Abs(a.maxY - b.maxY) < tol;
+
+        /// <summary>Overall outline bounds of a native sketch (sketch-space metres).</summary>
+        private static (double minX, double maxX, double minY, double maxY) SketchOutline(
+            ISketch sketch)
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            foreach (var so in (object[])sketch.GetSketchSegments())
+            {
+                if (so is ISketchLine line)
+                {
+                    var p1 = (ISketchPoint)line.GetStartPoint2();
+                    var p2 = (ISketchPoint)line.GetEndPoint2();
+                    minX = Math.Min(minX, Math.Min(p1.X, p2.X));
+                    maxX = Math.Max(maxX, Math.Max(p1.X, p2.X));
+                    minY = Math.Min(minY, Math.Min(p1.Y, p2.Y));
+                    maxY = Math.Max(maxY, Math.Max(p1.Y, p2.Y));
+                }
+            }
+            return (minX, maxX, minY, maxY);
+        }
+
+        /// <summary>
+        /// The native grown QR outline must measure the entered size on both
+        /// axes, within the declared tolerance (1e-6 mm). The size is the
+        /// final grown outline width — margin excluded.
+        /// </summary>
+        private static void CheckOutline(ISketch sketch, double expectedMm, string name)
+        {
+            var o = SketchOutline(sketch);
+            double half = expectedMm / 2.0 / 1000.0;
+            const double tol = 1e-9; // metres == the declared 1e-6 mm tolerance
+            Check(Math.Abs(o.maxX - half) <= tol && Math.Abs(o.minX + half) <= tol &&
+                  Math.Abs(o.maxY - half) <= tol && Math.Abs(o.minY + half) <= tol,
+                name,
+                $"x [{o.minX * 1000:F4}, {o.maxX * 1000:F4}]  " +
+                $"y [{o.minY * 1000:F4}, {o.maxY * 1000:F4}] mm — expected ±{expectedMm / 2.0} mm");
+        }
 
         /// <summary>Native sketch must reproduce the module's contour set 1:1.</summary>
         private static void VerifyNativeSketch(ISketch sketch, QrSketch expected, string tag)
@@ -501,10 +682,10 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         // ---------------- plumbing ----------------
 
-        private static ISldWorks? AttachOrLaunch()
+        private static ISldWorks? AttachOrLaunch(string progId)
         {
-            var t = Type.GetTypeFromProgID("SldWorks.Application.31");
-            if (t == null) { Console.WriteLine("FAIL  ProgID SldWorks.Application.31 not registered"); return null; }
+            var t = Type.GetTypeFromProgID(progId);
+            if (t == null) { Console.WriteLine($"FAIL  ProgID {progId} not registered"); return null; }
             return Activator.CreateInstance(t) as ISldWorks;
         }
 
@@ -584,6 +765,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string CloseQrWindowProbe() => Invoke("CloseQrWindowProbe");
             public string WindowStateProbe() => Invoke("WindowStateProbe");
             public string SetQrContentProbe(string content) => Invoke("SetQrContentProbe", content);
+            public string SetQrSizeProbe(string sizeText) => Invoke("SetQrSizeProbe", sizeText);
+            public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
             public string PreviewSignatureProbe() => Invoke("PreviewSignatureProbe");
         }

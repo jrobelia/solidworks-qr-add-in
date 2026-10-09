@@ -44,7 +44,7 @@ namespace SolidWorksQrAddIn.Tests
         private static string ExpectedSignature(string content) =>
             QrPictureRenderer.Render(
                 QrSketchGenerator.Generate(content,
-                    QrSketchSession.SizeMm, QrSketchSession.GrowthFractionPerSide).Sketch!,
+                    QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!,
                 QrSketchSession.PreviewPixelsAcross).Signature();
 
         // ---------------- content → picture ----------------
@@ -197,7 +197,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
             var expected = QrSketchGenerator.Generate(PayloadA,
-                QrSketchSession.SizeMm, QrSketchSession.GrowthFractionPerSide).Sketch!;
+                QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
             Assert.Equal(expected.Info.SegmentCount, sketch.Segments.Count);
             var expectedEdges = expected.Edges.ToList();
             for (var i = 0; i < expectedEdges.Count; i++)
@@ -222,11 +222,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(second.Succeeded, second.Message);
             Assert.Equal(2, host.Document.Sketches.Count);
             var expectedB = QrSketchGenerator.Generate(PayloadB,
-                QrSketchSession.SizeMm, QrSketchSession.GrowthFractionPerSide).Sketch!;
+                QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
             Assert.Equal(expectedB.Info.SegmentCount, host.Document.Sketches[1].Segments.Count);
             // The first sketch keeps its own payload's geometry — unchanged.
             var expectedA = QrSketchGenerator.Generate(PayloadA,
-                QrSketchSession.SizeMm, QrSketchSession.GrowthFractionPerSide).Sketch!;
+                QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
             Assert.Equal(expectedA.Info.SegmentCount, host.Document.Sketches[0].Segments.Count);
         }
 

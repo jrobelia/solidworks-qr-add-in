@@ -286,17 +286,37 @@ namespace SolidWorksQrAddIn
             _session == null
                 ? "STATE session=none"
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
-                  $"hasRequest={_session.HasValidRequest}";
+                  $"hasRequest={_session.HasValidRequest} " +
+                  $"size={_session.SizeText} growth={_session.GrowthText}";
 
         public string SetQrContentProbe(string content)
         {
             if (_session == null)
                 return "ERROR The QR add-in is not connected to SolidWorks.";
-            var result = _session.SetContent(content);
+            return Describe(_session.SetContent(content));
+        }
+
+        public string SetQrSizeProbe(string sizeText)
+        {
+            if (_session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            return Describe(_session.SetSizeText(sizeText));
+        }
+
+        public string SetQrGrowthProbe(string growthText)
+        {
+            if (_session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            return Describe(_session.SetGrowthText(growthText));
+        }
+
+        private static string Describe(SolidWorksQrAddIn.Core.Geometry.QrSketchResult result)
+        {
             if (!result.Succeeded)
                 return $"INVALID {result.Error!.Kind} {result.Error.Message}";
             var info = result.Sketch!.Info;
-            return $"VALID cells={info.CellCount} contours={info.ContourCount} segs={info.SegmentCount}";
+            return $"VALID cells={info.CellCount} contours={info.ContourCount} " +
+                   $"segs={info.SegmentCount} size={info.FinalSizeMm:F3}";
         }
 
         public string CreateQrFromWindowProbe()

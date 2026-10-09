@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
@@ -8,34 +9,44 @@ namespace SolidWorksQrAddIn.Core.Interaction
 {
     /// <summary>
     /// The interaction state behind the one modeless QR window — the
-    /// headlessly testable core of ticket 3. Owns three things:
+    /// headlessly testable core. Owns three things:
     ///
-    ///   1. Content → geometry → picture. <see cref="SetContent"/> stores the
-    ///      text EXACTLY as entered (no trim/resolve/rewrite), regenerates the
-    ///      QR contour result, and re-renders the picture from it. An invalid
+    ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
+    ///      <see cref="SetSizeText"/> and <see cref="SetGrowthText"/> store
+    ///      each input EXACTLY as entered (no trim/resolve/rewrite, no silent
+    ///      replacement of rejected values), re-validate, regenerate the QR
+    ///      contour result, and re-render the picture from it. An invalid
     ///      input clears the picture — a stale preview must never look like a
     ///      valid rendering of bad input.
     ///
+    ///      The size text is the FINAL GROWN QR outline width in millimetres,
+    ///      excluding the clear margin (spec "Size and growth"); the growth
+    ///      text is the percentage of cell width grown per side. Scaling is
+    ///      uniform: growth changes preserve the entered outline size through
+    ///      the cell-pitch recalculation p = S/(N + 2r).
+    ///
     ///   2. Create. <see cref="CreateSketch"/> runs the insertion command with
-    ///      the CURRENT content against a freshly-captured host state — the
+    ///      the CURRENT inputs against a freshly-captured host state — the
     ///      command itself revalidates the active part, the selected support,
-    ///      and the no-sketch-being-edited rule at call time, so no cached
-    ///      request or stale cross-document support can be used.
+    ///      and the no-sketch-being-edited rule at call time. Because every
+    ///      edit re-validates immediately, a failure result is always the
+    ///      current request: an earlier valid request can never be created
+    ///      while the current inputs are invalid. Editing inputs only ever
+    ///      changes the pending request and the picture — existing sketches
+    ///      are never resized or regenerated.
     ///
     ///   3. The single window. The command entry is <see cref="OpenOrFocusWindow"/>:
     ///      focus the live window or create a fresh one through the injected
     ///      view factory. <see cref="Release"/> (add-in disconnect) closes and
     ///      drops it. The window itself is a thin view; all behaviour lives here.
-    ///
-    /// Size and growth stay fixed (25 mm, 3%) until the size/growth ticket.
     /// </summary>
     public sealed class QrSketchSession
     {
-        /// <summary>Fixed final grown QR outline width (mm) until the size ticket lands.</summary>
-        public const double SizeMm = CreateQrSketchCommand.FixedSizeMm;
+        /// <summary>The size the field starts with (mm): the final grown QR outline width.</summary>
+        public const double InitialSizeMm = 25.0;
 
-        /// <summary>Fixed per-side outline growth fraction until the size ticket lands.</summary>
-        public const double GrowthFractionPerSide = CreateQrSketchCommand.FixedGrowthFractionPerSide;
+        /// <summary>The per-side outline growth the field starts with, as a cell-width fraction (3%).</summary>
+        public const double InitialGrowthFractionPerSide = 0.03;
 
         /// <summary>Preview raster resolution (pixels per side, incl. margin).</summary>
         public const int PreviewPixelsAcross = 240;
@@ -46,6 +57,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
         private string _content = string.Empty;
+        private string _sizeText = "25";
+        private string _growthText = "3";
+        private double? _sizeMm = InitialSizeMm;
+        private double? _growthFraction = InitialGrowthFractionPerSide;
         private QrSketchResult? _current;
 
         public QrSketchSession(Func<IQrSketchWindow> windowFactory)
@@ -54,33 +69,95 @@ namespace SolidWorksQrAddIn.Core.Interaction
             StatusText = PromptText;
         }
 
-        // ---------------- content → geometry → picture ----------------
+        // ---------------- inputs → geometry → picture ----------------
 
         /// <summary>The payload exactly as entered — meaningful whitespace included.</summary>
         public string Content => _content;
 
-        /// <summary>The generation result for the current content (null until the first SetContent).</summary>
+        /// <summary>The size field exactly as entered (millimetres; "25" initially).</summary>
+        public string SizeText => _sizeText;
+
+        /// <summary>The growth field exactly as entered (percent per side; "3" initially).</summary>
+        public string GrowthText => _growthText;
+
+        /// <summary>
+        /// The parsed size in force (mm), or null while the size text holds no
+        /// usable value — never a clamped or substituted number.
+        /// </summary>
+        public double? RequestedSizeMm => _sizeMm;
+
+        /// <summary>
+        /// The parsed per-side growth fraction in force, or null while the
+        /// growth text holds no usable value.
+        /// </summary>
+        public double? RequestedGrowthFractionPerSide => _growthFraction;
+
+        /// <summary>The generation result for the current inputs (null until the first edit).</summary>
         public QrSketchResult? CurrentResult => _current;
 
-        /// <summary>The rendered preview — null whenever the current content is invalid.</summary>
+        /// <summary>The rendered preview — null whenever the current inputs are invalid.</summary>
         public QrPicture? Picture { get; private set; }
 
         /// <summary>What the window shows under the picture (prompt, error, or result).</summary>
         public string StatusText { get; private set; }
 
-        /// <summary>True when the current content produced insertable geometry.</summary>
+        /// <summary>True when the current inputs produced insertable geometry.</summary>
         public bool HasValidRequest => _current?.Succeeded == true;
 
         /// <summary>
-        /// Records <paramref name="content"/> verbatim, regenerates the QR
-        /// contour result, and re-renders the picture — or clears the picture
-        /// and reports the actionable error. Every change re-runs the full
-        /// pipeline so the picture always reflects the CURRENT input.
+        /// Records <paramref name="content"/> verbatim and re-validates the
+        /// whole request — current content, size and growth — so the picture
+        /// and pending request always reflect the CURRENT inputs.
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
             _content = content ?? string.Empty;
-            _current = QrSketchGenerator.Generate(_content, SizeMm, GrowthFractionPerSide);
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// Records the size field verbatim (millimetres — the final grown QR
+        /// outline width, excluding the clear margin) and re-validates the
+        /// whole request.
+        /// </summary>
+        public QrSketchResult SetSizeText(string sizeText)
+        {
+            _sizeText = sizeText ?? string.Empty;
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// Records the growth field verbatim (percent of cell width per side)
+        /// and re-validates the whole request.
+        /// </summary>
+        public QrSketchResult SetGrowthText(string growthText)
+        {
+            _growthText = growthText ?? string.Empty;
+            return Regenerate();
+        }
+
+        private QrSketchResult Regenerate()
+        {
+            // Field-level validity first so the error names the field that is
+            // actually wrong; the generator still re-checks everything itself.
+            if (!TryParseSize(_sizeText, out double sizeMm, out string sizeError))
+            {
+                _sizeMm = null;
+                _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidSize, sizeError);
+            }
+            else if (!TryParseGrowth(_growthText, out double growthFraction, out string growthError))
+            {
+                _sizeMm = sizeMm;
+                _growthFraction = null;
+                _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
+            }
+            else
+            {
+                _sizeMm = sizeMm;
+                _growthFraction = growthFraction;
+                _current = QrSketchGenerator.Generate(_content, sizeMm, growthFraction);
+            }
+
             if (_current.Succeeded)
             {
                 var sketch = _current.Sketch!;
@@ -98,14 +175,90 @@ namespace SolidWorksQrAddIn.Core.Interaction
             return _current;
         }
 
+        // ---------------- field parsing ----------------
+        // Deterministic: invariant "40.5" always parses; a machine whose
+        // culture uses a decimal comma accepts "40,5" as well. A single
+        // trailing unit ("mm", "%") is tolerated — labels carry the units,
+        // but a typed unit is never a different VALUE. Anything else is a
+        // useful error echoing the entered text — never a substituted number.
+
+        private static bool TryParseNumber(string text, out double value) =>
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
+            double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
+
+        private static bool TryParseSize(string text, out double sizeMm, out string error)
+        {
+            sizeMm = 0;
+            var t = (text ?? string.Empty).Trim();
+            if (t.EndsWith("mm", StringComparison.OrdinalIgnoreCase))
+                t = t.Substring(0, t.Length - 2).TrimEnd();
+            if (t.Length == 0)
+            {
+                error = "Size is empty. Enter the final grown QR outline width " +
+                        "in millimetres, excluding the clear margin.";
+                return false;
+            }
+            if (!TryParseNumber(t, out double v))
+            {
+                error = $"Size must be a number of millimetres — the final grown QR outline " +
+                        $"width, excluding the clear margin; got '{Shorten(text)}'.";
+                return false;
+            }
+            if (double.IsNaN(v) || double.IsInfinity(v) || v <= 0.0)
+            {
+                error = $"Size must be a finite positive number of millimetres; got '{Shorten(text)}'.";
+                return false;
+            }
+            sizeMm = v;
+            error = string.Empty;
+            return true;
+        }
+
+        private static bool TryParseGrowth(string text, out double growthFraction, out string error)
+        {
+            growthFraction = 0;
+            var t = (text ?? string.Empty).Trim();
+            if (t.EndsWith("%", StringComparison.Ordinal))
+                t = t.Substring(0, t.Length - 1).TrimEnd();
+            if (t.Length == 0)
+            {
+                error = "Outline growth is empty. Enter the percentage of cell width " +
+                        "grown per side.";
+                return false;
+            }
+            if (!TryParseNumber(t, out double percent))
+            {
+                error = $"Outline growth must be a number — percent of cell width grown " +
+                        $"per side; got '{Shorten(text)}'.";
+                return false;
+            }
+            if (double.IsNaN(percent) || double.IsInfinity(percent) ||
+                percent <= 0.0 || percent >= 50.0)
+            {
+                error = $"Outline growth must be a finite percentage greater than 0% and " +
+                        $"less than 50% of cell width per side; got '{Shorten(text)}'.";
+                return false;
+            }
+            growthFraction = percent / 100.0;
+            error = string.Empty;
+            return true;
+        }
+
+        /// <summary>Echo of the rejected input, capped so a huge paste can't flood the status line.</summary>
+        private static string Shorten(string? text)
+        {
+            var t = text ?? string.Empty;
+            return t.Length <= 40 ? t : t.Substring(0, 40) + "…";
+        }
+
         // ---------------- create sketch ----------------
 
         /// <summary>
-        /// Creates the QR sketch for the CURRENT content through the host
-        /// seam. Invalid content fails immediately — the host is never
-        /// touched, so nothing partial or stale can reach the part. Valid
-        /// requests go through the command's fresh eligibility checks (active
-        /// part, current selection, no sketch in edit mode).
+        /// Creates the QR sketch for the CURRENT inputs through the host
+        /// seam. Invalid inputs fail immediately — the host is never touched,
+        /// so nothing partial or stale can reach the part. Valid requests go
+        /// through the command's fresh eligibility checks (active part,
+        /// current selection, no sketch in edit mode).
         /// </summary>
         public CommandResult CreateSketch(ISketchHost host)
         {
@@ -114,7 +267,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (!_current.Succeeded)
                 return CommandResult.Failure(_current.Error!.Message);
 
-            var result = _command.Execute(host, _content);
+            // _current.Succeeded ⇒ both fields parsed — these are exactly the
+            // values the current result was generated and validated with.
+            var result = _command.Execute(
+                host, _content, _sizeMm!.Value, _growthFraction!.Value);
             StatusText = result.Message;
             return result;
         }

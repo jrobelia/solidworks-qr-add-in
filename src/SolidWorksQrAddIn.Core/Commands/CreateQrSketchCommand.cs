@@ -5,8 +5,9 @@ namespace SolidWorksQrAddIn.Core.Commands
 {
     /// <summary>
     /// "Create QR Sketch" — encodes the given <paramref name="content"/>
-    /// exactly (no trim/resolve/rewrite) at <see cref="FixedSizeMm"/> with
-    /// <see cref="FixedGrowthFractionPerSide"/> outline growth, then inserts
+    /// exactly (no trim/resolve/rewrite) at the requested
+    /// <paramref name="sizeMm"/> final grown outline width with the requested
+    /// <paramref name="growthFractionPerSide"/> outline growth, then inserts
     /// every validated contour as native sketch lines on the currently
     /// selected baseline plane and leaves the new sketch open for editing.
     ///
@@ -19,13 +20,10 @@ namespace SolidWorksQrAddIn.Core.Commands
     /// </summary>
     public sealed class CreateQrSketchCommand
     {
-        /// <summary>Final grown QR outline width (mm), excluding the clear margin.</summary>
-        public const double FixedSizeMm = 25.0;
-
-        /// <summary>Per-side outline growth as a fraction of cell width (3%).</summary>
-        public const double FixedGrowthFractionPerSide = 0.03;
-
-        public CommandResult Execute(ISketchHost host, string content)
+        /// <param name="sizeMm">Final grown QR outline width (mm), excluding the clear margin.</param>
+        /// <param name="growthFractionPerSide">Per-side outline growth as a fraction of cell width.</param>
+        public CommandResult Execute(
+            ISketchHost host, string content, double sizeMm, double growthFractionPerSide)
         {
             var state = host.CaptureState();
 
@@ -61,7 +59,7 @@ namespace SolidWorksQrAddIn.Core.Commands
 
             // Generate + validate all geometry before the host is touched.
             var generated = QrSketchGenerator.Generate(
-                content, FixedSizeMm, FixedGrowthFractionPerSide);
+                content, sizeMm, growthFractionPerSide);
             if (!generated.Succeeded)
                 return CommandResult.Failure(
                     $"QR geometry could not be generated: {generated.Error!.Message}");
