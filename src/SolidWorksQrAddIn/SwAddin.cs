@@ -82,13 +82,13 @@ namespace SolidWorksQrAddIn
                     return Fail("CreateCommandGroup2 returned null");
 
                 group.AddCommandItem2(
-                    "Create Test Sketch",
+                    "Create QR Sketch",
                     -1,
-                    "Insert a closed square test sketch on the selected plane",
-                    "Creates one closed square sketch on the selected plane and leaves it open for editing",
+                    "Insert a native QR-code sketch on the selected plane",
+                    "Encodes the fixed payload and creates one QR sketch on the selected plane, left open for editing",
                     0,
-                    "CreateTestSketch",
-                    "EnableTestSketch",
+                    "CreateQrSketch",
+                    "EnableQrSketch",
                     0,
                     (int)swCommandItemType_e.swMenuItem | (int)swCommandItemType_e.swToolbarItem);
 
@@ -142,9 +142,9 @@ namespace SolidWorksQrAddIn
         // ---------------- command surface ----------------
 
         /// <summary>SolidWorks invokes this by name when the command runs.</summary>
-        public void CreateTestSketch()
+        public void CreateQrSketch()
         {
-            var result = ExecuteTestSketch();
+            var result = ExecuteQrSketch();
             if (!result.Succeeded)
                 _sw?.SendMsgToUser2(result.Message,
                     (int)swMessageBoxIcon_e.swMbWarning,
@@ -152,34 +152,34 @@ namespace SolidWorksQrAddIn
         }
 
         /// <summary>Enable callback: always enabled; context errors are reported on invoke.</summary>
-        public int EnableTestSketch() => 1;
+        public int EnableQrSketch() => 1;
 
-        private CommandResult ExecuteTestSketch()
+        private CommandResult ExecuteQrSketch()
         {
             if (_sw == null || !_connected)
                 return CommandResult.Failure("The QR add-in is not connected to SolidWorks.");
             ISketchHost host = new SolidWorksSketchHost(_sw);
-            return new CreateTestSketchCommand().Execute(host);
+            return new CreateQrSketchCommand().Execute(host);
         }
 
         // ---------------- IAddInProbe (headless/live verification hook) ----------------
 
-        public string RunTestSketchProbe()
+        public string RunQrSketchProbe()
         {
-            var result = ExecuteTestSketch();
+            var result = ExecuteQrSketch();
             return result.Succeeded
-                ? $"OK {result.CreatedSketchName}"
+                ? $"OK {result.CreatedSketchName} {result.Message}"
                 : $"ERROR {result.Message}";
         }
 
-        public string RunFailingSketchProbe()
+        public string RunFailingQrSketchProbe()
         {
             if (_sw == null || !_connected)
                 return "ERROR The QR add-in is not connected to SolidWorks.";
             // Wrap the real native host so line 3 of the insertion throws —
             // the command must run the native abort/cleanup path for real.
             ISketchHost host = new FailureInjectingHost(new SolidWorksSketchHost(_sw), failOnLine: 3);
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
             return result.Succeeded
                 ? "UNEXPECTED-OK " + result.CreatedSketchName
                 : $"FAILSAFE {result.Message}";

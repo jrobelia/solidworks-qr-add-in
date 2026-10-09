@@ -15,18 +15,18 @@ namespace SolidWorksQrAddIn.Core
     public interface IAddInProbe
     {
         /// <summary>
-        /// Runs the Create Test Sketch command against the live host.
-        /// Returns "OK &lt;sketchName&gt; &lt;segmentCount&gt;" or "ERROR &lt;message&gt;".
-        /// Never shows UI.
+        /// Runs the Create QR Sketch command (fixed content/size/growth)
+        /// against the live host. Returns "OK &lt;sketchName&gt; &lt;segmentCount&gt;"
+        /// or "ERROR &lt;message&gt;". Never shows UI.
         /// </summary>
-        string RunTestSketchProbe();
+        string RunQrSketchProbe();
 
         /// <summary>
         /// Runs the same command with line-3 insertion failure injected, so the
         /// real abort/cleanup path executes against the live host.
         /// Returns "FAILSAFE &lt;message&gt;" — the command must NOT succeed here.
         /// </summary>
-        string RunFailingSketchProbe();
+        string RunFailingQrSketchProbe();
 
         /// <summary>
         /// Reports whether ConnectToSW wired the command surface up:

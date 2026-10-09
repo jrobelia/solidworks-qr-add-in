@@ -5,6 +5,8 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using SolidWorksQrAddIn.Core;
+using SolidWorksQrAddIn.Core.Commands;
+using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Registration;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -12,13 +14,18 @@ using SolidWorks.Interop.swconst;
 namespace SolidWorksQrAddIn.LiveProbe
 {
     /// <summary>
-    /// Live verification harness for ticket 1. Usage:
+    /// Live verification harness for ticket 2. Usage:
     ///   SolidWorksQrAddIn.LiveProbe.exe &lt;deployDir&gt;
     /// where deployDir contains the registered SolidWorksQrAddIn.dll.
     ///
     /// Drives SolidWorks via SldWorks.Application.31 + Activator.CreateInstance
     /// (the verified route — PowerShell late binding does NOT work here).
     /// Prints PASS/FAIL lines; exit code 0 when every check passes.
+    ///
+    /// QR-specific checks: native contour/region counts vs the module's
+    /// expectation, finder-pattern hole/island nesting matched by bounding
+    /// boxes, then Boss-Extrude and shallow Cut-Extrude attempts on a backing
+    /// plate created through the same COM API.
     /// </summary>
     public static class Program
     {
@@ -30,6 +37,14 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (!cond) _failures++;
         }
 
+        // The module's own expectation for the fixed request — the native
+        // sketch must reproduce exactly this contour set.
+        private static readonly QrSketch Expected = QrSketchGenerator
+            .Generate(CreateQrSketchCommand.FixedContent,
+                CreateQrSketchCommand.FixedSizeMm,
+                CreateQrSketchCommand.FixedGrowthFractionPerSide)
+            .Sketch!;
+
         public static int Main(string[] args)
         {
             string deployDir = args.Length > 0
@@ -37,6 +52,16 @@ namespace SolidWorksQrAddIn.LiveProbe
                 : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                     "SolidWorksQrAddIn");
             string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            if (Expected == null)
+            {
+                Console.WriteLine("# FATAL: module could not generate the fixed QR — aborting live run");
+                return 1;
+            }
+            Console.WriteLine($"# expected QR: {Expected.Info.ContourCount} contours, " +
+                $"{Expected.Info.SegmentCount} segments, {Expected.Regions.Count} regions, " +
+                $"N={Expected.Info.CellCount}, size={Expected.Info.FinalSizeMm}mm, " +
+                $"minEdge={Expected.Info.MinEdgeMm:F3}mm");
 
             ISldWorks? sw = null;
             try
@@ -69,7 +94,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     probe.AddinStateProbe());
 
                 // --- rejection: no document open ---
-                string noDoc = probe.RunTestSketchProbe();
+                string noDoc = probe.RunQrSketchProbe();
                 Check(noDoc.StartsWith("ERROR") && noDoc.Contains("document"),
                     "rejects with no document open", noDoc);
 
@@ -81,105 +106,80 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(doc != null, "new part document created",
                     doc == null ? "null" : $"type={doc.GetType()}");
                 if (doc == null) return 1;
+                var ext = (IModelDocExtension)doc.Extension;
+                var mgr = (ISketchManager)doc.SketchManager;
 
                 // --- rejection: no selection ---
                 doc.ClearSelection2(true);
-                string r = probe.RunTestSketchProbe();
+                string r = probe.RunQrSketchProbe();
                 Check(r.StartsWith("ERROR"), "rejects with nothing selected", r);
 
                 // --- mid-insertion failure on the real native path ---
-                var ext = doc.Extension as IModelDocExtension;
-                Check(ext != null && ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
                         (int)swSelectOption_e.swSelectOptionDefault),
                     "Front Plane selected (failure-injection run)");
 
-                var mgr = doc.SketchManager as ISketchManager;
-                string fail = probe.RunFailingSketchProbe();
+                string fail = probe.RunFailingQrSketchProbe();
                 Check(fail.StartsWith("FAILSAFE") && fail.Contains("removed"),
                     "insertion failure reports cleanup of the partial sketch", fail);
-                Check(mgr == null || mgr.ActiveSketch == null,
-                    "no sketch left open after failed insertion");
-                bool partialGone = ext != null &&
-                    !ext.SelectByID2("Sketch1", "SKETCH", 0, 0, 0, false, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
-                Check(partialGone, "only the partial sketch was deleted (no leftover feature)");
+                Check(mgr.ActiveSketch == null, "no sketch left open after failed insertion");
+                Check(!ext.SelectByID2("Sketch1", "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault),
+                    "only the partial sketch was deleted (no leftover feature)");
 
-                // --- happy path: select Front Plane, create the square ---
+                // --- happy path: select Front Plane, create the fixed QR ---
                 doc.ClearSelection2(true);
-                Check(ext != null && ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
                         (int)swSelectOption_e.swSelectOptionDefault),
                     "Front Plane selected");
 
-                r = probe.RunTestSketchProbe();
-                Check(r.StartsWith("OK"), "test sketch command succeeds", r);
+                r = probe.RunQrSketchProbe();
+                Check(r.StartsWith("OK"), "QR sketch command succeeds", r);
 
-                var sketch = mgr?.ActiveSketch as ISketch;
+                var sketch = mgr.ActiveSketch as ISketch;
                 Check(sketch != null, "new sketch remains open for editing",
                     sketch == null ? "ActiveSketch is null" : "in edit mode");
+                string qrSketchName = r.Split(' ')[1];
 
-                if (sketch != null && mgr != null)
+                if (sketch != null)
                 {
                     var segs = (object[])sketch.GetSketchSegments();
-                    Check(segs.Length == 4, "sketch has exactly 4 segments", $"count={segs.Length}");
-                    Check(sketch.GetSketchRegionCount() == 1, "sketch encloses one region (closed)",
-                        $"regions={sketch.GetSketchRegionCount()}");
-                    Check(sketch.GetSketchContourCount() == 1, "sketch has one closed contour",
-                        $"contours={sketch.GetSketchContourCount()}");
+                    Check(segs.Length == Expected.Info.SegmentCount,
+                        "native segment count matches the module's contour edges",
+                        $"native={segs.Length} expected={Expected.Info.SegmentCount}");
+                    Check(sketch.GetSketchContourCount() == Expected.Info.ContourCount,
+                        "native contour count matches (all loops incl. holes+islands)",
+                        $"native={sketch.GetSketchContourCount()} expected={Expected.Info.ContourCount}");
+                    // SolidWorks exposes ONE sketch region per contour: the
+                    // bounded area each contour encloses (a hole contour's
+                    // interior is a region too — a void). So the native count
+                    // equals the contour count, NOT the "material" area count.
+                    int regionCount = sketch.GetSketchRegionCount();
+                    int materialRegions = Expected.Regions.Count +
+                        Expected.Regions.Sum(rg => rg.Holes.Sum(h => h.Islands.Count));
+                    Console.WriteLine($"# native regions={regionCount} (one per contour), " +
+                        $"material regions={materialRegions} (bodies + islands)");
+                    Check(regionCount == Expected.Info.ContourCount,
+                        "native region count = contour count (one bounded area per loop)",
+                        $"native={regionCount} contours={Expected.Info.ContourCount}");
 
-                    // Centred at the sketch origin: every corner at ±h.
-                    var pts = (object[])sketch.GetSketchPoints2();
-                    double half = 0.0125, tol = 1e-6;
-                    bool centred = pts.Length > 0;
-                    foreach (var po in pts)
-                    {
-                        var p = (ISketchPoint)po;
-                        if (Math.Abs(Math.Abs(p.X) - half) > tol || Math.Abs(Math.Abs(p.Y) - half) > tol)
-                            centred = false;
-                    }
-                    Check(centred, "square is centred on the sketch origin", $"points={pts.Length}");
+                    VerifyContoursNatively(sketch);
+                    VerifyFinderNesting();
 
-                    // Rejecting a second run while a sketch is open for editing:
-                    // the AC requires a useful error, and the open sketch must
-                    // be left untouched.
-                    string again = probe.RunTestSketchProbe();
+                    // Second create while the QR sketch is open must reject.
+                    string again = probe.RunQrSketchProbe();
                     Check(again.StartsWith("ERROR") && again.Contains("already"),
                         "rejects a second create while the sketch is open", again);
-                    Check(((object[])sketch.GetSketchSegments()).Length == 4,
+                    Check(((object[])sketch.GetSketchSegments()).Length == Expected.Info.SegmentCount,
                         "rejected run left the open sketch unchanged");
 
-                    // Normal editing works inside the open sketch: add a line
-                    // (CreateLine leaves it selected), delete it, square intact.
-                    var extra = mgr.CreateLine(0, 0, 0, 0.005, 0, 0) as ISketchSegment;
-                    Check(extra != null, "sketch is editable with normal tools (line added)",
-                        extra == null ? "CreateLine returned null" : "added");
-                    if (extra != null)
-                    {
-                        doc.EditDelete();
-                        var after = (object[])sketch.GetSketchSegments();
-                        Check(after.Length == 4, "deleting the probe line leaves the square intact",
-                            $"segments={after.Length}");
-                    }
-
-                    // Commit the sketch so the feature lands in the tree.
+                    // Commit the QR sketch so it becomes a feature.
                     mgr.InsertSketch(false);
-                    Check(mgr.ActiveSketch == null, "sketch exits edit mode cleanly");
+                    Check(mgr.ActiveSketch == null, "QR sketch exits edit mode cleanly");
                 }
 
-                // The committed sketch lands in the feature tree as a
-                // ProfileFeature. Its name depends on run history (the failed
-                // run above deleted its partial 'Sketch1'), so traverse rather
-                // than guessing a name.
-                var sketchFeatures = new List<string>();
-                var featObj = doc.FirstFeature() as IFeature;
-                while (featObj != null)
-                {
-                    if (string.Equals(featObj.GetTypeName2(), "ProfileFeature",
-                            StringComparison.OrdinalIgnoreCase))
-                        sketchFeatures.Add(featObj.Name);
-                    featObj = featObj.GetNextFeature() as IFeature;
-                }
-                Check(sketchFeatures.Count == 1, "exactly one sketch feature exists in the tree",
-                    string.Join(", ", sketchFeatures));
+                // --- backing plate + feature use ---
+                FeatureChecks(doc, ext, mgr, qrSketchName);
 
                 // --- reload: unload, then load again — no duplicate commands ---
                 int unload = sw.UnloadAddIn(dllPath);
@@ -207,6 +207,264 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
         }
 
+        // ---------------- contour verification ----------------
+
+        /// <summary>Bounding box of a module contour (sketch-space metres).</summary>
+        private static (double minX, double maxX, double minY, double maxY) ModuleBBox(QrContour c) =>
+            (c.Vertices.Min(v => v.X), c.Vertices.Max(v => v.X),
+             c.Vertices.Min(v => v.Y), c.Vertices.Max(v => v.Y));
+
+        /// <summary>Bounding box of a native contour from its segments' endpoints.</summary>
+        private static (double minX, double maxX, double minY, double maxY) NativeBBox(ISketchContour c)
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            foreach (var so in (object[])c.GetSketchSegments())
+            {
+                if (so is ISketchLine line)
+                {
+                    var p1 = (ISketchPoint)line.GetStartPoint2();
+                    var p2 = (ISketchPoint)line.GetEndPoint2();
+                    minX = Math.Min(minX, Math.Min(p1.X, p2.X));
+                    maxX = Math.Max(maxX, Math.Max(p1.X, p2.X));
+                    minY = Math.Min(minY, Math.Min(p1.Y, p2.Y));
+                    maxY = Math.Max(maxY, Math.Max(p1.Y, p2.Y));
+                }
+            }
+            return (minX, maxX, minY, maxY);
+        }
+
+        private static bool BBoxEquals(
+            (double minX, double maxX, double minY, double maxY) a,
+            (double minX, double maxX, double minY, double maxY) b, double tol) =>
+            Math.Abs(a.minX - b.minX) < tol && Math.Abs(a.maxX - b.maxX) < tol &&
+            Math.Abs(a.minY - b.minY) < tol && Math.Abs(a.maxY - b.maxY) < tol;
+
+        /// <summary>
+        /// Every module contour — outlines, holes, islands — must exist as a
+        /// native contour with a matching bounding box. Matched 1:1.
+        /// </summary>
+        private static void VerifyContoursNatively(ISketch sketch)
+        {
+            const double tol = 1e-9; // metres — tighter than SW's own tolerance
+            var native = ((object[])sketch.GetSketchContours()).Cast<ISketchContour>().ToList();
+            var nativeBoxes = native.Select(NativeBBox).ToList();
+            var used = new bool[nativeBoxes.Count];
+            int matched = 0;
+
+            foreach (var mc in Expected.Contours)
+            {
+                var mb = ModuleBBox(mc);
+                int hit = -1;
+                for (var i = 0; i < nativeBoxes.Count; i++)
+                    if (!used[i] && BBoxEquals(mb, nativeBoxes[i], tol)) { hit = i; break; }
+                if (hit >= 0) { used[hit] = true; matched++; }
+            }
+
+            Check(matched == Expected.Contours.Count && native.Count == Expected.Contours.Count,
+                "every generated contour exists natively with a matching bounding box",
+                $"matched={matched} native={native.Count} expected={Expected.Contours.Count}");
+        }
+
+        /// <summary>
+        /// Finder-pattern proof: a module-level ring→hole→island nesting must
+        /// appear in the native sketch — i.e. the island loop is still inside
+        /// the hole loop which is inside the region loop.
+        /// </summary>
+        private static void VerifyFinderNesting()
+        {
+            var nested = Expected.Regions
+                .Where(rg => rg.Holes.Any(h => h.Islands.Count > 0))
+                .ToList();
+            Check(nested.Count >= 3,
+                "module produced finder-pattern ring/hole/island nestings",
+                $"nested regions={nested.Count} (QR has 3 finders)");
+
+            // Also: physical sanity — each island bbox strictly inside its
+            // hole bbox strictly inside the region bbox.
+            bool allInside = nested.All(rg => rg.Holes.All(h =>
+                h.Islands.All(isl =>
+                {
+                    var ib = ModuleBBox(isl.Boundary);
+                    var hb = ModuleBBox(h.Boundary);
+                    var rb = ModuleBBox(rg.Boundary);
+                    return ib.minX > hb.minX && ib.maxX < hb.maxX &&
+                           ib.minY > hb.minY && ib.maxY < hb.maxY &&
+                           hb.minX > rb.minX && hb.maxX < rb.maxX &&
+                           hb.minY > rb.minY && hb.maxY < rb.maxY;
+                })));
+            Check(allInside, "finder islands are strictly nested inside holes inside regions");
+        }
+
+        // ---------------- feature use on a backing plate ----------------
+
+        private static void FeatureChecks(IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr, string qrSketchName)
+        {
+            // 60×60×5 mm backing plate on the same Front Plane (z = 0 base).
+            doc.ClearSelection2(true);
+            if (!ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                Check(false, "plate: Front Plane re-selected");
+                return;
+            }
+            mgr.InsertSketch(true);
+            var plateSketch = mgr.ActiveSketch as ISketch;
+            if (plateSketch == null) { Check(false, "plate sketch opened"); return; }
+            const double h = 0.030; // 60 mm plate
+            mgr.CreateLine(-h, -h, 0, h, -h, 0);
+            mgr.CreateLine(h, -h, 0, h, h, 0);
+            mgr.CreateLine(h, h, 0, -h, h, 0);
+            mgr.CreateLine(-h, h, 0, -h, -h, 0);
+            mgr.InsertSketch(false);
+
+            var fm = (IFeatureManager)doc.FeatureManager;
+            doc.ClearSelection2(true);
+            // The just-committed sketch is the last ProfileFeature in the tree.
+            var sketchNames = FindSketchFeatureNames(doc);
+            string plateSketchName = sketchNames.Last();
+            Check(ext.SelectByID2(plateSketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault),
+                "plate sketch selected for extrusion", plateSketchName);
+            var plate = fm.FeatureExtrusion3(
+                true, false, false, (int)swEndConditions_e.swEndCondBlind, 0,
+                0.005, 0.0, false, false, false, false, 0.0, 0.0,
+                false, false, false, false,
+                true, true, true, (int)swStartConditions_e.swStartSketchPlane, 0.0, false) as IFeature;
+            Check(plate != null, "backing plate Boss-Extrude succeeds",
+                plate == null ? "FeatureExtrusion3 returned null" : plate.Name);
+
+            // Boss-Extrude the QR material regions onto the plate (2 mm).
+            doc.ClearSelection2(true);
+            Check(SelectQrMaterialRegions(doc, qrSketchName),
+                "QR material regions selectable in the native sketch");
+            var boss = fm.FeatureExtrusion3(
+                true, false, false, (int)swEndConditions_e.swEndCondBlind, 0,
+                0.002, 0.0, false, false, false, false, 0.0, 0.0,
+                false, false, false, false,
+                true, true, true, (int)swStartConditions_e.swStartSketchPlane, 0.0, false) as IFeature;
+            Check(boss != null, "QR Boss-Extrude succeeds on the backing plate",
+                boss == null ? "FeatureExtrusion3 returned null" : boss.Name);
+
+            // Shallow Cut-Extrude the QR material regions into the plate (1 mm).
+            // Dir=true: on this machine FeatureExtrusion3(Dir=false) grows the
+            // plate away from the sketch-normal side, so the cut must run with
+            // the reversed-direction flag to reach into the material —
+            // verified empirically (Dir=false returns null).
+            doc.ClearSelection2(true);
+            Check(SelectQrMaterialRegions(doc, qrSketchName),
+                "QR material regions re-selectable for the cut");
+            var cut = fm.FeatureCut4(
+                true, false, true, (int)swEndConditions_e.swEndCondBlind, 0,
+                0.001, 0.0, false, false, false, false, 0.0, 0.0,
+                false, false, false, false,
+                false, true, true, false, false, false,
+                (int)swStartConditions_e.swStartSketchPlane, 0.0, false, true) as IFeature;
+            Check(cut != null, "shallow QR Cut-Extrude succeeds into the plate",
+                cut == null ? "FeatureCut4 returned null" : cut.Name);
+        }
+
+        /// <summary>
+        /// Selects only the MATERIAL regions of the committed QR sketch —
+        /// outer bodies plus islands nested inside holes — the programmatic
+        /// equivalent of the engineer picking the QR's dark areas for a
+        /// feature. Hole-interior (void) regions are deliberately skipped so
+        /// a Boss/Cut-Extrude reproduces the QR pattern rather than a solid
+        /// square. Selecting the whole sketch feature does NOT work — SW
+        /// returns null for multi-contour sketches.
+        ///
+        /// Each SolidWorks region's bounding box equals its outer bounding
+        /// contour's box, so material regions are identified 1:1 against the
+        /// module's body/island contour boxes (exact 1e-9 m match — the
+        /// contours were inserted verbatim).
+        /// </summary>
+        private static bool SelectQrMaterialRegions(IModelDoc2 doc, string qrSketchName)
+        {
+            var sketchFeature = FindSketchFeature(doc, qrSketchName);
+            if (sketchFeature == null) return false;
+            // NB: the sketch feature's RCW does NOT QI to ISketch — the sketch
+            // object is reached through GetSpecificFeature2().
+            var sketch = sketchFeature.GetSpecificFeature2() as ISketch;
+            if (sketch == null) return false;
+
+            var regions = sketch.GetSketchRegions() as object[];
+            if (regions == null || regions.Length == 0) return false;
+
+            var material = new List<(double minX, double maxX, double minY, double maxY)>();
+            foreach (var rg in Expected.Regions)
+            {
+                material.Add(ModuleBBox(rg.Boundary));
+                foreach (var h in rg.Holes)
+                    foreach (var isl in h.Islands)
+                        material.Add(ModuleBBox(isl.Boundary));
+            }
+
+            int selected = 0;
+            foreach (var ro in regions)
+            {
+                if (!(ro is ISketchRegion region)) continue;
+                var bb = RegionBBox(region);
+                if (material.Any(mb => BBoxEquals(bb, mb, 1e-9)) && region.Select(true, 0))
+                    selected++;
+            }
+            return selected == material.Count;
+        }
+
+        /// <summary>
+        /// Bounding box of a native sketch region, from the vertices of its
+        /// boundary edges (sketch space, metres).
+        /// </summary>
+        private static (double minX, double maxX, double minY, double maxY) RegionBBox(
+            ISketchRegion region)
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            if (region.GetEdges() is object[] edges)
+                foreach (var eo in edges)
+                {
+                    if (!(eo is IEdge edge)) continue;
+                    foreach (var v in new[]
+                             { edge.GetStartVertex() as IVertex, edge.GetEndVertex() as IVertex })
+                    {
+                        if (v == null || !(v.GetPoint() is double[] p) || p.Length < 2)
+                            continue;
+                        minX = Math.Min(minX, p[0]); maxX = Math.Max(maxX, p[0]);
+                        minY = Math.Min(minY, p[1]); maxY = Math.Max(maxY, p[1]);
+                    }
+                }
+            return (minX, maxX, minY, maxY);
+        }
+
+        private static List<string> FindSketchFeatureNames(IModelDoc2 doc)
+        {
+            var names = new List<string>();
+            var feat = doc.FirstFeature() as IFeature;
+            while (feat != null)
+            {
+                if (string.Equals(feat.GetTypeName2(), "ProfileFeature",
+                        StringComparison.OrdinalIgnoreCase))
+                    names.Add(feat.Name);
+                feat = feat.GetNextFeature() as IFeature;
+            }
+            return names;
+        }
+
+        private static IFeature? FindSketchFeature(IModelDoc2 doc, string name)
+        {
+            var feat = doc.FirstFeature() as IFeature;
+            while (feat != null)
+            {
+                if (string.Equals(feat.GetTypeName2(), "ProfileFeature",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(feat.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return feat;
+                feat = feat.GetNextFeature() as IFeature;
+            }
+            return null;
+        }
+
+        // ---------------- plumbing ----------------
+
         private static ISldWorks? AttachOrLaunch()
         {
             var t = Type.GetTypeFromProgID("SldWorks.Application.31");
@@ -226,8 +484,6 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         private static IAddInProbe? TryGetProbe(ISldWorks sw)
         {
-            // SW accepts the CLSID in several spellings; try the canonical one
-            // first, then bare/lowercase forms, then the ProgId.
             var keys = new[]
             {
                 AddinIdentity.Clsid,
@@ -246,13 +502,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Console.WriteLine($"# GetAddInObject({key}) -> type={raw.GetType().FullName}");
                     if (raw is IAddInProbe asProbe)
                     {
-                        Console.WriteLine($"#   cast to IAddInProbe OK");
+                        Console.WriteLine("#   cast to IAddInProbe OK");
                         return asProbe;
                     }
                     // The RCW doesn't QI our managed interface — but the object
-                    // IS SwAddin (IsSwAddin=true) and its public methods are
-                    // callable via the CCW's dispatch interface, exactly the way
-                    // SolidWorks invokes command callbacks by name.
+                    // IS SwAddin and its public methods are callable via the
+                    // CCW's dispatch interface, exactly the way SolidWorks
+                    // invokes command callbacks by name.
                     bool isOurs = raw is SolidWorks.Interop.swpublished.ISwAddin;
                     Console.WriteLine($"#   not IAddInProbe; IsSwAddin={isOurs} — trying IDispatch invocation");
                     if (isOurs)
@@ -289,8 +545,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                 return result as string ?? "(no result)";
             }
 
-            public string RunTestSketchProbe() => Invoke("RunTestSketchProbe");
-            public string RunFailingSketchProbe() => Invoke("RunFailingSketchProbe");
+            public string RunQrSketchProbe() => Invoke("RunQrSketchProbe");
+            public string RunFailingQrSketchProbe() => Invoke("RunFailingQrSketchProbe");
             public string AddinStateProbe() => Invoke("AddinStateProbe");
         }
     }

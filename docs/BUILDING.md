@@ -46,20 +46,32 @@ dotnet test tests\SolidWorksQrAddIn.Tests
 ```
 
 Runs on any Windows worker with .NET Framework 4.8 + the .NET SDK. Output goes
-only to `tests\...\bin` — never over a deployed/registered DLL. The suite covers
-command eligibility (no doc, assembly/drawing doc, no selection, non-plane or
-multi selection, already-editing sketch), the insertion request through the
-test adapter (fake records a real sketch: 4 segments, closed loop, centred at
-origin, left open), insertion-failure cleanup + cleanup-failure reporting,
-flag restoration, redraw, and the COM/registration identity plan.
+only to `tests\...\bin` — never over a deployed/registered DLL. The suite covers:
+
+- **Geometry module** (`QrSketchGenerator`): deterministic cell-matrix fixtures
+  (adjacent merge, diagonal finite overlap, finder ring→hole→island nesting),
+  the real `SW-QR-MVP` payload (version 1, N=21, exact 25 mm centred outline,
+  bit-identical shared endpoints, nonzero-area closed contours), insertion-guard
+  rejections (rounding growth, light-gap collapse, sub-0.05 mm features), input
+  errors (empty content, non-finite/≤0 size, growth outside (0, 0.5), payload
+  beyond QR capacity at ECC M), and direct validator rejections (zero area,
+  zero-length edge, self-intersection, pinched + pair corner contacts).
+- **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
+  no/other selection, already-editing sketch), insertion request through the
+  test adapter, failure cleanup + honest cleanup-failure reporting, flag
+  restoration, redraw.
+- **Identity**: COM/registration plan (ComIdentityTests, RegistrationPlanTests).
 
 ## Deploy + register (per-user, no admin)
 
 ```powershell
 $deploy = "$env:LOCALAPPDATA\SolidWorksQrAddIn"
 mkdir $deploy -Force
-copy src\SolidWorksQrAddIn\bin\x64\Release\net48\SolidWorksQrAddIn.dll $deploy
-copy src\SolidWorksQrAddIn.Core\bin\x64\Release\net48\SolidWorksQrAddIn.Core.dll $deploy
+$bin = "src\SolidWorksQrAddIn\bin\x64\Release\net48"
+copy $bin\SolidWorksQrAddIn.dll $deploy
+copy $bin\SolidWorksQrAddIn.Core.dll $deploy
+copy $bin\QRCoder.dll $deploy          # shipped dependency (MIT)
+copy $bin\Clipper2Lib.dll $deploy      # shipped dependency (BSL-1.0)
 .\scripts\register-dev-hkcu.ps1 -DeployDir $deploy
 ```
 
@@ -96,34 +108,59 @@ copy tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $depl
 The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
 `Activator.CreateInstance` (PowerShell late binding does **not** work — verified),
 loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
-and invokes its public probe methods (`RunTestSketchProbe`, `AddinStateProbe`)
-through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
+and invokes its public probe methods (`RunQrSketchProbe`,
+`RunFailingQrSketchProbe`, `AddinStateProbe`) through
+`IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed
 `IAddInProbe` interface; invoke members by name instead.)
 
 It then: checks the no-document/no-selection rejections, creates a part from
 the default template, selects **Front Plane**, first runs the command through
-`RunFailingSketchProbe` (injects a line-3 insertion failure so the real native
-abort/cleanup path runs: partial sketch deleted, edit mode exited), then runs
-the command and verifies the new sketch is open with 4 segments / 1 region /
-1 contour centred at (0,0), rejects a second create while the sketch is open,
-edits + deletes a line inside the open sketch, exits edit cleanly, finds
-exactly one `ProfileFeature` sketch in the tree (name-agnostic traversal —
-the failed run's deleted partial shifts the numbering), unloads (callbacks
-gone), and reloads (connected again — no duplicated group).
+`RunFailingQrSketchProbe` (injects a line-3 insertion failure so the real
+native abort/cleanup path runs: partial sketch deleted, edit mode exited),
+then runs `RunQrSketchProbe` — the fixed `SW-QR-MVP` request at 25 mm / 3% —
+and verifies against the module's own expectation (Core is referenced
+directly): segment count == generated edge count, native contour count ==
+generated contour count, native region count == contour count (SolidWorks
+exposes one bounded area per contour, including void hole interiors),
+every generated contour matched 1:1 to a native contour by bounding box
+(≤1e-9 m), finder ring→hole→island nesting present. It rejects a second
+create while the sketch is open, commits the QR sketch, builds a
+60×60×5 mm backing plate on Front Plane, selects only the QR's *material*
+regions (`ISketchRegion` bounding boxes matched to the module's
+body+island contours — selecting the whole sketch returns null for a
+multi-contour extrude, and selecting ALL regions fills the holes solid),
+then creates a 2 mm Boss-Extrude and a 1 mm Cut-Extrude (`Dir=true` —
+the plate grows away from the sketch-normal side) into the plate.
+Finally it unloads (callbacks gone) and reloads (connected again — no
+duplicated group).
 
 SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
 terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
-- Load → connect → command group → all rejection paths → square sketch open,
-  closed (1 region/1 contour), centred, editable, clean unload + reload: **all
-  PASS** (two full runs; one earlier run hit a transient `RPC_E_SERVERFAULT`
-  during unload — did not reproduce).
+- Ticket 2 full QR run — **ALL CHECKS PASSED**: LoadAddIn → IDispatch probe →
+  no-doc/no-selection rejections → injected line-3 failure cleanup →
+  `SW-QR-MVP` sketch created and left open → 252 native segments / 27 native
+  contours / 27 native regions, all 27 contour bounding boxes matched at
+  1e-9 m, 3 finder ring→hole→island nestings verified → second-create-while-
+  editing rejected → clean commit → 60×60×5 mm plate + 2 mm QR material-
+  region Boss-Extrude (`Boss-Extrude2`) + 1 mm QR material-region
+  Cut-Extrude (`Cut-Extrude1`, `Dir=true`) → clean unload + reload.
+- Insertion requires bulk mode: `ISketchManager.AddToDB = true` +
+  `DisplayWhenAdded = false` (interactive mode rejected valid coincident-
+  endpoint segments with "CreateLine returned no segment"; bulk mode accepts
+  all 252). Flags are restored after insertion.
+- A committed sketch feature's RCW does **not** QI to `ISketch` — use
+  `IFeature.GetSpecificFeature2()` to reach the sketch object.
 - **Not observed headlessly:** startup auto-load via `AddInsStartup` did not
   fire in the COM-launched invisible instance (even with the flag=1 and our
   HKCU discovery key — SW did read/manage the key; it rewrote the flag to 0
   after runtime unload). Whether an interactive session enumerates the HKCU
   `AddIns` key for Tools→Add-Ins/startup is **awaiting human verification**;
   the HKLM AddIns route via RegAsm is the documented standard.
+- Visual confirmation that the boss/cut reproduces the QR pattern on the
+  plate (holes open, islands raised/etched) is **awaiting human
+  verification** — the headless run verifies region selection and feature
+  creation, not the rendered result.
