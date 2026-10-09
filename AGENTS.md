@@ -1,6 +1,6 @@
 # SolidWorks QR Add-In
 
-Standalone SolidWorks add-in that generates a native QR sketch from text or a URL. Specification: `MVP-SPEC.md`. Evidence and rationale: `RESEARCH.md`.
+Standalone SolidWorks add-in that generates a native QR sketch from text or a URL. Specification: issue #8 (working copy: `.scratch/MVP-SPEC.md`). Evidence and rationale: `docs/RESEARCH.md`.
 
 ## Agent skills
 
