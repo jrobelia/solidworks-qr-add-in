@@ -1,7 +1,7 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  Removes the per-user (HKCU) dev registration written by register-dev-hkcu.ps1.
+  Removes the per-user (HKCU) registration written by register-addin-hkcu.ps1.
 
 .DESCRIPTION
   Deletes ONLY this add-in's keys:
@@ -11,6 +11,8 @@
     HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}
 
   Never touches the InvenTree add-in ({A1B2C3D4-...}) or any other add-in.
+  Close SolidWorks before unregistering; delete the deployment folder
+  afterwards if removing the add-in entirely.
 #>
 param()
 

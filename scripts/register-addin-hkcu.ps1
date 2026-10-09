@@ -1,10 +1,10 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  Per-user (HKCU-only, no admin) dev registration of the SolidWorks QR add-in.
+  Per-user (HKCU-only, no admin) registration of the SolidWorks QR add-in.
 
 .DESCRIPTION
-  Writes exactly the entries SolidWorks needs, all under HKCU — never HKLM:
+  Writes exactly the entries SolidWorks needs, all under HKCU - never HKLM:
 
     HKCU\SOFTWARE\Classes\CLSID\{clsid}\InprocServer32   (mscoree.dll + CodeBase)
     HKCU\SOFTWARE\Classes\CLSID\{clsid}\ProgId         (-> SolidWorksQrAddIn.SwAddin)
@@ -14,18 +14,26 @@
 
   Equivalent in effect to `RegAsm /codebase` + the add-in's
   [ComRegisterFunction], but usable without elevation. Touches ONLY this
-  add-in's GUID — never the InvenTree add-in ({A1B2C3D4-...}) or any other key.
+  add-in's GUID - never the InvenTree add-in ({A1B2C3D4-...}) or any other key.
+
+  Close SolidWorks before registering over an existing install - the DLL is
+  file-mapped into SLDWORKS.exe while loaded and cannot be replaced live.
 
 .PARAMETER DeployDir
-  Folder containing the built SolidWorksQrAddIn.dll (CodeBase points here).
-  Keep this folder stable — COM resolves the DLL at this exact path.
+  Folder containing SolidWorksQrAddIn.dll (CodeBase points here). Defaults to
+  this script's own folder - inside a packed deployment folder simply run the
+  script with no arguments. Keep the folder stable: COM resolves the DLL at
+  this exact path on every SolidWorks start.
 
 .EXAMPLE
-  .\register-dev-hkcu.ps1 -DeployDir "$env:LOCALAPPDATA\SolidWorksQrAddIn"
+  .\register-addin-hkcu.ps1                                  # inside a deployment folder
+  .\register-addin-hkcu.ps1 -DeployDir "$env:LOCALAPPDATA\SolidWorksQrAddIn"
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$DeployDir
+    [Parameter(Mandatory = $false)][string]$DeployDir
 )
+
+if (-not $DeployDir) { $DeployDir = $PSScriptRoot }
 
 $ErrorActionPreference = 'Stop'
 
@@ -70,4 +78,4 @@ Reg "SOFTWARE\SolidWorks\AddIns\$Clsid"                'Description' $Descrip
 Reg "SOFTWARE\SolidWorks\AddInsStartup\$Clsid"         '(default)' 1 'REG_DWORD'
 
 Write-Host "Registered $Clsid -> $dll"
-Write-Host "  (per-user HKCU only; run unregister-dev-hkcu.ps1 to remove)"
+Write-Host "  (per-user HKCU only; run unregister-addin-hkcu.ps1 to remove)"

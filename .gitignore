@@ -17,6 +17,9 @@ x64/
 x86/
 [Bb]uild/
 
+# Packed deployment staging (scripts/pack-deploy.ps1)
+deploy/
+
 # NuGet
 packages/
 *.nupkg
