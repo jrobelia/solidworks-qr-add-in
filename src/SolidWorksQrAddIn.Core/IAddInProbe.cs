@@ -32,6 +32,14 @@ namespace SolidWorksQrAddIn.Core
         string RunFailingQrSketchProbe();
 
         /// <summary>
+        /// Runs the same create path with insertion failure AND a refused
+        /// cleanup injected, so the honest "the partial sketch may remain"
+        /// reporting executes against the live host. Returns
+        /// "FAILSAFE &lt;message&gt;" — the command must NOT succeed here.
+        /// </summary>
+        string RunCleanupFailQrSketchProbe();
+
+        /// <summary>
         /// Reports whether ConnectToSW wired the command surface up:
         /// "CONNECTED group=&lt;n&gt;" or "NOT-CONNECTED".
         /// </summary>

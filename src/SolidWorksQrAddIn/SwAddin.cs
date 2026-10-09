@@ -125,6 +125,9 @@ namespace SolidWorksQrAddIn
 
         public bool DisconnectFromSW()
         {
+            // _connected first: a command callback or a window Create handler
+            // in flight sees "not connected" and reports instead of touching a
+            // released _sw — nothing can create geometry after unload.
             _connected = false;
             // Release the modeless window first — it must not outlive the
             // add-in — then stop the STA pump that owned it.
@@ -255,10 +258,39 @@ namespace SolidWorksQrAddIn
             // Wrap the real native host so line 3 of the insertion throws —
             // the command must run the native abort/cleanup path for real.
             var host = new FailureInjectingHost(new SolidWorksSketchHost(_sw), failOnLine: 3);
-            var result = _session.CreateSketch(host);
-            return result.Succeeded
-                ? "UNEXPECTED-OK " + result.CreatedSketchName
-                : $"FAILSAFE {result.Message}";
+            return DescribeCreate(host);
+        }
+
+        public string RunCleanupFailQrSketchProbe()
+        {
+            if (_sw == null || !_connected || _session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            _session.SetContent(ProbeContent);
+            // Line 3 throws AND the first cleanup attempt reports failure —
+            // the "partial sketch may remain" reporting runs for real. The
+            // teardown path still makes the host's best-effort second attempt.
+            var host = new FailureInjectingHost(
+                new SolidWorksSketchHost(_sw), failOnLine: 3, failCleanup: true);
+            return DescribeCreate(host);
+        }
+
+        /// <summary>
+        /// The probe/COM boundary: a create through a probe surface can never
+        /// throw back into SolidWorks — the result string is the contract.
+        /// </summary>
+        private string DescribeCreate(ISketchHost host)
+        {
+            try
+            {
+                var result = _session!.CreateSketch(host);
+                return result.Succeeded
+                    ? "UNEXPECTED-OK " + result.CreatedSketchName
+                    : $"FAILSAFE {result.Message}";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
         }
 
         public string OpenQrWindowProbe()
@@ -323,10 +355,20 @@ namespace SolidWorksQrAddIn
         {
             if (_sw == null || !_connected || _session == null)
                 return "ERROR The QR add-in is not connected to SolidWorks.";
-            var result = _session.CreateSketch(new SolidWorksSketchHost(_sw));
-            return result.Succeeded
-                ? $"OK {result.CreatedSketchName} {result.Message}"
-                : $"ERROR {result.Message}";
+            // A probe answer is a string — a create failure or a host
+            // exception surfaces as "ERROR …", never as an exception that
+            // escapes across the COM boundary into SolidWorks.
+            try
+            {
+                var result = _session.CreateSketch(new SolidWorksSketchHost(_sw));
+                return result.Succeeded
+                    ? $"OK {result.CreatedSketchName} {result.Message}"
+                    : $"ERROR {result.Message}";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
         }
 
         public string PreviewSignatureProbe()

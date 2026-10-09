@@ -87,10 +87,14 @@ namespace SolidWorksQrAddIn.Core.Hosting
     ///  - <see cref="KeepOpen"/> commits success: the new sketch stays open in
     ///    edit mode and is never cleaned up.
     ///  - <see cref="Abort"/> exits edit mode and deletes only the sketch this
-    ///    session created, reporting the cleanup result honestly.
+    ///    session created, reporting the cleanup result honestly. It is a
+    ///    no-op on a committed session and reports the same REAL outcome on
+    ///    every call — a failed cleanup may not be claimed as clean on retry.
     ///  - <see cref="IDisposable.Dispose"/> restores every host setting the
     ///    session changed (sketch-manager flags), redraws after a committed
     ///    insertion, and best-effort aborts an uncommitted session.
+    /// Hosts that support named undo steps group the whole creation into one
+    /// step named <see cref="SketchHostContract.CreationUndoName"/>.
     /// </summary>
     public interface ISketchInsertion : IDisposable
     {
@@ -106,6 +110,19 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         /// <summary>Aborts the session; returns whether cleanup actually removed the partial sketch.</summary>
         CleanupOutcome Abort();
+    }
+
+    /// <summary>Contract-level constants every host adapter honours.</summary>
+    public static class SketchHostContract
+    {
+        /// <summary>
+        /// The undo-step name a creation attempt records: a committed
+        /// insertion produces exactly ONE undo step with this name (grouping
+        /// sketch creation + every segment), so undoing it removes the QR
+        /// sketch and nothing else. Hosts without undo-record support must
+        /// still behave correctly — the name is a best-effort nicety.
+        /// </summary>
+        public const string CreationUndoName = "Create QR Sketch";
     }
 
     /// <summary>Result of cleaning up a failed insertion.</summary>

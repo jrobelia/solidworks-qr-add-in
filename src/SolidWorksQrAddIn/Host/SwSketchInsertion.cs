@@ -10,12 +10,20 @@ namespace SolidWorksQrAddIn.Host
     /// KeepOpen leaves that sketch in edit mode; Abort exits edit mode and
     /// deletes only this session's sketch feature. Flags captured at Begin are
     /// restored on every exit path; a committed session redraws the view.
+    ///
+    /// When <paramref name="undoRecording"/> is set the host opened a
+    /// StartRecordingUndoObject scope in BeginSketchInsertion; this session
+    /// closes it once — named "Create QR Sketch" — on commit (leaving one
+    /// undo step for the whole creation) or on abort (a step that reverts to
+    /// no net change). The scope is a naming aid, never a rollback mechanism.
     /// </summary>
     public sealed class SwSketchInsertion : ISketchInsertion
     {
         private readonly IModelDoc2 _doc;
         private readonly ISketchManager _mgr;
         private readonly IFeature _sketchFeature;
+        private readonly IModelDocExtension? _ext;
+        private readonly bool _undoRecording;
         private readonly bool _prevAddToDB;
         private readonly bool _prevDisplayWhenAdded;
         private readonly bool _prevAutoInference;
@@ -23,15 +31,20 @@ namespace SolidWorksQrAddIn.Host
         private bool _committed;
         private bool _aborted;
         private bool _flagsRestored;
+        private bool _undoFinished;
+        private CleanupOutcome? _abortOutcome;
         private int _lineCount;
 
         public SwSketchInsertion(
             IModelDoc2 doc, ISketchManager mgr, IFeature sketchFeature,
+            IModelDocExtension? ext, bool undoRecording,
             bool prevAddToDB, bool prevDisplayWhenAdded, bool prevAutoInference, bool prevInferenceMode)
         {
             _doc = doc;
             _mgr = mgr;
             _sketchFeature = sketchFeature;
+            _ext = ext;
+            _undoRecording = undoRecording;
             _prevAddToDB = prevAddToDB;
             _prevDisplayWhenAdded = prevDisplayWhenAdded;
             _prevAutoInference = prevAutoInference;
@@ -74,13 +87,25 @@ namespace SolidWorksQrAddIn.Host
         public void KeepOpen()
         {
             _committed = true;
+            // The whole creation becomes one named undo step — even though
+            // the sketch stays open in edit mode. Behaviour verified live;
+            // a host that can't record undos still leaves a correct sketch.
+            FinishUndoOnce();
         }
 
         public CleanupOutcome Abort()
         {
-            if (_aborted)
-                return CleanupOutcome.Cleaned;
+            if (_committed)
+                return CleanupOutcome.Cleaned;   // a committed sketch is never removed
+            if (_abortOutcome != null)
+                return _abortOutcome;            // report the REAL outcome, honestly
             _aborted = true;
+            _abortOutcome = AbortOnce();
+            return _abortOutcome;
+        }
+
+        private CleanupOutcome AbortOnce()
+        {
             try
             {
                 // Exit edit mode, then delete ONLY this session's sketch feature.
@@ -117,6 +142,7 @@ namespace SolidWorksQrAddIn.Host
             finally
             {
                 RestoreFlags();
+                FinishUndoOnce();
             }
         }
 
@@ -129,7 +155,10 @@ namespace SolidWorksQrAddIn.Host
                 return;
             }
             if (!_aborted)
-                Abort();
+            {
+                try { Abort(); }
+                catch (Exception ex) { Diag.Log($"dispose-time abort failed: {ex.Message}"); }
+            }
         }
 
         private void RestoreFlags()
@@ -140,6 +169,26 @@ namespace SolidWorksQrAddIn.Host
             try { _mgr.DisplayWhenAdded = _prevDisplayWhenAdded; } catch { }
             try { _mgr.AutoInference = _prevAutoInference; } catch { }
             try { _mgr.InferenceMode = _prevInferenceMode; } catch { }
+        }
+
+        /// <summary>
+        /// Closes the undo recording opened in BeginSketchInsertion, exactly
+        /// once, naming the step "Create QR Sketch". Best-effort: a host that
+        /// refuses still leaves correct geometry.
+        /// </summary>
+        private void FinishUndoOnce()
+        {
+            if (_undoFinished || !_undoRecording || _ext == null) return;
+            _undoFinished = true;
+            try
+            {
+                if (!_ext.FinishRecordingUndoObject2(SketchHostContract.CreationUndoName, false))
+                    Diag.Log("FinishRecordingUndoObject2 returned false");
+            }
+            catch (Exception ex)
+            {
+                Diag.Log($"FinishRecordingUndoObject2 failed: {ex.Message}");
+            }
         }
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 
@@ -18,6 +19,13 @@ namespace SolidWorksQrAddIn.Core.Commands
     /// any host mutation — a rejected request never touches the part. No
     /// margin geometry, no features. Works only through the
     /// <see cref="ISketchHost"/> seam.
+    ///
+    /// Failure contract: nothing this command calls can throw back across the
+    /// seam into SolidWorks. Any host-side failure — declared seam exception
+    /// or an unexpected error — becomes a <see cref="CommandResult"/> failure
+    /// with a useful, honest message: a removed partial sketch is reported as
+    /// removed; a cleanup failure is reported as possibly leaving the partial
+    /// sketch behind, never as a complete rollback.
     /// </summary>
     public sealed class CreateQrSketchCommand
     {
@@ -26,7 +34,18 @@ namespace SolidWorksQrAddIn.Core.Commands
         public CommandResult Execute(
             ISketchHost host, string content, double sizeMm, double growthFractionPerSide)
         {
-            var state = host.CaptureState();
+            if (host == null) throw new ArgumentNullException(nameof(host));
+
+            SketchHostState state;
+            try
+            {
+                state = host.CaptureState();
+            }
+            catch (Exception ex)
+            {
+                return CommandResult.Failure(
+                    $"Could not read the SolidWorks document state: {ex.Message}");
+            }
 
             switch (state.Document)
             {
@@ -90,8 +109,11 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 insertion = host.BeginSketchInsertion();
             }
-            catch (SketchHostException ex)
+            catch (Exception ex)
             {
+                // The seam contract: a thrown begin leaves the document as the
+                // host found it — when the host had to abandon a half-entered
+                // sketch it could not remove, its message says so.
                 return CommandResult.Failure(
                     $"Could not start the sketch: {ex.Message}");
             }
@@ -100,24 +122,75 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 foreach (var edge in sketch.Edges)
                     insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
+                insertion.KeepOpen();
             }
-            catch (SketchInsertionException ex)
+            catch (Exception ex)
             {
-                var cleanup = insertion.Abort();
-                insertion.Dispose();
+                // ANY failure — a refused edge, a host error mid-contour, a
+                // commit that could not finish — takes the same path: abort
+                // the session (a committed insertion reports Cleaned without
+                // touching the sketch), then tear down.
+                var cleanup = TryAbort(insertion);
+                var name = SafeSketchName(insertion);
                 var cleanupText = cleanup.Succeeded
-                    ? $" The partial sketch '{insertion.SketchName}' was removed."
-                    : $" Cleanup failed: {cleanup.FailureReason}. The partial sketch '{insertion.SketchName}' may remain in the feature tree.";
+                    ? $" The partial sketch '{name}' was removed."
+                    : $" Cleanup failed: {cleanup.FailureReason}. The partial sketch '{name}' " +
+                      "may remain in the feature tree.";
+                TryDispose(insertion);
                 return CommandResult.Failure(
                     $"Failed to create the sketch: {ex.Message}{cleanupText}");
             }
 
-            using (insertion)
+            try
             {
-                insertion.KeepOpen();
+                insertion.Dispose();
+            }
+            catch (Exception ex)
+            {
+                // The sketch was created and committed — teardown (flag
+                // restore, redraw) is what failed. Report it, never throw
+                // back into the host.
+                return CommandResult.Failure(
+                    $"The sketch was created but closing the operation failed: {ex.Message}");
             }
 
-            return CommandResult.Success(insertion.SketchName, insertion.LineCount);
+            return CommandResult.Success(SafeSketchName(insertion), SafeLineCount(insertion));
+        }
+
+        /// <summary>
+        /// Best-effort abort that cannot throw — a cleanup that itself throws
+        /// is reported as a failed cleanup, not let loose.
+        /// </summary>
+        private static CleanupOutcome TryAbort(ISketchInsertion insertion)
+        {
+            try
+            {
+                return insertion.Abort()
+                    ?? CleanupOutcome.Failed("the host returned no cleanup result");
+            }
+            catch (Exception ex)
+            {
+                return CleanupOutcome.Failed($"the cleanup itself failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>Teardown on the failure path — must never mask the real outcome.</summary>
+        private static void TryDispose(ISketchInsertion insertion)
+        {
+            try { insertion.Dispose(); }
+            catch { /* the abort outcome already says what happened */ }
+        }
+
+        private static string SafeSketchName(ISketchInsertion insertion)
+        {
+            try { return insertion.SketchName; }
+            catch { return "the partial sketch"; }
+        }
+
+        private static int SafeLineCount(ISketchInsertion insertion)
+        {
+            try { return insertion.LineCount; }
+            catch { return 0; }
         }
     }
 }
