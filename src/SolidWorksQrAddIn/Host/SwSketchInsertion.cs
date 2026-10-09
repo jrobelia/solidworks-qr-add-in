@@ -13,9 +13,11 @@ namespace SolidWorksQrAddIn.Host
     ///
     /// When <paramref name="undoRecording"/> is set the host opened a
     /// StartRecordingUndoObject scope in BeginSketchInsertion; this session
-    /// closes it once — named "Create QR Sketch" — on commit (leaving one
-    /// undo step for the whole creation) or on abort (a step that reverts to
-    /// no net change). The scope is a naming aid, never a rollback mechanism.
+    /// tries to close it once — named "Create QR Sketch" — on commit or on
+    /// abort. Live-verified on SW 2023 SP5: the finish call is refused in
+    /// every arrangement (AddToDB-mode insertion bypasses the undo system),
+    /// so the named step is best-effort only — a naming aid, never a
+    /// rollback mechanism.
     /// </summary>
     public sealed class SwSketchInsertion : ISketchInsertion
     {
@@ -85,10 +87,17 @@ namespace SolidWorksQrAddIn.Host
         public void KeepOpen()
         {
             _committed = true;
-            // The whole creation becomes one named undo step — even though
-            // the sketch stays open in edit mode. Behaviour verified live;
-            // a host that can't record undos still leaves a correct sketch.
-            FinishUndoOnce();
+            // The whole creation was meant to become one named undo step.
+            // Measured live (SW 2023 SP5, rev 31.5.0): FinishRecordingUndoObject2
+            // returns false in EVERY arrangement tried — recording opened
+            // before or after InsertSketch, finished while the sketch is open
+            // or after exiting edit mode. AddToDB-mode bulk insertion (which
+            // the insertion needs to accept the contour set at all) bypasses
+            // the undo system, so no named step ever exists and one EditUndo
+            // cannot revert the creation — documented as a limitation in
+            // docs/ACCEPTANCE.md. The attempt stays: a host that CAN record
+            // still gets the named step, and failure only logs.
+            TryFinishUndo();
         }
 
         public CleanupOutcome Abort()
@@ -122,7 +131,7 @@ namespace SolidWorksQrAddIn.Host
             finally
             {
                 RestoreFlags();
-                FinishUndoOnce();
+                TryFinishUndo();
             }
         }
 
@@ -149,23 +158,28 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// Closes the undo recording opened in BeginSketchInsertion, exactly
-        /// once, naming the step "Create QR Sketch". Best-effort: a host that
-        /// refuses still leaves correct geometry.
+        /// Attempts to close the undo recording opened in BeginSketchInsertion,
+        /// naming the step "Create QR Sketch". Returns true when the host
+        /// accepted the finish. Best-effort: a host that refuses still leaves
+        /// correct geometry.
         /// </summary>
-        private void FinishUndoOnce()
+        private bool TryFinishUndo()
         {
-            if (_undoFinished || !_undoRecording || _ext == null) return;
-            _undoFinished = true;
+            if (_undoFinished || !_undoRecording || _ext == null) return false;
             try
             {
-                if (!_ext.FinishRecordingUndoObject2(SketchHostContract.CreationUndoName, false))
-                    Diag.Log("FinishRecordingUndoObject2 returned false");
+                if (_ext.FinishRecordingUndoObject2(SketchHostContract.CreationUndoName, false))
+                {
+                    _undoFinished = true;
+                    return true;
+                }
+                Diag.Log("FinishRecordingUndoObject2 returned false");
             }
             catch (Exception ex)
             {
                 Diag.Log($"FinishRecordingUndoObject2 failed: {ex.Message}");
             }
+            return false;
         }
     }
 }

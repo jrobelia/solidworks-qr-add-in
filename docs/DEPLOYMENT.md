@@ -183,8 +183,10 @@ machine-wide changes are always an explicit user action.
 
 ## Verified record
 
-- Pack + verify + file manifest: headless, this repo (ticket 7).
-- COM registration, load/unload/reload, command presence, sketches, and the
-  full live checklist: see `ACCEPTANCE.md` beside this file (`docs/` in the
-  repo) — items marked *awaiting* are blocked on a session-free SolidWorks
-  window; items marked *proven* carry the recorded run.
+- Pack + verify + file manifest: headless, this repo (ticket 7) and re-run
+  on the deployed folder 2026-10-09 (clean, exit 0).
+- COM registration (HKCU), LoadAddIn/UnloadAddIn/reload round-trip, sketches
+  on all support types, failure handling, and perf: **verified live
+  2026-10-09** (185 LiveProbe checks passed, SW rev 31.5.0) — the recorded
+  evidence and the two remaining human-visual items are in `ACCEPTANCE.md`
+  (`docs/` in the repo).

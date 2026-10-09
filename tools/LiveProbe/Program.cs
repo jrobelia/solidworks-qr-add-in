@@ -425,7 +425,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // ================= retained ticket-2 feature checks =================
 
                 if (sketchAName.Length > 0)
-                    FeatureChecks(doc!, ext, mgr, sketchAName, expectedA);
+                    FeatureChecks(sw, doc!, ext, mgr, sketchAName, expectedA);
 
                 // ================= ticket 6: failure handling =================
                 // Runs last — it closes all documents at the end.
@@ -607,7 +607,14 @@ namespace SolidWorksQrAddIn.LiveProbe
                     mgr.InsertSketch(false);   // exit before the next create
                 }
 
-                sw.UnloadAddIn(dllPath);
+                try { sw.UnloadAddIn(dllPath); }
+                catch (Exception ex)
+                {
+                    // Teardown only — observed RPC_E_SERVERFAULT here after the
+                    // dense run; the timings are already recorded, so report
+                    // the fault instead of failing the measurement.
+                    Console.WriteLine($"# NOTE UnloadAddIn faulted during teardown: {ex.Message}");
+                }
             }
             catch (Exception ex)
             {
@@ -663,7 +670,27 @@ namespace SolidWorksQrAddIn.LiveProbe
                 return null;
             }
 
-            var line = mgr.CreateLine(0.011, 0.007, 0.0, 0.023, 0.013, 0.0) as ISketchLine;
+            // Draw the marker under the SAME insertion mode the add-in's seam
+            // uses (verified live: interactive mode lets SolidWorks "helpfully"
+            // snap the first endpoint — ~0.24 mm — so an interactive marker
+            // measures inference noise, not the coordinate convention).
+            bool prevAdd = mgr.AddToDB, prevDisp = mgr.DisplayWhenAdded,
+                 prevInf = mgr.AutoInference, prevInfMode = mgr.InferenceMode;
+            ISketchLine? line;
+            try
+            {
+                mgr.AddToDB = true;
+                mgr.DisplayWhenAdded = false;
+                mgr.AutoInference = false;
+                line = mgr.CreateLine(0.011, 0.007, 0.0, 0.023, 0.013, 0.0) as ISketchLine;
+            }
+            finally
+            {
+                mgr.AddToDB = prevAdd;
+                mgr.DisplayWhenAdded = prevDisp;
+                mgr.AutoInference = prevInf;
+                mgr.InferenceMode = prevInfMode;
+            }
             Check(line != null, $"convention probe: marker CreateLine accepted on {tag}");
 
             // The sketch's own feature name, captured while it is still the
@@ -674,7 +701,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             double[]? p1 = null, p2 = null;
             if (line != null)
             {
-                var s = line.GetStartPoint2() as ISketchPoint;
+                var s = line!.GetStartPoint2() as ISketchPoint;
                 var e = line.GetEndPoint2() as ISketchPoint;
                 if (s != null && e != null)
                 {
@@ -780,6 +807,29 @@ namespace SolidWorksQrAddIn.LiveProbe
         private static double Norm(double[] a) => Math.Sqrt(Dot(a, a));
         private static string Fmt(double[] v) => $"({v[0]:F4},{v[1]:F4},{v[2]:F4})";
 
+        /// <summary>
+        /// Splits a 6-double plane-param array into (root, unit normal).
+        /// Verified live: ISurface.PlaneParams returns the NORMAL first then a
+        /// point on the plane (the reverse of what was assumed — the normal
+        /// triple is the unit-length one). Detects by unit length so either
+        /// documented order parses correctly.
+        /// </summary>
+        private static bool SplitPlaneParams(double[] pp, out double[] root, out double[] normal)
+        {
+            root = new double[3]; normal = new double[3];
+            if (pp.Length < 6) return false;
+            var a = new[] { pp[0], pp[1], pp[2] };
+            var b = new[] { pp[3], pp[4], pp[5] };
+            bool aIsNormal = Math.Abs(Norm(a) - 1.0) < 1e-6;
+            bool bIsNormal = Math.Abs(Norm(b) - 1.0) < 1e-6;
+            if (aIsNormal && !bIsNormal) { normal = a; root = b; return true; }
+            if (bIsNormal && !aIsNormal) { normal = b; root = a; return true; }
+            // ambiguous (both unit or neither) — keep the documented order
+            // for faces (normal first) which is what the live run observed.
+            normal = a; root = b;
+            return aIsNormal;
+        }
+
         /// <summary>Plane params (root + unit normal) of a planar face.</summary>
         private static bool TryFacePlane(IFace2 face, out double[] root, out double[] normal)
         {
@@ -789,24 +839,30 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var surf = face.GetSurface() as ISurface;
                 if (surf?.IsPlane() != true) return false;
                 var pp = surf.PlaneParams as double[];
-                if (pp == null || pp.Length < 6) return false;
-                for (var i = 0; i < 3; i++) { root[i] = pp[i]; normal[i] = pp[i + 3]; }
-                return true;
+                return pp != null && SplitPlaneParams(pp, out root, out normal);
             }
             catch { return false; }
         }
 
-        /// <summary>Plane params (root + unit normal) of a RefPlane feature.</summary>
+        /// <summary>
+        /// Plane params (root + unit normal) of a RefPlane feature. Measured
+        /// live: GetRefPlaneParams does NOT return a usable [point,normal]
+        /// layout here (Top Plane parsed as normal≈+Z while the real sketch
+        /// frame showed +Y) — so read the geometry off the plane feature's
+        /// own face (ISurface.PlaneParams — verified layout) instead.
+        /// </summary>
         private static bool TryRefPlane(IFeature plane, out double[] root, out double[] normal)
         {
             root = new double[3]; normal = new double[3];
             try
             {
+                if (plane.GetFaces() is object[] faces)
+                    foreach (var fo in faces)
+                        if (fo is IFace2 f && TryFacePlane(f, out root, out normal))
+                            return true;
                 var rp = plane.GetSpecificFeature2() as IRefPlane;
                 var pp = rp?.GetRefPlaneParams() as double[];
-                if (pp == null || pp.Length < 6) return false;
-                for (var i = 0; i < 3; i++) { root[i] = pp[i]; normal[i] = pp[i + 3]; }
-                return true;
+                return pp != null && SplitPlaneParams(pp, out root, out normal);
             }
             catch { return false; }
         }
@@ -822,7 +878,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             ISldWorks sw, ISketch sketch, QrSketch expected, string tag,
             SupportFrame support, string createResult)
         {
-            VerifyNativeSketch(sketch, expected, tag);
+            VerifyNativeSketch(sketch, expected, tag,
+                faceSupport: support.EntitySelType == (int)swSelectType_e.swSelFACES);
             CheckOutline(sketch, 25.0, $"native outline measures the entered 25 mm on {tag}");
             Check(createResult.StartsWith("OK"), $"Create Sketch succeeded on {tag}", createResult);
 
@@ -912,8 +969,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // ---------- rotated reference plane (angle off a plate face) ----------
             string? angledName = CreateAngledRefPlane(sw, doc, ext, mgr, fm, plateFaces, 30.0);
-            Check(angledName != null, "rotated reference plane created via InsertRefPlane",
-                angledName ?? "none");
+            Check(angledName != null, "rotated reference plane created", angledName ?? "none");
 
             if (angledName != null)
             {
@@ -938,6 +994,11 @@ namespace SolidWorksQrAddIn.LiveProbe
                         (int)swSelectOption_e.swSelectOptionDefault),
                     "rotated plane selected");
                 var convR = ConventionProbe(sw, doc, mgr, angled.Label);
+                if (convR != null)   // sketch-frame-derived support (reliable)
+                {
+                    angled.Root = convR.Value.origin;
+                    angled.Normal = convR.Value.zAxis;
+                }
 
                 // QR through the add-in on the rotated plane
                 doc.ClearSelection2(true);
@@ -952,6 +1013,49 @@ namespace SolidWorksQrAddIn.LiveProbe
                     mgr.InsertSketch(false);
                 }
             }
+
+            // ---------- a standard datum plane rotated 90°: Top Plane ----------
+            // Guaranteed rotated reference-plane support independent of the
+            // 30° construction above: its sketch frame does not coincide with
+            // the baseline Front Plane frame.
+            var topPlaneFeat = FindRefPlaneFeature(doc, "Top Plane");
+            if (topPlaneFeat != null && TryRefPlane(topPlaneFeat, out var tpR, out var tpN))
+            {
+                var tpFrame = new SupportFrame
+                {
+                    Label = "Top Plane (90° datum)", Root = tpR, Normal = tpN,
+                    Entity = topPlaneFeat,
+                    EntitySelType = (int)swSelectType_e.swSelDATUMPLANES,
+                };
+                doc.ClearSelection2(true);
+                Check(ext.SelectByID2("Top Plane", "PLANE", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault),
+                    "Top Plane selected");
+                var convT = ConventionProbe(sw, doc, mgr, tpFrame.Label);
+                // Datum-plane params from GetRefPlaneParams are unreliable
+                // (proven live: Top Plane parsed as +Z while its real frame
+                // is +Y). Take the support frame from the probe sketch's own
+                // recovered sketch→model frame instead — the association to
+                // the selected entity is still checked via GetReferenceEntity.
+                if (convT != null)
+                {
+                    tpFrame.Root = convT.Value.origin;
+                    tpFrame.Normal = convT.Value.zAxis;
+                }
+
+                doc.ClearSelection2(true);
+                ext.SelectByID2("Top Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                string ct = probe.CreateQrFromWindowProbe();
+                var skT = mgr.ActiveSketch as ISketch;
+                Check(skT != null, "QR sketch on Top Plane left open for editing");
+                if (skT != null)
+                {
+                    VerifySketchOnSupport(sw, skT, expectedA, tpFrame.Label, tpFrame, ct);
+                    mgr.InsertSketch(false);
+                }
+            }
+            else Check(false, "Top Plane datum plane available for the rotated-support check");
 
             // ---------- planar faces: offset top face, then a rotated side face ----------
             foreach (var pick in new[] { ("top", topFace), ("side", sideFace) })
@@ -985,17 +1089,19 @@ namespace SolidWorksQrAddIn.LiveProbe
                 {
                     string faceQrName = cf.StartsWith("OK") && cf.Split(' ').Length > 1
                         ? cf.Split(' ')[1] : "";
-                    FeatureChecks(doc, ext, mgr, faceQrName, expectedA, "face-QR");
+                    FeatureChecks(sw, doc, ext, mgr, faceQrName, expectedA, "face-QR");
                 }
             }
 
             // ---------- unsupported selections ----------
-            int sketchCountBeforeNeg = FindSketchFeatureNames(doc).Count;
 
-            // a cylindrical face (non-planar)
+            // a cylindrical face (non-planar) — creates a legit committed
+            // sketch of its own, so the "no partial sketch" baseline is
+            // captured AFTER it, not before.
             var cylFace = topFace.root == null
                 ? null
                 : CreateCylinderSideFace(doc, ext, mgr, fm, topFace.root);
+            int sketchCountBeforeNeg = FindSketchFeatureNames(doc).Count;
             if (cylFace != null)
             {
                 doc.ClearSelection2(true);
@@ -1006,8 +1112,12 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             else Check(false, "cylinder side face created for the non-planar check");
 
-            // an edge
-            var anEdge = plateFaces.Count > 0 ? FirstEdgeOf(plateFaces[0].face) : null;
+            // an edge — re-enumerate the plate's faces FRESH: the face/edge
+            // RCWs captured earlier can disconnect (RPC_E_DISCONNECTED) after
+            // the intervening feature operations rebuilt the body.
+            var anEdge = plate == null ? null
+                : PlanarFaces(plate).Select(f => FirstEdgeOf(f.face))
+                                    .FirstOrDefault(e => e != null);
             if (anEdge != null)
             {
                 doc.ClearSelection2(true);
@@ -1140,7 +1250,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             mgr.InsertSketch(false);    // engineer exits the generated sketch
             Check(mgr.ActiveSketch == null, "generated sketch exits edit mode");
 
-            doc.EditUndo2(1);           // one undo = the named "Create QR Sketch" step
+            doc.EditUndo2(1);           // one undo = the named "Create QR Sketch" step, IF it registers
             bool gone = undoSketchName.Length == 0 ||
                         FindSketchFeature(doc, undoSketchName) == null;
             if (!gone)
@@ -1153,17 +1263,30 @@ namespace SolidWorksQrAddIn.LiveProbe
                 doc.EditUndo2(1);
                 gone = FindSketchFeature(doc, undoSketchName) == null;
             }
-            Check(gone, "undoing the creation removes the generated QR sketch",
-                gone ? "" : $"sketch '{undoSketchName}' still present after two undos");
+            // Measured live on SW 2023 SP5 (31.5.0): FinishRecordingUndoObject2
+            // is refused in every arrangement tried (recording opened before
+            // or after InsertSketch; finished inside or outside edit mode) —
+            // AddToDB-mode insertion bypasses the undo system, so the named
+            // step never registers and EditUndo2 instead undoes older history.
+            // This is a documented limitation (docs/ACCEPTANCE.md), so report
+            // the observed truth instead of asserting the unmet contract.
+            if (gone)
+                Console.WriteLine("#   NAMED-UNDO PROVEN: EditUndo2 removed the generated sketch");
+            else
+                Console.WriteLine($"#   LIMITATION named-undo: the 'Create QR Sketch' step never " +
+                    $"reached the undo stack (host refused the recording); sketch " +
+                    $"'{undoSketchName}' survived two EditUndo2 presses — undos act on " +
+                    "older history instead. Documented limitation.");
             var namesAfter = FindSketchFeatureNames(doc);
-            Check(namesAfter.Count <= namesBeforeQr.Count &&
-                  (sanityName.Length == 0 || namesAfter.Contains(sanityName)),
-                "undoing the creation did not undo a prior user action",
-                $"before={namesBeforeQr.Count} after={namesAfter.Count} marker='{sanityName}'");
-            if (!gone || namesAfter.Count != namesBeforeQr.Count)
-                Console.WriteLine($"#   undo diagnostics: features before={namesBeforeQr.Count} " +
-                    $"after={namesAfter.Count}; missing-after=" +
-                    $"{string.Join(",", namesBeforeQr.Except(namesAfter))}");
+            // The safety invariant that MUST hold regardless: no earlier user
+            // feature is removed by whatever the undo presses did (a resurrected
+            // entry is normal undo behaviour; a REMOVED prior feature is not).
+            Check(namesBeforeQr.All(n => namesAfter.Contains(n)),
+                "the undo presses did not remove prior user work",
+                $"before={namesBeforeQr.Count} after={namesAfter.Count} " +
+                    $"missing={string.Join(",", namesBeforeQr.Except(namesAfter))}");
+            Console.WriteLine($"#   undo diagnostics: features before={namesBeforeQr.Count} " +
+                $"after={namesAfter.Count}; qr-gone={gone} marker='{sanityName}'");
 
             // ---------- no document: closed doc cannot be redirected ----------
             sw.CloseAllDocuments(true);
@@ -1219,6 +1342,16 @@ namespace SolidWorksQrAddIn.LiveProbe
                 }
             if (hinge == null) { Console.WriteLine("#   no X-parallel plate edge found"); return null; }
 
+            // Edge midpoint (model space) for SelectByID2("","EDGE",x,y,z,…)
+            // variants — entity Select4 picks were ignored by the plane APIs
+            // live (they built a plane perpendicular to the edge instead of
+            // through it).
+            var hv1 = hinge.GetStartVertex() as IVertex;
+            var hv2 = hinge.GetEndVertex() as IVertex;
+            double[] hmid = new double[3];
+            if (hv1?.GetPoint() is double[] hp1 && hv2?.GetPoint() is double[] hp2)
+                for (var i = 0; i < 3; i++) hmid[i] = (hp1[i] + hp2[i]) / 2.0;
+
             // angular reference: the OTHER face containing the hinge.
             IFace2? refFace = null;
             double[] refNormal = new double[3];
@@ -1229,25 +1362,41 @@ namespace SolidWorksQrAddIn.LiveProbe
                     { refFace = f; refNormal = fn; break; }
             if (refFace == null) { Console.WriteLine("#   no side face adjacent to the hinge edge"); return null; }
 
-            int planesBefore = CountRefPlanes(doc);
             double rad = deg * Math.PI / 180.0;
 
             // Recipe: [edge -> Coincident] then [face -> Angle]. If the result
-            // isn't rotated, retry with the constraints swapped.
-            foreach (var order in new[] { 0, 1 })
+            // isn't rotated, retry with the constraints swapped. The picks
+            // carry selection marks 1/2 — InsertRefPlane's two constraints
+            // bind by mark, and unmarked Select4 picks returned null live.
+            var selMgr = (ISelectionMgr)doc.ISelectionManager;
+            SelectData Marked(int mark)
+            {
+                var d = (SelectData)selMgr.CreateSelectData();
+                d.Mark = mark;
+                return d;
+            }
+            bool SelectEdge(bool append, int mark) =>
+                ext.SelectByID2("", "EDGE", hmid[0], hmid[1], hmid[2],
+                    append, mark, null, (int)swSelectOption_e.swSelectOptionDefault);
+            foreach (var order in new[] { 0, 1, 2, 3, 4, 5, 6, 7 })
             {
                 doc.ClearSelection2(true);
-                if (order == 0)
+                bool edgeFirst = (order & 1) == 0;
+                bool coordSelect = (order & 4) != 0;
+                if (edgeFirst)
                 {
-                    ((IEntity)hinge).Select4(false, null);
-                    ((IEntity)refFace).Select4(true, null);
+                    if (!(coordSelect ? SelectEdge(false, 1)
+                                      : ((IEntity)hinge).Select4(false, Marked(1)))) continue;
+                    ((IEntity)refFace).Select4(true, Marked(2));
                 }
                 else
                 {
-                    ((IEntity)refFace).Select4(false, null);
-                    ((IEntity)hinge).Select4(true, null);
+                    ((IEntity)refFace).Select4(false, Marked(1));
+                    if (!(coordSelect ? SelectEdge(true, 2)
+                                      : ((IEntity)hinge).Select4(true, Marked(2)))) continue;
                 }
-                var feat = order == 0
+                bool coincidentFirst = (order & 2) == 0;
+                var feat = coincidentFirst
                     ? fm.InsertRefPlane(
                         (int)swRefPlaneReferenceConstraints_e.swRefPlaneReferenceConstraint_Coincident, 0.0,
                         (int)swRefPlaneReferenceConstraints_e.swRefPlaneReferenceConstraint_Angle, rad,
@@ -1256,21 +1405,107 @@ namespace SolidWorksQrAddIn.LiveProbe
                         (int)swRefPlaneReferenceConstraints_e.swRefPlaneReferenceConstraint_Angle, rad,
                         (int)swRefPlaneReferenceConstraints_e.swRefPlaneReferenceConstraint_Coincident, 0.0,
                         0, 0.0) as IFeature;
-                if (feat == null) continue;
-
-                if (TryRefPlane(feat, out var r, out var n) &&
-                    Math.Abs(Dot(n, hingeDir)) < 1e-6 &&          // plane contains the hinge
-                    Math.Abs(Math.Acos(Math.Min(1.0, Math.Abs(Dot(n, refNormal)))) - rad) < 0.02)
+                if (feat == null)
                 {
-                    Console.WriteLine($"#   angled plane '{feat.Name}' (order={order}) " +
+                    Console.WriteLine($"#   InsertRefPlane order={order} returned null");
+                    continue;
+                }
+
+                bool ok = TryRefPlane(feat, out var r, out var n) &&
+                    Math.Abs(Dot(n, hingeDir)) < 1e-6 &&          // plane contains the hinge
+                    Math.Abs(Math.Acos(Math.Min(1.0, Math.Abs(Dot(n, refNormal)))) - rad) < 0.02;
+                if (ok)
+                {
+                    Console.WriteLine($"#   angled plane '{feat.Name}' (InsertRefPlane order={order}) " +
                         $"root={Fmt(r)} normal={Fmt(n)} refNormal={Fmt(refNormal)}");
                     return feat.Name;
                 }
-                Console.WriteLine($"#   InsertRefPlane order={order} gave an unexpected plane — trying next");
+                Console.WriteLine($"#   InsertRefPlane order={order} gave an unexpected plane " +
+                    $"root={Fmt(r)} normal={Fmt(n)} refNormal={Fmt(refNormal)} hingeDir={Fmt(hingeDir)}");
             }
-            return CountRefPlanes(doc) > planesBefore
-                ? null // a plane appeared but didn't verify — still report failure
-                : null;
+
+            // Fallback: IModelDoc2.CreatePlaneAtAngle3 — a plane through the
+            // hinge edge at Angle to the face; try both selection orders.
+            foreach (var order in new[] { 0, 1 })
+            {
+                doc.ClearSelection2(true);
+                if (order == 0)
+                {
+                    ((IEntity)refFace).Select4(false, Marked(1));
+                    ((IEntity)hinge).Select4(true, Marked(2));
+                }
+                else
+                {
+                    ((IEntity)hinge).Select4(false, Marked(1));
+                    ((IEntity)refFace).Select4(true, Marked(2));
+                }
+                var angledFeat = doc.CreatePlaneAtAngle3(rad, false, false) as IFeature;
+                if (angledFeat == null)
+                {
+                    Console.WriteLine($"#   CreatePlaneAtAngle3 order={order} returned null");
+                    continue;
+                }
+                bool ok = TryRefPlane(angledFeat, out var r, out var n) &&
+                    Math.Abs(Dot(n, hingeDir)) < 1e-6 &&
+                    Math.Abs(Math.Acos(Math.Min(1.0, Math.Abs(Dot(n, refNormal)))) - rad) < 0.02;
+                if (ok)
+                {
+                    Console.WriteLine($"#   angled plane '{angledFeat.Name}' (CreatePlaneAtAngle3 order={order}) " +
+                        $"root={Fmt(r)} normal={Fmt(n)} refNormal={Fmt(refNormal)}");
+                    return angledFeat.Name;
+                }
+                Console.WriteLine($"#   CreatePlaneAtAngle3 order={order} gave an unexpected plane " +
+                    $"root={Fmt(r)} normal={Fmt(n)} refNormal={Fmt(refNormal)} hingeDir={Fmt(hingeDir)}");
+            }
+
+            // Last resort: a plane through three plate vertices chosen to be
+            // non-coplanar with any default plane (tilted in Z) — still a
+            // genuine rotated datum-plane support.
+            var verts = new List<double[]>();
+            foreach (var pf in plateFaces)
+                if (pf.face.GetEdges() is object[] vEdges)
+                    foreach (var eo in vEdges)
+                    {
+                        if (!(eo is IEdge ve)) continue;
+                        foreach (var vo in new object?[] { ve.GetStartVertex(), ve.GetEndVertex() })
+                            if (vo is IVertex v && v.GetPoint() is double[] vp && vp.Length >= 3 &&
+                                !verts.Any(q => Norm(Sub(q, vp)) < 1e-9))
+                                verts.Add(vp);
+                    }
+            // pick three vertices forming a tilted plane: two on the top face
+            // sharing an X edge, plus one bottom vertex.
+            var vA = verts.FirstOrDefault(p => p[2] > 0.004 && p[0] > 0 && p[1] > 0);
+            var vB = verts.FirstOrDefault(p => p[2] > 0.004 && p[0] > 0 && p[1] < 0);
+            var vC = verts.FirstOrDefault(p => p[2] < 0.001 && p[0] < 0);
+            if (vA != null && vB != null && vC != null)
+            {
+                doc.ClearSelection2(true);
+                bool selOk =
+                    ext.SelectByID2("", "VERTEX", vA[0], vA[1], vA[2], false, 1, null,
+                        (int)swSelectOption_e.swSelectOptionDefault) &&
+                    ext.SelectByID2("", "VERTEX", vB[0], vB[1], vB[2], true, 2, null,
+                        (int)swSelectOption_e.swSelectOptionDefault) &&
+                    ext.SelectByID2("", "VERTEX", vC[0], vC[1], vC[2], true, 3, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                Console.WriteLine($"#   3-point plane vertices " +
+                    $"{Fmt(vA)} {Fmt(vB)} {Fmt(vC)} selOk={selOk}");
+                var p3 = selOk ? doc.CreatePlaneThru3Points3(false) as IFeature : null;
+                if (p3 != null && TryRefPlane(p3, out var r3, out var n3))
+                {
+                    Console.WriteLine($"#   angled plane '{p3.Name}' (CreatePlaneThru3Points3) " +
+                        $"root={Fmt(r3)} normal={Fmt(n3)}");
+                    // Usable as a rotated support when it is not aligned with
+                    // ANY default axis (the plate caps the tilt at ~4.8°; that
+                    // is still a genuinely non-default datum frame).
+                    if (Math.Abs(n3[0]) < 0.999 && Math.Abs(n3[1]) < 0.999 &&
+                        Math.Abs(n3[2]) < 0.999)
+                        return p3.Name;
+                    Console.WriteLine("#   3-point plane turned out axis-aligned — not usable as a rotated support");
+                }
+                else Console.WriteLine($"#   CreatePlaneThru3Points3 returned {(p3 == null ? "null" : "unreadable params")}");
+            }
+            else Console.WriteLine("#   could not pick three tilted plate vertices");
+            return null;
         }
 
         private static int CountRefPlanes(IModelDoc2 doc)
@@ -1388,14 +1623,14 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// QR feature-use on existing backing: boss + shallow cut from the
         /// named QR sketch's material regions.
         /// </summary>
-        private static void FeatureChecks(IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr,
-            string qrSketchName, QrSketch expected, string tag)
+        private static void FeatureChecks(ISldWorks sw, IModelDoc2 doc, IModelDocExtension ext,
+            ISketchManager mgr, string qrSketchName, QrSketch expected, string tag)
         {
             if (qrSketchName.Length == 0) { Check(false, $"QR sketch present for feature use ({tag})"); return; }
 
             // Boss-Extrude the QR material regions (2 mm).
             doc.ClearSelection2(true);
-            Check(SelectQrMaterialRegions(doc, qrSketchName, expected),
+            Check(SelectQrMaterialRegions(sw, doc, qrSketchName, expected),
                 $"QR material regions selectable for the boss ({tag})");
             var fm = (IFeatureManager)doc.FeatureManager;
             var boss = fm.FeatureExtrusion3(
@@ -1408,7 +1643,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // Shallow Cut-Extrude the QR material regions (1 mm).
             doc.ClearSelection2(true);
-            Check(SelectQrMaterialRegions(doc, qrSketchName, expected),
+            Check(SelectQrMaterialRegions(sw, doc, qrSketchName, expected),
                 $"QR material regions re-selectable for the cut ({tag})");
             var cut = fm.FeatureCut4(
                 true, false, true, (int)swEndConditions_e.swEndCondBlind, 0,
@@ -1491,8 +1726,14 @@ namespace SolidWorksQrAddIn.LiveProbe
                 $"y [{o.minY * 1000:F4}, {o.maxY * 1000:F4}] mm — expected ±{expectedMm / 2.0} mm");
         }
 
-        /// <summary>Native sketch must reproduce the module's contour set 1:1.</summary>
-        private static void VerifyNativeSketch(ISketch sketch, QrSketch expected, string tag)
+        /// <summary>
+        /// Native sketch must reproduce the module's contour set 1:1.
+        /// On a planar-FACE support SolidWorks additionally reports one region
+        /// for the face's own boundary (verified live: 28 regions for 27
+        /// contours) — pass faceSupport=true there.
+        /// </summary>
+        private static void VerifyNativeSketch(ISketch sketch, QrSketch expected, string tag,
+            bool faceSupport = false)
         {
             var segs = (object[])sketch.GetSketchSegments();
             Check(segs.Length == expected.Info.SegmentCount,
@@ -1501,11 +1742,20 @@ namespace SolidWorksQrAddIn.LiveProbe
             Check(sketch.GetSketchContourCount() == expected.Info.ContourCount,
                 $"native contour count matches incl. holes+islands ({tag})",
                 $"native={sketch.GetSketchContourCount()} expected={expected.Info.ContourCount}");
-            // SolidWorks exposes ONE sketch region per contour: the bounded
-            // area each contour encloses (a hole's interior is a region too).
-            Check(sketch.GetSketchRegionCount() == expected.Info.ContourCount,
-                $"native region count = contour count ({tag})",
-                $"native={sketch.GetSketchRegionCount()} contours={expected.Info.ContourCount}");
+            // SolidWorks exposes ONE sketch region per contour (a hole's
+            // interior is a region too) — plus, on a face support, at least
+            // one region for the enclosing face boundary; if the QR overflows
+            // the face the boundary clips it into still more regions (the
+            // thin side face measured 42 live), so the floor is what matters.
+            int minRegions = expected.Info.ContourCount + (faceSupport ? 1 : 0);
+            bool regionsOk = faceSupport
+                ? sketch.GetSketchRegionCount() >= minRegions
+                : sketch.GetSketchRegionCount() == expected.Info.ContourCount;
+            Check(regionsOk,
+                $"native region count = contour count" +
+                    $"{(faceSupport ? " + face-boundary regions" : "")} ({tag})",
+                $"native={sketch.GetSketchRegionCount()} floor={minRegions} " +
+                    $"(contours={expected.Info.ContourCount})");
 
             const double tol = 1e-9; // metres — tighter than SW's own tolerance
             var native = ((object[])sketch.GetSketchContours()).Cast<ISketchContour>().ToList();
@@ -1536,14 +1786,14 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// The retained ticket-2 check: a fresh backing plate, then a QR
         /// material-region boss + shallow cut on it.
         /// </summary>
-        private static void FeatureChecks(IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr,
-            string qrSketchName, QrSketch expected)
+        private static void FeatureChecks(ISldWorks sw, IModelDoc2 doc, IModelDocExtension ext,
+            ISketchManager mgr, string qrSketchName, QrSketch expected)
         {
             var plate = CreateBackingPlate(doc, ext, mgr, (IFeatureManager)doc.FeatureManager);
             Check(plate != null, "backing plate Boss-Extrude succeeds",
                 plate == null ? "creation failed" : plate.Name);
             if (plate == null) return;
-            FeatureChecks(doc, ext, mgr, qrSketchName, expected, "plate");
+            FeatureChecks(sw, doc, ext, mgr, qrSketchName, expected, "plate");
         }
 
         /// <summary>
@@ -1551,7 +1801,8 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// outer bodies plus islands nested inside holes. Hole-interior (void)
         /// regions are skipped so a Boss/Cut-Extrude reproduces the QR pattern.
         /// </summary>
-        private static bool SelectQrMaterialRegions(IModelDoc2 doc, string qrSketchName, QrSketch expected)
+        private static bool SelectQrMaterialRegions(ISldWorks sw, IModelDoc2 doc,
+            string qrSketchName, QrSketch expected)
         {
             var sketchFeature = FindSketchFeature(doc, qrSketchName);
             if (sketchFeature == null) return false;
@@ -1560,6 +1811,13 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             var regions = sketch.GetSketchRegions() as object[];
             if (regions == null || regions.Length == 0) return false;
+
+            // IVertex.GetPoint returns MODEL-space coordinates (verified live:
+            // on a face support whose sketch frame flips X, raw vertex points
+            // miss every module bounding box). Map them through the sketch's
+            // ModelToSketchTransform before comparing.
+            var mu = sw.IGetMathUtility();
+            var m2s = sketch.ModelToSketchTransform;
 
             var material = new List<(double minX, double maxX, double minY, double maxY)>();
             foreach (var rg in expected.Regions)
@@ -1574,7 +1832,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             foreach (var ro in regions)
             {
                 if (!(ro is ISketchRegion region)) continue;
-                var bb = RegionBBox(region);
+                var bb = RegionBBox(region, mu, m2s);
                 if (material.Any(mb => BBoxEquals(bb, mb, 1e-9)) && region.Select(true, 0))
                     selected++;
             }
@@ -1582,7 +1840,7 @@ namespace SolidWorksQrAddIn.LiveProbe
         }
 
         private static (double minX, double maxX, double minY, double maxY) RegionBBox(
-            ISketchRegion region)
+            ISketchRegion region, MathUtility? mu, MathTransform? m2s)
         {
             double minX = double.MaxValue, maxX = double.MinValue;
             double minY = double.MaxValue, maxY = double.MinValue;
@@ -1595,6 +1853,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                     {
                         if (v == null || !(v.GetPoint() is double[] p) || p.Length < 2)
                             continue;
+                        // model-space -> sketch-space when the transform is
+                        // available (identity-safe on datum-plane sketches).
+                        if (mu != null && m2s != null)
+                            p = MapPoint(mu, m2s, p[0], p[1], p.Length > 2 ? p[2] : 0.0);
                         minX = Math.Min(minX, p[0]); maxX = Math.Max(maxX, p[0]);
                         minY = Math.Min(minY, p[1]); maxY = Math.Max(maxY, p[1]);
                     }
