@@ -11,16 +11,19 @@ how the measurement is made.
 
 | Support | `CreateLine` consumes | Evidence |
 |---|---|---|
-| Baseline Front Plane | sketch-space metres, verbatim | Proven live (tickets #2–#4): the module's contours were passed un-transformed and the native sketch reproduced them 1:1 — 252 segments / 27 contours matched at ≤1e-9 m, outline measured exactly the entered size. On Front Plane the sketch frame coincides with model X/Y, so this evidence alone cannot distinguish "sketch space" from "model space". |
-| Rotated reference plane | **awaiting live run** | The convention probe (below) is coded and compiles; it could not run while the engineer's interactive SolidWorks session was up (the probe refuses attached visible sessions by design). |
-| Planar part face | **awaiting live run** | Same pending status. |
+| Baseline Front Plane | **sketch-space metres, verbatim — PROVEN** | 2026-10-09, SW 2023 SP5 rev 31.5.0 invisible instance (LiveProbe, ALL CHECKS PASSED, 185 checks): under the seam's bulk-insertion mode the asymmetric marker (0.011,0.007)→(0.023,0.013) read back exactly, and mapped through the sketch→model frame recovered exactly. |
+| Rotated reference plane ('Plane5', ~4.8° tilted, frame x=(-0.9965,0,-0.083) z=(0.083,0,-0.9965)) | **sketch-space metres, verbatim — PROVEN** | Same run: marker read back verbatim; the 252-segment QR sketch recovered its sketch coordinates exactly (`< 1e-9` in-plane error), every endpoint on the plane (`|perp| = 0`), reference entity = the selected RefPlane. |
+| Top Plane (datum, 90° from Front, frame x=(1,0,0) y=(0,0,-1) z=(0,1,0)) | **sketch-space metres, verbatim — PROVEN** | Same run — verbatim marker read-back and exact in-plane round-trip on the QR sketch. |
+| Planar part face — plate top face (offset from all default planes) | **sketch-space metres, verbatim — PROVEN** | Same run — verbatim marker; QR outline measured exactly 25.000 mm; all endpoints on the face plane; 28 sketch regions (27 contours + 1 face-boundary region). |
+| Planar part face — vertical side face (frame x=(1,0,0) y=(0,0,-1) z=(0,1,0)) | **sketch-space metres, verbatim — PROVEN** | Same run — verbatim marker; QR on-plane and exact round-trip; 42 regions because the 60×5 mm face clips the 25 mm QR (expected, floor check only). |
 
-Until the rotated-plane and planar-face lines read "proven", the native
-adapter deliberately performs **no transform**: `SwSketchInsertion.AddLine`
-calls `CreateLine(x1, y1, 0, x2, y2, 0)` with the module's sketch-space
-metres. If the probe later shows a different consuming frame, the seam — and
-only the seam — gains the proven transform, documented here with the
-evidence.
+**The insertion seam needs no transform** — `SwSketchInsertion.AddLine`
+passes the module's sketch-space metres to `CreateLine` verbatim, on every
+support orientation measured. One caveat proven by the same runs: this holds
+under the seam's bulk-insertion mode (`AddToDB=true`,
+`DisplayWhenAdded=false`, `AutoInference=false`). In *interactive* mode the
+same marker came back shifted ~0.24 mm on X — inference snapping, not a
+coordinate-frame difference — which is also why the seam uses bulk mode.
 
 ## What the seam sends
 
@@ -31,7 +34,22 @@ receives those coordinates verbatim; the contract is documented as
 "sketch-space metres" in `ISketchHost.cs`. Headless tests
 (`SketchSupportTests`) assert bit-identical pass-through on both a
 reference-plane and a planar-face selection — no adapter-side transform is
-permitted to exist, so there can be no double transform.
+permitted to exist, so there can be no double transform. **Live-verified
+correct on rotated and face supports (2026-10-09).**
+
+Other layout facts proven in the same run:
+
+- `ISurface.PlaneParams` returns the **normal first**, then a point on the
+  plane (detected by unit length — the earlier assumed order gave unitless
+  "normals"). `IRefPlane.GetRefPlaneParams` does not return a usable
+  [point,normal] layout here (Top Plane parsed as +Z while its real frame is
+  +Y); read a datum plane's geometry from the feature's own face or the
+  sketch's `ModelToSketchTransform` instead.
+- `IVertex.GetPoint` returns **model-space** coordinates — map through
+  `sketch.ModelToSketchTransform` before comparing with sketch-space data.
+- `GetSketchRegionCount` on a face support adds the face's own boundary
+  region(s) (28 regions / 27 contours on the contained top face; more when
+  the sketch overflows the face).
 
 ## The convention probe (tools/LiveProbe → `ConventionProbe`)
 

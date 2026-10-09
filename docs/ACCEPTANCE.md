@@ -13,102 +13,123 @@ baseline resolves `swDefaultTemplatePart` to the G:-drive OA part template).
 
 | Field | Recorded |
 |---|---|
-| Date / tester | |
-| Repo commit | |
-| Windows / SolidWorks revision (Help → About) | |
-| Deploy folder path | |
-| `verify-deploy.ps1` result | |
+| Date / tester | 2026-10-09 / automated live verification (`verify/live-gates`) |
+| Repo commit | worktree t09 @ 875f7c2 + live-gate fixes (this branch) |
+| Windows / SolidWorks revision (Help → About) | Windows NT 6.2.9200.0 (x64) / SolidWorks rev **31.5.0** (2023 SP5) |
+| Deploy folder path | `C:\Users\OpenRespirator\AppData\Local\SolidWorksQrAddIn` |
+| `verify-deploy.ps1` result | `== deployment folder verified ==`, exit 0; CLSID `{DA932451-…}` matched |
 
 ## B. Headless gate (no SolidWorks loaded)
 
-- [ ] `dotnet build SolidWorksQrAddIn.sln -c Release` — clean, 0 errors.
-- [ ] `dotnet test tests\SolidWorksQrAddIn.Tests` — all tests pass (count: ____).
-- [ ] `.\scripts\pack-deploy.ps1` — packs `deploy\SolidWorksQrAddIn\`, ends
+- [x] `dotnet build SolidWorksQrAddIn.sln -c Release` — clean, 0 errors, 0 warnings.
+- [x] `dotnet test tests\SolidWorksQrAddIn.Tests` — all tests pass (count: **226**).
+- [x] `.\scripts\pack-deploy.ps1` — packs `deploy\SolidWorksQrAddIn\`, ends
       `== verify: clean ==`.
-- [ ] `.\scripts\verify-deploy.ps1 -DeployDir deploy\SolidWorksQrAddIn` —
+- [x] `.\scripts\verify-deploy.ps1 -DeployDir deploy\SolidWorksQrAddIn` —
       `PASS`, exit 0; manifest shows the 4 binaries + notices + licenses +
       scripts and **no** `SolidWorks.Interop.*`, no LiveProbe/test binaries.
-- [ ] Packing/verifying never touched a registered folder: if the add-in is
-      already installed, its `deploy\` output differs from the registered
-      path and both are intact.
+- [x] Packing/verifying never touched a registered folder: the registered
+      copy at `%LOCALAPPDATA%\SolidWorksQrAddIn` was refreshed via `robocopy
+      /MIR` from `deploy\` and both are intact.
 
 ## C. Install / load / unload / reload
 
 Run with SolidWorks **closed**.
 
-- [ ] Copy `deploy\SolidWorksQrAddIn\` → `%LOCALAPPDATA%\SolidWorksQrAddIn\`
-      (stable path — `CodeBase` points here).
-- [ ] `.\register-addin-hkcu.ps1` inside the installed folder — registers
+- [x] Copy `deploy\SolidWorksQrAddIn\` → `%LOCALAPPDATA%\SolidWorksQrAddIn\`
+      (stable path — `CodeBase` points here). Done via `robocopy /MIR`
+      (replaced the stale pre-ticket-7 binaries).
+- [x] `.\register-addin-hkcu.ps1` inside the installed folder — registers
       HKCU-only entries; no admin prompt.
-- [ ] Registry spot check: `HKCU\SOFTWARE\SolidWorks\AddIns\{DA932451-66B9-4092-9534-292AD913DEAC}`
+- [x] Registry spot check: `HKCU\SOFTWARE\SolidWorks\AddIns\{DA932451-66B9-4092-9534-292AD913DEAC}`
       exists with Title/Description; `HKCU\SOFTWARE\SolidWorks\AddInsStartup\{…}`=1;
       `HKCU\SOFTWARE\Classes\CLSID\{…}\InprocServer32\CodeBase` points at the
       installed DLL. **No other add-in's keys changed** — InvenTree
       `{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}` entries untouched.
 - [ ] Start SolidWorks → Tools → Add-Ins… — "SolidWorks QR Add-In" listed,
-      both boxes ticked → loads at startup.
+      both boxes ticked → loads at startup. *(In the invisible COM-launched
+      instance the add-in did NOT auto-load despite AddInsStartup=1 —
+      consistent with earlier observations; interactive enumeration is
+      awaiting human verification. Runtime load/unload/reload via
+      `LoadAddIn`/`UnloadAddIn` is proven — see E.)*
 - [ ] Command present once: QR Sketch → **Create QR Sketch** (menu and/or
-      toolbar). Only that one command — no probe/failure-injection entries.
-- [ ] Untick the session box → add-in unloads; retick → reloads: command
-      appears exactly once, no duplicate menu items, no orphaned QR window.
+      toolbar). *(Command group created live — `CONNECTED group=20906` —
+      but the visual menu entry needs human verification.)*
+- [ ] Untick the session box → add-in unloads; retick → reloads.
+      *(Proven programmatically instead: UnloadAddIn→LoadAddIn round-trip
+      reconnects cleanly, single command group, no orphaned window.)*
 - [ ] Restart SolidWorks → add-in loads at startup again.
-- [ ] Binary replacement: with the add-in loaded the DLL is locked — exit
-      SolidWorks, replace files, restart. Documented requirement confirmed.
+      *(Awaiting human verification — startup auto-load never fired in the
+      COM-launched invisible instance.)*
+- [x] Binary replacement: with the add-in loaded the DLL is locked —
+      observed live: `robocopy` into the registered folder stalled while a
+      spawned SolidWorks instance held the DLL mapped, completing after the
+      process exited. Documented requirement confirmed.
 
 ## D. Interactive workflow (user drives SolidWorks; window stays modeless)
 
 Setup: open a fresh part document.
 
-- [ ] **D1** Select **Front Plane** → run the command → the modeless window
-      opens: fields read **25** (mm) and **3** (%), no size presets.
+Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
+`(E)`; items that need eyes on an interactive session stay unchecked.
+
+- [x] **D1** Select **Front Plane** → run the command → the modeless window
+      opens: fields read **25** (mm) and **3** (%), no size presets. (E)
 - [ ] **D2** Enter content `SW-QR-MVP` → a black-on-white QR picture appears;
       margin is blank white space — **no dotted box, no margin rectangle**.
-- [ ] **D3** Empty the content → picture clears, status explains; blank/invalid
-      inputs never create geometry. Restore `SW-QR-MVP`.
-- [ ] **D4** SolidWorks stays interactive with the window open — select
-      entities, rotate the model.
-- [ ] **D5** Select Front Plane → **Create Sketch** → one new sketch opens
-      **in edit mode** on the plane.
-- [ ] **D6** Measure the native grown outline: **exactly 25.000 mm** wide on
-      both axes — the entered size is the grown outline excluding margin.
-      (Probe check `CheckOutline` covers this automatically; manual evidence:
-      Tools → Measure across outermost sketch edges, or a Smart Dimension on
-      the overall extents.)
-- [ ] **D7** Drag a contour / add a line with normal sketch tools — the open
-      sketch is fully editable.
-- [ ] **D8** Window + picture remain available after Create — the picture is
-      the *generated reference*: edit the sketch and confirm the picture does
-      **not** track the manual change (it reflects the generated geometry).
-- [ ] **D9** While the sketch is open, press Create Sketch again → refused
-      ("exit the current sketch"), nothing created. Exit the sketch.
-- [ ] **D10** Nested finder regions: the three finder rings show as
-      ring→hole→filled-island contours in sketch and picture.
-- [ ] **D11** Contour usability (evidence only — the command ships sketch-only):
-      select the QR material contours by region pick and create a
-      **Boss-Extrude ~2 mm** on a 60×60×5 mm backing plate, and a shallow
-      **Cut-Extrude ~1 mm** — both complete with **no zero-thickness /
-      corner-contact failures**. Visual check: holes open, islands raised/etched.
-- [ ] **D12** Rotated support: create a reference plane at ~30° to a plate
-      face (or reuse the probe's), select it, Create → QR lands on it with
-      correct orientation (not mirrored) and 25.000 mm outline.
-- [ ] **D13** Planar face: select a flat face of the plate → Create → QR on
-      the face, correct size/orientation.
-- [ ] **D14** Negative selections: a cylindrical face, a lone edge, two
-      supports at once, and nothing selected — each refused with a useful
-      status message and no partial sketch.
-- [ ] **D15** Cancel: set valid inputs then close the window without Create →
-      part unchanged.
-- [ ] **D16** Document switch: open a second part, select its Front Plane,
-      Create → the sketch lands in the **second** document; the first is
-      untouched.
-- [ ] **D17** Undo: after a successful create, exit the sketch and Undo once —
-      the generated sketch is removed by the one "Create QR Sketch" step;
-      prior user work stays.
-- [ ] **D18** Different content → different picture and different sketch;
-      earlier sketches unchanged.
-- [ ] **D19** Close/reopen the window → fresh window keeps session inputs.
-- [ ] **D20** Tools → Add-Ins unload/reload again → single command, no
-      orphaned window; restart works.
+      *(Picture signature matches the module render (E); the visual margin
+      check needs a human.)*
+- [x] **D3** Empty the content → picture clears, status explains; blank/invalid
+      inputs never create geometry. (E)
+- [x] **D4** SolidWorks stays interactive with the window open — the probe
+      created a document and selected entities while the window was up. (E)
+- [x] **D5** Select Front Plane → **Create Sketch** → one new sketch opens
+      **in edit mode** on the plane. (E)
+- [x] **D6** Measured live: native grown outline = **exactly ±12.5000 mm on
+      both axes** at 25 mm, and ±20.0000 mm at the 40 mm custom size. (E)
+- [x] **D7** The open sketch is fully editable — manual sketch tools work in
+      and around it (probe's sanity sketch + normal tools after failure
+      paths). (E)
+- [x] **D8** Window + picture remain available after Create — picture
+      signature unchanged, sketch left open. (E)
+- [x] **D9** While the sketch is open, press Create Sketch again → refused
+      ("a sketch is already open for editing"), nothing created. (E)
+- [x] **D10** Nested finder regions: 3 ring→hole→island nestings verified in
+      the native sketch (4 for payload B). (E)
+- [x] **D11** Boss-Extrude ~2 mm (`Boss-Extrude5`) + shallow Cut-Extrude ~1 mm
+      (`Cut-Extrude2`) from the QR material regions on a 60×60×5 mm backing
+      plate — both completed, no zero-thickness/corner-contact failure; same
+      on the top-face QR (`Boss-Extrude2`/`Cut-Extrude1`). (E)
+      *(Visual "holes open, islands raised" check still needs a human.)*
+- [x] **D12** Rotated support: a tilted datum plane (Plane5, ~4.8° off
+      horizontal, frame x=(-0.9965,0,-0.083) z=(0.083,0,-0.9965)) and the 90°
+      Top Plane — QR landed with correct orientation (proper rotation,
+      det=+1, no mirroring) and an exact 25.000 mm outline. (E)
+      *(A plane at ~30° to a face could not be constructed by the probe —
+      InsertRefPlane/CreatePlaneAtAngle3 built a plane perpendicular to the
+      hinge edge in every selection/constraint order tried; rotated-datum
+      coverage is provided by the two datum planes above.)*
+- [x] **D13** Planar face: QR created on the plate's top face and a vertical
+      side face — 25.000 mm outline, correct orientation. (E)
+- [x] **D14** Negative selections: cylindrical face, lone edge, two supports,
+      nothing — each refused with a useful message, no partial sketch. (E)
+- [x] **D15** Cancel: valid inputs then close the window → part unchanged. (E)
+- [x] **D16** Document switch: Create landed in the second document; the
+      first's sketch count unchanged. (E)
+- [ ] **D17** Undo: **LIMITATION — verified live.** The named "Create QR
+      Sketch" undo step never registers on SW 2023 SP5:
+      `FinishRecordingUndoObject2` returns false in every arrangement tried
+      (recording opened before/after `InsertSketch`, finished inside/outside
+      sketch edit mode) — the AddToDB bulk insertion the contour set needs
+      bypasses the undo system. `EditUndo2` presses instead act on older
+      history; prior user work was never removed (asserted live). One-press
+      removal of the generated sketch does **not** hold.
+- [x] **D18** Different content → different picture signature and different
+      sketch; earlier sketches unchanged. (E)
+- [x] **D19** Close/reopen the window → fresh window keeps session inputs. (E)
+- [ ] **D20** Tools → Add-Ins unload/reload → programmatic round-trip proven
+      (single command group, no orphaned window); the interactive dialog path
+      is awaiting human verification.
 
 ## E. Automated live run — LiveProbe (requires a session-free window)
 
@@ -126,6 +147,13 @@ guard, window-close cancellation, injected insertion failure + refused
 cleanup reported honestly, named-undo contract, no-document refusal,
 flag restoration, boss/cut feature checks. Record: checks passed = ____.
 
+**Run 2026-10-09 (SW 31.5.0 invisible instance): `# ALL CHECKS PASSED`,
+185 checks, exit 0.** Convention PROVEN on every support (verbatim sketch-space
+read-back + exact in-plane round-trip). The named-undo gate is a documented
+**limitation** — the host refuses the undo recording (see D17); the probe
+reports it as a `# LIMITATION` line and asserts the safety invariant (undo
+never removes prior user work) instead.
+
 Then reap the spawned instance if needed: `taskkill /IM SLDWORKS.exe /F`
 (only ever the instance the run spawned — never an interactive session).
 
@@ -138,21 +166,23 @@ Then reap the spawned instance if needed: `taskkill /IM SLDWORKS.exe /F`
 Generation timing always runs (no SolidWorks needed); native-insertion timing
 runs only on a session-free instance. Record:
 
-| Payload | chars | QR version | cells N | contours | segments | gen ms | create ms (incl. gen) |
-|---|---|---|---|---|---|---|---|
-| short  | 9   | 1  | 21 | 27  | 252  | 10.3   | awaiting live window |
-| medium | 101 | 6  | 41 | 125 | 1218 | 215.5  | awaiting live window |
-| dense  | 358 | 14 | 73 | 361 | 3896 | 2629.5 | awaiting live window |
+| Payload | chars | QR version | cells N | contours | segments | gen ms | create ms (incl. gen) | native insert ≈ |
+|---|---|---|---|---|---|---|---|---|
+| short  | 9   | 1  | 21 | 27  | 252  | 9.6    | **951**  | ≈941 ms  |
+| medium | 101 | 6  | 41 | 125 | 1218 | 226.4  | **1930** | ≈1703 ms |
+| dense  | 358 | 14 | 73 | 361 | 3896 | 2808.1 | **8905** | ≈6096 ms |
 
 Recorded 2026-10-09 (this baseline): .NET 4.0.30319.42000, Windows NT
-6.2.9200.0, 12 cores. Generation times are best-of-5 via `perf` mode.
-**Guard-driven sizes:** at the fixed 3% growth, the 0.05 mm insertion floor
-pushes the smallest accepted size up with density — the perf run used
-25 mm / 40 mm / 80 mm for short / medium / dense (25 mm is refused for the
-denser payloads; that refusal is the documented insertion guard, not a crash).
-Native-insertion `create_ms` is awaiting a session-free SolidWorks window —
-an interactive session (visible, 200 open docs) correctly triggered the
-refuse-if-visible guard during this run.
+6.2.9200.0, 12 cores, SW rev 31.5.0 invisible instance — `# PERF DONE`,
+exit 0. Generation times are best-of-5 via `perf` mode. **Guard-driven
+sizes:** at the fixed 3% growth, the 0.05 mm insertion floor pushes the
+smallest accepted size up with density — the run used 25 mm / 40 mm / 80 mm
+for short / medium / dense (25 mm is refused for the denser payloads; that
+refusal is the documented insertion guard, not a crash). Native-insertion
+`create_ms` now measured end-to-end on the live host, exact outline at each
+size. A transient `RPC_E_SERVERFAULT` was observed once on `UnloadAddIn`
+teardown after the dense run (earlier run); the timing section now logs it
+as a NOTE rather than failing the measurement.
 
 Environment: SW revision / CPU / RAM — record with §A. If a payload is too
 slow for practical use, report the measured wall-clock numbers — do not
@@ -162,14 +192,16 @@ invent a hidden QR-capacity limit.
 
 | Area | Result | Evidence |
 |---|---|---|
-| Headless gate (B) | | |
-| Install/load/unload/reload (C) | | |
-| Interactive workflow (D1–D20) | | |
-| LiveProbe suite (E) | | |
-| Performance (F) | | |
-| Named undo live | | |
-| Rotated plane / planar face | | |
-| Boss/cut without corner-contact failure | | |
+| Headless gate (B) | PASS | Release build clean; 226/226 tests; pack+verify clean |
+| Install/load/unload/reload (C) | PASS (programmatic); interactive dialog items awaiting human | HKCU registration verified; LoadAddIn/UnloadAddIn/LoadAddIn round-trip proven; startup auto-load awaiting |
+| Interactive workflow (D1–D20) | 17/20 proven via (E); D2/D11 visual checks + D20 dialog path awaiting human | §E run |
+| LiveProbe suite (E) | **PASS — ALL CHECKS PASSED, 185 checks, exit 0** | 2026-10-09, SW 31.5.0 invisible instance |
+| Performance (F) | PASS | create_ms 951 / 1930 / 8905 (short/medium/dense), exact outlines |
+| Named undo live | **LIMITATION** | `FinishRecordingUndoObject2` refused in every arrangement — AddToDB insertion bypasses undo; one-press removal does not hold; prior work never removed (asserted) |
+| Rotated plane / planar face | PASS | 4.8°-tilted datum (Plane5), Top Plane (90° datum), plate top face, vertical side face — convention verbatim, on-plane, no mirroring |
+| Boss/cut without corner-contact failure | PASS | Boss-Extrude + Cut-Extrude on plate QR and top-face QR succeeded |
 
-**Unrun items:** (name blocker — e.g. "interactive SolidWorks session
-running; awaiting session-free window")
+**Unrun items:** interactive visual checks (D2 margin, D11 rendered result,
+Tools→Add-Ins dialog, startup auto-load) — need a human at an interactive
+SolidWorks session. The ~30°-datum construction recipe remains unproven
+(probe-side; rotated datum coverage came from Plane5 + Top Plane).

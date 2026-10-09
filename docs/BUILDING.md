@@ -226,35 +226,40 @@ useful when another SolidWorks release is already running.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
-- Ticket 7 packaging run — **live portion awaiting a session-free window**:
-  pack + verify + headless deployment-manifest checks are green and the
-  procedure is in `docs/DEPLOYMENT.md`; the repeatable live checklist is
-  `docs/ACCEPTANCE.md`. An interactive SolidWorks session was running, so
-  install/load/unload/reload and the interactive checklist items are recorded
-  *awaiting human verification* — nothing live is claimed from this run.
-- Ticket 6 failure-handling run — **awaiting a live window**: the code is
-  implemented and the probe checks are built, but an interactive SolidWorks
-  session was running, so the guard correctly refused and the live gates are
-  recorded *awaiting human verification*: (a) closing the window with a
-  pending valid request leaves the part unchanged, (b) injected
-  mid-insertion + refused-cleanup reporting, (c) the **named-undo contract**
-  — `StartRecordingUndoObject`/`FinishRecordingUndoObject2` are now wired
-  around creation (one step named "Create QR Sketch" covering
-  sketch-entry + every segment) but their semantics on a sketch left open in
-  edit mode are **unproven**; the probe asserts one `EditUndo2(1)` removes
-  the generated sketch without eating the prior user action, with a second
-  undo as diagnosis — if that does not hold, the limitation is reported, not
-  faked, (d) create with no open document, (e) normal sketch tools after the
-  failure paths. Headless coverage of the same paths is in
-  `CreationFailureHandlingTests` (document state asserted, not just calls).
-- Ticket 5 supports run — **awaiting a live window**: the extended probe is
-  built and the attached-session guard was re-verified (it correctly refused
-  the engineer's running visible session). The convention experiment,
-  rotated-plane, planar-face, negative-selection, and cross-document checks
-  need a run with no interactive SolidWorks session open. Until then the
-  `CreateLine` consuming frame on rotated/planar supports is recorded as
-  *unproven* in `docs/SKETCH-COORDINATES.md`, and the insertion seam
-  deliberately applies no transform.
+- **Full-suite live run 2026-10-09 — `# ALL CHECKS PASSED`, 185 checks,
+  exit 0.** Window lifecycle, modeless host, invalid-input rejections,
+  payload A (252 segs/27 contours, exact 25 mm) + payload B (384/41),
+  40 mm/8% custom size, convention probe + QR creates on Front Plane, a
+  tilted datum plane (Plane5, ~4.8°), Top Plane (90° datum), plate top and
+  side planar faces (all verbatim sketch-space, on-plane, no mirroring),
+  negative selections, cross-document guard, cancel safety, unload/reload,
+  plate + face boss/cut, injected cleanup failure, flag restoration, and the
+  no-document refusal.
+- **Named-undo contract — LIMITATION verified live:** the "Create QR Sketch"
+  undo step never reaches the undo stack — `FinishRecordingUndoObject2`
+  returns false in every arrangement tried (recording opened before/after
+  `InsertSketch`, finished inside/outside sketch edit mode); the AddToDB
+  bulk insertion the contour set requires bypasses the undo system. Two
+  `EditUndo2` presses left the generated sketch in place and acted on older
+  history; prior user work was never removed (asserted). Reported in
+  `docs/ACCEPTANCE.md` D17 — the recording attempt remains best-effort.
+- **Insertion perf measured live:** create_ms = 951 / 1930 / 8905 for
+  252 / 1218 / 3896-segment payloads (at the guard-minimum sizes 25/40/80 mm);
+  see `docs/ACCEPTANCE.md` §F.
+- Probe-side facts learned live: `ISurface.PlaneParams` returns normal-first;
+  `IRefPlane.GetRefPlaneParams` is not a usable [point,normal] layout (read
+  the plane feature's face or the sketch frame instead); face supports add
+  the face-boundary region to `GetSketchRegionCount`; `IVertex.GetPoint` is
+  model-space; interactive-mode `CreateLine` applies ~0.24 mm inference
+  snapping (bulk mode is verbatim); InsertRefPlane/CreatePlaneAtAngle3 would
+  not produce a face-angled datum plane in this session (a 3-point plane
+  supplied the rotated support instead).
+- Ticket 7 packaging run — deploy folder packs and verifies clean; per-user
+  HKCU registration installed and verified (`verify-deploy.ps1` on the
+  registered folder). Runtime load/unload/reload is proven; interactive
+  Tools→Add-Ins enumeration and startup auto-load remain *awaiting human
+  verification* (auto-load has never fired in a COM-launched instance — SW
+  may not enumerate the HKCU `AddIns` key for invisible sessions).
 - Ticket 4 size/growth run — **ALL CHECKS PASSED** (87): fresh-window fields
   read 25 mm / 3% → payload-A sketch native outline measured 25.000 mm →
   unparseable/zero/negative size and unparseable/0%/50% growth rejected

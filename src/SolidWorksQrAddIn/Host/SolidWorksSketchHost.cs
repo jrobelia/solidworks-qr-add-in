@@ -110,27 +110,18 @@ namespace SolidWorksQrAddIn.Host
             // be restored exactly, on success and on failure.
             var previousFlags = SketchManagerFlagSnapshot.Capture(mgr);
 
-            // Group the whole creation into ONE named undo step when the host
+            // Group the creation into ONE named undo step when the host
             // supports it — undoing it then reverts exactly this operation,
             // never an earlier user action. A recording scope is NOT a
             // rollback mechanism: failure cleanup still tracks and deletes the
-            // new sketch itself (spec: never a blind Undo).
+            // new sketch itself (spec: never a blind Undo). Verified live:
+            // a recording opened BEFORE InsertSketch is dead by commit time
+            // (FinishRecordingUndoObject2 returns false — entering sketch edit
+            // mode abandons it), so the scope opens INSIDE edit mode instead.
             var ext = doc.Extension as IModelDocExtension;
-            bool recording = false;
-            try
-            {
-                if (ext != null)
-                {
-                    ext.StartRecordingUndoObject();
-                    recording = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Diag.Log($"StartRecordingUndoObject failed: {ex.Message}");
-            }
 
             IFeature? sketchFeature = null;
+            bool recording = false;
             try
             {
                 mgr.InsertSketch(true); // enters edit mode on the selected support
@@ -144,6 +135,19 @@ namespace SolidWorksQrAddIn.Host
                 sketchFeature = active as IFeature;
                 if (sketchFeature == null)
                     throw new SketchHostException("The active sketch did not expose a feature.");
+
+                try
+                {
+                    if (ext != null)
+                    {
+                        ext.StartRecordingUndoObject();
+                        recording = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Diag.Log($"StartRecordingUndoObject failed: {ex.Message}");
+                }
 
                 try
                 {
@@ -162,8 +166,9 @@ namespace SolidWorksQrAddIn.Host
                 // caller with no session handle — the half-entered sketch is
                 // ours to clean up here. The recording scope is closed either
                 // way so nothing later is swallowed into it.
+                if (recording)
+                    FinishUndoQuietly(ext, true);
                 string leftover = AbandonNewSketch(doc, mgr, sketchFeature);
-                FinishUndoQuietly(ext, recording);
                 var why = ex is SketchHostException
                     ? ex.Message
                     : $"SolidWorks could not start a sketch on the selected support: {ex.Message}";
