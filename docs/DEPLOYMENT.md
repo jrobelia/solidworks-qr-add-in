@@ -49,7 +49,12 @@ needed beside the add-in and are not redistributed (RESEARCH.md §2;
 **Not shipped:** `SolidWorksQrAddIn.LiveProbe.exe`, test assemblies — dev
 tooling stays in the repo.
 
-## Install (per-user, no admin) — recommended
+## Install (per-user, no admin) — dev/quick-start route
+
+> Note (verified 2026-10-09): this route registers the add-in so COM
+> automation and File→Open can load it, but it does **not** list the add-in
+> in Tools → Add-Ins on the baseline install — that dialog reads HKLM. For
+> durable Tools → Add-Ins visibility use the machine-wide route further down.
 
 1. Pack the folder (from the repo):
 
@@ -88,13 +93,20 @@ tooling stays in the repo.
    - `HKCU\SOFTWARE\Classes\CLSID\{clsid}\ProgId` and
      `HKCU\SOFTWARE\Classes\SolidWorksQrAddIn.SwAddin\CLSID`.
    - `HKCU\SOFTWARE\SolidWorks\AddIns\{clsid}` — `(default)`=1, Title,
-     Description (the Tools→Add-Ins entry).
+     Description.
    - `HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}` — `(default)`=1
      (load at startup).
 
-4. Start SolidWorks → **Tools → Add-Ins…** — "SolidWorks QR Add-In" is
-   listed with both checkboxes ticked (loaded now + at startup). The command
-   appears as **QR Sketch → Create QR Sketch** on the menu/command toolbar.
+4. **Verified 2026-10-09 on the baseline install:** the interactive
+   **Tools → Add-Ins…** dialog enumerates `HKLM\SOFTWARE\SolidWorks\AddIns` —
+   HKCU `AddIns` entries are per-user load-state mirrors and do **not** make
+   the add-in appear in the dialog, even though the per-user CLSID/CodeBase
+   lets `LoadAddIn` and COM automation load it fine. To load per-session
+   without admin, use **File → Open** on `SolidWorksQrAddIn.dll` (the Open
+   dialog has an "Add-Ins (*.dll)" filter). To appear in Tools → Add-Ins
+   durably, use the machine-wide (elevated) route below. Once loaded, the
+   command appears as **QR Sketch → Create QR Sketch** on the menu/command
+   toolbar.
 
 ## Loading and unloading inside SolidWorks
 
