@@ -6,8 +6,9 @@ namespace SolidWorksQrAddIn.Core
     /// <summary>
     /// COM-visible test hook exposed by the add-in object. A live harness gets
     /// it via ISldWorks.GetAddInObject("{clsid}") and invokes the SAME code
-    /// path the SolidWorks menu command uses — without popping UI.
-    /// Lives in Core (not the add-in) so the harness only needs this assembly.
+    /// path the SolidWorks menu command uses — the session + window manager
+    /// behind the real WPF window. Lives in Core (not the add-in) so the
+    /// harness only needs this assembly.
     /// </summary>
     [ComVisible(true)]
     [Guid("4813B19B-E14E-4201-B961-4C7AC791DDD8")] // == AddinIdentity.ProbeIid
@@ -15,15 +16,17 @@ namespace SolidWorksQrAddIn.Core
     public interface IAddInProbe
     {
         /// <summary>
-        /// Runs the Create QR Sketch command (fixed content/size/growth)
-        /// against the live host. Returns "OK &lt;sketchName&gt; &lt;segmentCount&gt;"
-        /// or "ERROR &lt;message&gt;". Never shows UI.
+        /// Drives the windowed create path with the fixed probe payload
+        /// ("SW-QR-MVP") against the live host: sets the session content and
+        /// invokes the same Create path the window's button uses.
+        /// Returns "OK &lt;sketchName&gt; &lt;message&gt;" or "ERROR &lt;message&gt;".
+        /// Never shows UI beyond the session's window handling.
         /// </summary>
         string RunQrSketchProbe();
 
         /// <summary>
-        /// Runs the same command with line-3 insertion failure injected, so the
-        /// real abort/cleanup path executes against the live host.
+        /// Runs the same create path with line-3 insertion failure injected,
+        /// so the real abort/cleanup path executes against the live host.
         /// Returns "FAILSAFE &lt;message&gt;" — the command must NOT succeed here.
         /// </summary>
         string RunFailingQrSketchProbe();
@@ -33,5 +36,45 @@ namespace SolidWorksQrAddIn.Core
         /// "CONNECTED group=&lt;n&gt;" or "NOT-CONNECTED".
         /// </summary>
         string AddinStateProbe();
+
+        // ---------------- ticket-3 window/session probes ----------------
+
+        /// <summary>
+        /// The command entry, probed: focus the live window or create + show
+        /// it. Returns "OPEN open=&lt;bool&gt; windows=&lt;n&gt;" or "ERROR …".
+        /// windows counts creations — a second open must keep it at 1.
+        /// </summary>
+        string OpenQrWindowProbe();
+
+        /// <summary>Closes the session's window. Returns the resulting WindowStateProbe text.</summary>
+        string CloseQrWindowProbe();
+
+        /// <summary>
+        /// Window/session state without changing it:
+        /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;".
+        /// </summary>
+        string WindowStateProbe();
+
+        /// <summary>
+        /// Pushes content into the session exactly like the window's text box:
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;" or
+        /// "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrContentProbe(string content);
+
+        /// <summary>
+        /// The Create Sketch button, probed: builds a fresh host adapter and
+        /// runs the session create. Returns "OK &lt;sketchName&gt; …" or
+        /// "ERROR &lt;message&gt;".
+        /// </summary>
+        string CreateQrFromWindowProbe();
+
+        /// <summary>
+        /// Fingerprint of the session's current picture:
+        /// "PIC &lt;w&gt;x&lt;h&gt; dark=&lt;n&gt; sha=&lt;hash&gt;" or "NO-PICTURE"
+        /// when the current content is invalid. Lets the harness prove the
+        /// shown picture equals the module's rendering of the same payload.
+        /// </summary>
+        string PreviewSignatureProbe();
     }
 }

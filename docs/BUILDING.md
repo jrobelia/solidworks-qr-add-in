@@ -8,7 +8,7 @@ Build tools: .NET SDK (tested with 10.0.103); no Visual Studio required.
 | Path | What it is |
 |---|---|
 | `src/SolidWorksQrAddIn.Core` | Host-independent logic: the `ISketchHost`/`ISketchInsertion` seam, commands, geometry plans, registration plan, the `IAddInProbe` test hook. **Never references SolidWorks assemblies.** |
-| `src/SolidWorksQrAddIn` | The COM-visible add-in (`SwAddin`), the native adapter (`Host/`), COM registration functions. CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` — unique to this project (NOT the InvenTree GUID). |
+| `src/SolidWorksQrAddIn` | The COM-visible add-in (`SwAddin`), the native adapter (`Host/`), the WPF window (`UI/` — modeless, on a dedicated STA thread) and COM registration functions. CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` — unique to this project (NOT the InvenTree GUID). |
 | `tests/SolidWorksQrAddIn.Tests` | Headless xunit suite + the in-memory test adapter. References Core only. |
 | `tools/LiveProbe` | Live-verification console harness (drives a headless SolidWorks via COM). |
 | `scripts/` | Dev registration/unregistration (per-user, HKCU only). |
@@ -58,8 +58,16 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   zero-length edge, self-intersection, pinched + pair corner contacts).
 - **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
   no/other selection, already-editing sketch), insertion request through the
-  test adapter, failure cleanup + honest cleanup-failure reporting, flag
+  test adapter, per-content geometry (byte-exact payload, distinct payloads →
+  distinct sketches), failure cleanup + honest cleanup-failure reporting, flag
   restoration, redraw.
+- **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
+  (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
+  orientation, material-area parity, deterministic signature.
+- **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
+  clearing, exact content, current-request insertion, fresh host revalidation
+  (no stale cross-document support), create blocked while editing, single-window
+  lifecycle (focus-or-recreate, close, release) via the `IQrSketchWindow` seam.
 - **Identity**: COM/registration plan (ComIdentityTests, RegistrationPlanTests).
 
 ## Deploy + register (per-user, no admin)
@@ -109,37 +117,48 @@ The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
 `Activator.CreateInstance` (PowerShell late binding does **not** work — verified),
 loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
-`RunFailingQrSketchProbe`, `AddinStateProbe`) through
-`IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
+`RunFailingQrSketchProbe`, `AddinStateProbe`, plus the ticket-3 session/window
+probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
+`SetQrContentProbe`, `CreateQrFromWindowProbe`, `PreviewSignatureProbe`)
+through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed
 `IAddInProbe` interface; invoke members by name instead.)
 
-It then: checks the no-document/no-selection rejections, creates a part from
-the default template, selects **Front Plane**, first runs the command through
-`RunFailingQrSketchProbe` (injects a line-3 insertion failure so the real
-native abort/cleanup path runs: partial sketch deleted, edit mode exited),
-then runs `RunQrSketchProbe` — the fixed `SW-QR-MVP` request at 25 mm / 3% —
-and verifies against the module's own expectation (Core is referenced
-directly): segment count == generated edge count, native contour count ==
-generated contour count, native region count == contour count (SolidWorks
-exposes one bounded area per contour, including void hole interiors),
-every generated contour matched 1:1 to a native contour by bounding box
-(≤1e-9 m), finder ring→hole→island nesting present. It rejects a second
-create while the sketch is open, commits the QR sketch, builds a
-60×60×5 mm backing plate on Front Plane, selects only the QR's *material*
-regions (`ISketchRegion` bounding boxes matched to the module's
-body+island contours — selecting the whole sketch returns null for a
-multi-contour extrude, and selecting ALL regions fills the holes solid),
-then creates a 2 mm Boss-Extrude and a 1 mm Cut-Extrude (`Dir=true` —
-the plate grows away from the sketch-normal side) into the plate.
-Finally it unloads (callbacks gone) and reloads (connected again — no
-duplicated group).
+Ticket-3 flow: open the modeless window → reopen (same window, `windows=1` —
+no duplicate) → create a part and select Front Plane **while the window is
+open** (proves the host stays interactive) → empty content rejected with no
+picture → injected line-3 insertion failure cleans up only its partial sketch
+→ `SW-QR-MVP` accepted; the shown picture's SHA-256 signature equals a local
+`QrPictureRenderer` render of the same module result, so the picture is
+exactly the grown contour geometry → Create leaves sketch A open, the window
+and picture stay up → a second create is blocked while the sketch is being
+edited → after exiting, payload B produces a different picture signature and
+a second sketch matching payload B's contours while sketch A is untouched →
+close/reopen recreates the window with session state intact → unload releases
+everything and a reload connects fresh. Retained ticket-2 checks then verify
+each native sketch against the module's expectation (segment count, contour
+count, 1:1 contour bounding boxes at ≤1e-9 m, ring→hole→island nesting) and
+build a 60×60×5 mm backing plate + 2 mm Boss-Extrude + 1 mm Cut-Extrude
+(`Dir=true`) from the QR's material regions.
+
+WPF threading note (verified): probe calls arrive on MTA COM worker threads,
+so the add-in creates its window on a dedicated STA thread
+(`AddInWpfThread`) with its own dispatcher; the window marshals every call.
+A menu-command invocation takes the same path.
 
 SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
 terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
+- Ticket 3 windowed run — **ALL CHECKS PASSED** (57): modeless window open →
+  focus-not-duplicate → part + selection while window open → empty-content
+  refusal with no stale picture → injected-failure cleanup → payload A picture
+  signature == module render, sketch A = 252 segs/27 contours 1:1 bbox-matched,
+  left open, window + picture stay available → create blocked while editing →
+  payload B picture/sketch (384 segs/41 contours) with sketch A unchanged →
+  close/reopen (windows=2, session state kept) → unload releases, reload fresh
+  → plate + Boss-Extrude2 + Cut-Extrude1 on the QR regions.
 - Ticket 2 full QR run — **ALL CHECKS PASSED**: LoadAddIn → IDispatch probe →
   no-doc/no-selection rejections → injected line-3 failure cleanup →
   `SW-QR-MVP` sketch created and left open → 252 native segments / 27 native
