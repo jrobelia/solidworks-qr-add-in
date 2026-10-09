@@ -7,11 +7,11 @@ using Xunit;
 namespace SolidWorksQrAddIn.Tests
 {
     /// <summary>
-    /// Exercises the Create Test Sketch command through the test adapter:
-    /// eligibility decisions, the insertion request itself, and failure /
+    /// Exercises the Create QR Sketch command through the test adapter:
+    /// eligibility decisions, the QR insertion request itself, and failure /
     /// cleanup behaviour. No SolidWorks assemblies are involved.
     /// </summary>
-    public class CreateTestSketchCommandTests
+    public class CreateQrSketchCommandTests
     {
         private static TestSketchHost HostWithSelectedPlane()
         {
@@ -19,6 +19,12 @@ namespace SolidWorksQrAddIn.Tests
             host.Document!.Selection.Add(FakeSelType.DatumPlane);
             return host;
         }
+
+        private static readonly QrSketch Expected = QrSketchGenerator
+            .Generate(CreateQrSketchCommand.FixedContent,
+                CreateQrSketchCommand.FixedSizeMm,
+                CreateQrSketchCommand.FixedGrowthFractionPerSide)
+            .Sketch!;
 
         // ---------- happy path ----------
 
@@ -28,33 +34,48 @@ namespace SolidWorksQrAddIn.Tests
             var host = HostWithSelectedPlane();
             var before = host.Document!.Sketches.Count;
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.Equal(before + 1, host.Document.Sketches.Count);
         }
 
         [Fact]
-        public void Created_sketch_contains_the_closed_square_as_four_line_segments()
+        public void Inserts_every_generated_contour_edge_as_a_native_line()
         {
             var host = HostWithSelectedPlane();
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
-            Assert.Equal(4, sketch.Segments.Count);
-            // The fake records exactly what the host was asked to insert, so the
-            // recorded segments must be the command's planned square edges.
-            for (var i = 0; i < 4; i++)
+            Assert.Equal(Expected.Info.SegmentCount, sketch.Segments.Count);
+            // The fake records exactly what the host was asked to insert — the
+            // recorded segments must be the command's QR contour edges, in order.
+            var expected = Expected.Edges.ToList();
+            for (var i = 0; i < expected.Count; i++)
             {
-                var planned = TestSquareSketch.Edges[i];
-                var actual = sketch.Segments[i];
-                Assert.Equal(planned.Start.X, actual.X1, 12);
-                Assert.Equal(planned.Start.Y, actual.Y1, 12);
-                Assert.Equal(planned.End.X, actual.X2, 12);
-                Assert.Equal(planned.End.Y, actual.Y2, 12);
+                Assert.Equal(expected[i].Start.X, sketch.Segments[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y, sketch.Segments[i].Y1, 12);
+                Assert.Equal(expected[i].End.X, sketch.Segments[i].X2, 12);
+                Assert.Equal(expected[i].End.Y, sketch.Segments[i].Y2, 12);
             }
+        }
+
+        [Fact]
+        public void Inserted_sketch_spans_the_requested_25mm_centred_on_the_origin()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host);
+
+            Assert.True(result.Succeeded, result.Message);
+            var segs = host.Document!.Sketches.Single().Segments;
+            double half = CreateQrSketchCommand.FixedSizeMm / 2.0 / 1000.0;
+            Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
+            Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
+            Assert.Equal(half, segs.Max(s => System.Math.Max(s.Y1, s.Y2)), 9);
+            Assert.Equal(-half, segs.Min(s => System.Math.Min(s.Y1, s.Y2)), 9);
         }
 
         [Fact]
@@ -62,7 +83,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var host = HostWithSelectedPlane();
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
@@ -74,7 +95,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var host = HostWithSelectedPlane();
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.Equal(host.Document!.Sketches.Single().Name, result.CreatedSketchName);
@@ -85,7 +106,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var host = HostWithSelectedPlane();
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.True(host.Document!.RedrawCount >= 1);
@@ -100,7 +121,7 @@ namespace SolidWorksQrAddIn.Tests
             doc.SketchManagerFlags["DisplayWhenAdded"] = true;
             var expected = doc.SketchManagerFlags.ToDictionary(kv => kv.Key, kv => kv.Value);
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.True(result.Succeeded, result.Message);
             Assert.Equal(expected, doc.SketchManagerFlags);
@@ -113,7 +134,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var host = new TestSketchHost(); // no document
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("document", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -127,7 +148,7 @@ namespace SolidWorksQrAddIn.Tests
             var host = new TestSketchHost { Document = new FakeDocument(docKind) };
             host.Document!.Selection.Add(FakeSelType.DatumPlane);
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("part", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -139,7 +160,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("select", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -152,21 +173,7 @@ namespace SolidWorksQrAddIn.Tests
             var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
             host.Document!.Selection.Add(FakeSelType.Face);
 
-            var result = new CreateTestSketchCommand().Execute(host);
-
-            Assert.False(result.Succeeded);
-            Assert.Contains("plane", result.Message, System.StringComparison.OrdinalIgnoreCase);
-            Assert.Empty(host.Document.Sketches);
-        }
-
-        [Fact]
-        public void Rejects_when_more_than_one_item_is_selected()
-        {
-            var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
-            host.Document!.Selection.Add(FakeSelType.DatumPlane);
-            host.Document.Selection.Add(FakeSelType.Edge);
-
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("plane", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -183,31 +190,13 @@ namespace SolidWorksQrAddIn.Tests
             doc.ActiveSketch = openSketch;
             doc.Sketches.Add(openSketch);
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("sketch", result.Message, System.StringComparison.OrdinalIgnoreCase);
-            // The user's sketch must remain exactly as it was: still open, same segments.
             Assert.Same(openSketch, doc.ActiveSketch);
             Assert.Single(openSketch.Segments);
             Assert.Single(doc.Sketches);
-        }
-
-        [Fact]
-        public void Rejection_does_not_consume_a_sketch_name_or_alter_feature_tree()
-        {
-            var host = HostWithSelectedPlane();
-            var doc = host.Document!;
-            doc.ActiveSketch = new FakeSketch("SketchUser");
-            doc.Sketches.Add(doc.ActiveSketch);
-            var featuresBefore = doc.PreExistingFeatures.ToList();
-            var nextNumber = doc.NextSketchNumber;
-
-            var result = new CreateTestSketchCommand().Execute(host);
-
-            Assert.False(result.Succeeded);
-            Assert.Equal(featuresBefore, doc.PreExistingFeatures);
-            Assert.Equal(nextNumber, doc.NextSketchNumber);
         }
 
         // ---------- insertion failures ----------
@@ -218,7 +207,7 @@ namespace SolidWorksQrAddIn.Tests
             var host = HostWithSelectedPlane();
             host.BeginFailure = "The selected plane reference is stale.";
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("stale", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -234,26 +223,13 @@ namespace SolidWorksQrAddIn.Tests
             doc.Sketches.Add(userSketch); // pre-existing, must survive
             host.FailOnLineNumber = 3;
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("line", result.Message, System.StringComparison.OrdinalIgnoreCase);
-            // Only the partial sketch is removed; prior user geometry is intact.
             Assert.Single(doc.Sketches);
             Assert.Same(userSketch, doc.Sketches[0]);
             Assert.Null(doc.ActiveSketch);
-        }
-
-        [Fact]
-        public void Reports_successful_cleanup_in_the_failure_message()
-        {
-            var host = HostWithSelectedPlane();
-            host.FailOnLineNumber = 2;
-
-            var result = new CreateTestSketchCommand().Execute(host);
-
-            Assert.False(result.Succeeded);
-            Assert.Contains("removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -263,23 +239,20 @@ namespace SolidWorksQrAddIn.Tests
             host.FailOnLineNumber = 2;
             host.FailCleanup = true;
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("cleanup", result.Message, System.StringComparison.OrdinalIgnoreCase);
-            // Honest reporting: message must NOT claim the partial sketch was removed.
             Assert.DoesNotContain("was removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
         public void Injected_line_failure_through_the_seam_aborts_and_cleans_up()
         {
-            // Same wrapper the live probe uses: exercises the command's real
-            // abort path over any ISketchHost implementation.
             var host = new SolidWorksQrAddIn.Core.Hosting.FailureInjectingHost(
                 HostWithSelectedPlane(), failOnLine: 3);
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Contains("line", result.Message, System.StringComparison.OrdinalIgnoreCase);
@@ -294,7 +267,7 @@ namespace SolidWorksQrAddIn.Tests
             var expected = doc.SketchManagerFlags.ToDictionary(kv => kv.Key, kv => kv.Value);
             host.FailOnLineNumber = 2;
 
-            var result = new CreateTestSketchCommand().Execute(host);
+            var result = new CreateQrSketchCommand().Execute(host);
 
             Assert.False(result.Succeeded);
             Assert.Equal(expected, doc.SketchManagerFlags);

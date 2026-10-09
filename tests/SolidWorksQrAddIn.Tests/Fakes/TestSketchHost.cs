@@ -163,6 +163,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             _flagSnapshot = new Dictionary<string, bool>(doc.SketchManagerFlags);
             doc.SketchManagerFlags["AddToDB"] = true;
             doc.SketchManagerFlags["DisplayWhenAdded"] = false;
+            doc.SketchManagerFlags["AutoInference"] = false;
         }
 
         public string SketchName => _sketch.Name;

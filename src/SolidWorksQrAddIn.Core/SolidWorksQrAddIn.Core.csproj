@@ -16,6 +16,18 @@
     <AssemblyAttribute Include="System.Runtime.InteropServices.ComVisibleAttribute">
       <_Parameter1>false</_Parameter1>
     </AssemblyAttribute>
+    <!-- Lets the headless suite drive the grid-space contour validator with
+         crafted degenerate fixtures (corner contacts etc.) that a grown-rect
+         union can never produce through the public interface. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>SolidWorksQrAddIn.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned per spec: QR cell matrix (MIT) + integer polygon union (BSL-1.0). -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="Clipper2" Version="2.0.0" />
   </ItemGroup>
 
 </Project>

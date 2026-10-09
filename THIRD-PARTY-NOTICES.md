@@ -1,8 +1,15 @@
 # Third-party notices
 
-Ticket 1 ships no third-party runtime libraries (no QR/geometry deps yet —
-QRCoder (MIT) and Clipper2 (BSL-1.0) arrive in later tickets and must be listed
-here when they do).
+Runtime libraries shipped with the add-in (deployed beside SolidWorksQrAddIn.dll):
+
+| Package | Version | License | Used for |
+|---|---|---|---|
+| QRCoder | 1.8.0 | MIT | QR encoding → cell matrix (`ModuleMatrix`) |
+| Clipper2 | 2.0.0 | BSL-1.0 | Integer polygon union + nested contours (PolyTree64) |
+
+QRCoder license: https://github.com/Shane32/QRCoder/blob/master/LICENSE
+Clipper2 license: https://github.com/AngusJohnson/Clipper2/blob/main/License.txt
+(Boost Software License 1.0)
 
 Development/test-only packages (not shipped with the add-in):
 

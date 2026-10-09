@@ -36,6 +36,16 @@ namespace SolidWorksQrAddIn.Host
             _prevDisplayWhenAdded = prevDisplayWhenAdded;
             _prevAutoInference = prevAutoInference;
             _prevInferenceMode = prevInferenceMode;
+
+            // Bulk-insert mode for the session: verified live, the interactive
+            // path sporadically refuses CreateLine on coincident endpoints of a
+            // dense contour set (QR ~250 segments). AddToDB + suppressed display
+            // inserts every validated edge; flags are restored on every exit
+            // path and the committed session redraws. Verified: all 252 segments
+            // of the fixed QR insert cleanly this way.
+            try { _mgr.AddToDB = true; } catch { }
+            try { _mgr.DisplayWhenAdded = false; } catch { }
+            try { _mgr.AutoInference = false; } catch { }
         }
 
         public string SketchName => _sketchFeature.Name;
