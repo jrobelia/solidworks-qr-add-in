@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Hosting;
+using SolidWorksQrAddIn.Core.Icons;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Registration;
 using SolidWorksQrAddIn.Host;
@@ -96,6 +97,28 @@ namespace SolidWorksQrAddIn
                     "EnableQrSketch",
                     0,
                     (int)swCommandItemType_e.swMenuItem | (int)swCommandItemType_e.swToolbarItem);
+
+                // Toolbar/menu icons: IconList is a string[] of PNG paths —
+                // one strip file per resolution (20..128), one icon wide for
+                // our single command (ImageIndex 0). MainIconList dresses the
+                // group's own toolbar button the same way. Extraction is
+                // idempotent into <deployed add-in folder>\icons and must
+                // never fail ConnectToSW — a read-only folder leaves the
+                // command reachable by name, just unadorned.
+                try
+                {
+                    string addinDir = Path.GetDirectoryName(
+                        Assembly.GetExecutingAssembly().Location) ?? ".";
+                    var icons = QrToolbarIcons.EnsureExtracted(
+                        Path.Combine(addinDir, "icons"));
+                    group.IconList = icons;
+                    group.MainIconList = icons;
+                    Diag.Log($"command group icons set ({icons.Length} sizes)");
+                }
+                catch (Exception ex)
+                {
+                    Diag.Log($"icon setup skipped: {ex.GetType().Name}: {ex.Message}");
+                }
 
                 group.HasMenu = true;
                 group.HasToolbar = true;

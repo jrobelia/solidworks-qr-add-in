@@ -42,6 +42,12 @@ unregister-addin-hkcu.ps1    per-user removal
 licenses\                    full license texts for the shipped dependencies
 ```
 
+At first load the add-in also writes `icons\qr-cmd-{20,32,40,64,96,128}.png`
+next to the DLL — the QR command group carries icons
+(`ICommandGroup.IconList`/`MainIconList`, one PNG strip per SolidWorks
+resolution; the single command is `ImageIndex` 0). The write is idempotent
+and best-effort: a read-only folder leaves the command reachable by name.
+
 **Not shipped, on purpose:** `SolidWorks.Interop.*.dll` — interop types are
 embedded (`EmbedInteropTypes`), so the installed SDK's assemblies are not
 needed beside the add-in and are not redistributed (RESEARCH.md §2;
