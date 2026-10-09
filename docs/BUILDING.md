@@ -155,6 +155,24 @@ count, contour count, 1:1 contour bounding boxes at ≤1e-9 m,
 ring→hole→island nesting) and build a 60×60×5 mm backing plate + 2 mm
 Boss-Extrude + 1 mm Cut-Extrude (`Dir=true`) from the QR's material regions.
 
+Ticket-5 flow (supports + coordinate convention — see
+`docs/SKETCH-COORDINATES.md`): on Front Plane, a datum plane rotated 30°
+(`InsertRefPlane`, Coincident-on-edge + Angle-to-face), the plate's top
+planar face, and a vertical side planar face the probe (a) runs the
+`CreateLine` convention experiment — asymmetric marker segment, endpoint
+read-back, sketch→model frame recovered from `ModelToSketchTransform`
+with a det=+1 no-mirroring assert — and (b) creates the QR through the
+add-in, then verifies module-identical contours, the entered 25 mm outline
+centred at the sketch origin, every endpoint on the support plane (no
+double transform), exact in-plane round-trip, the sketch's reference entity
+is the selected support, and the sketch left open. The top-face QR then
+gets the Boss-Extrude + shallow Cut-Extrude feature checks on the plate.
+Negative selections — cylindrical (non-planar) face, edge, two supports at
+once, nothing — must each fail with a useful error and no partial sketch.
+Finally a second part document is activated and its Front Plane selected:
+Create must land in the second document with the first unchanged
+(cross-document/stale-support guard).
+
 WPF threading note (verified): probe calls arrive on MTA COM worker threads,
 so the add-in creates its window on a dedicated STA thread
 (`AddInWpfThread`) with its own dispatcher; the window marshals every call.
@@ -174,6 +192,14 @@ useful when another SolidWorks release is already running.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
+- Ticket 5 supports run — **awaiting a live window**: the extended probe is
+  built and the attached-session guard was re-verified (it correctly refused
+  the engineer's running visible session). The convention experiment,
+  rotated-plane, planar-face, negative-selection, and cross-document checks
+  need a run with no interactive SolidWorks session open. Until then the
+  `CreateLine` consuming frame on rotated/planar supports is recorded as
+  *unproven* in `docs/SKETCH-COORDINATES.md`, and the insertion seam
+  deliberately applies no transform.
 - Ticket 4 size/growth run — **ALL CHECKS PASSED** (87): fresh-window fields
   read 25 mm / 3% → payload-A sketch native outline measured 25.000 mm →
   unparseable/zero/negative size and unparseable/0%/50% growth rejected

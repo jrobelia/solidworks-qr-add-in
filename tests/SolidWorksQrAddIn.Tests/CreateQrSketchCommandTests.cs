@@ -36,7 +36,7 @@ namespace SolidWorksQrAddIn.Tests
         // ---------- happy path ----------
 
         [Fact]
-        public void Creates_exactly_one_new_sketch_when_a_baseline_plane_is_selected()
+        public void Creates_exactly_one_new_sketch_when_a_reference_plane_is_selected()
         {
             var host = HostWithSelectedPlane();
             var before = host.Document!.Sketches.Count;
@@ -175,15 +175,15 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Rejects_when_the_selection_is_not_a_baseline_plane()
+        public void Rejects_when_the_selection_is_not_a_sketch_support()
         {
             var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
-            host.Document!.Selection.Add(FakeSelType.Face);
+            host.Document!.Selection.Add(FakeSelType.Edge);
 
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.False(result.Succeeded);
-            Assert.Contains("plane", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("support a sketch", result.Message, System.StringComparison.OrdinalIgnoreCase);
             Assert.Empty(host.Document.Sketches);
         }
 
