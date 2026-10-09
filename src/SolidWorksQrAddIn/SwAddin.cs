@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -7,8 +8,10 @@ using Microsoft.Win32;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Hosting;
+using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Registration;
 using SolidWorksQrAddIn.Host;
+using SolidWorksQrAddIn.UI;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using SolidWorks.Interop.swpublished;
@@ -34,6 +37,8 @@ namespace SolidWorksQrAddIn
         private ICommandManager? _cmdMgr;
         private int _cookie;
         private bool _connected;
+        private QrSketchSession? _session;
+        private AddInWpfThread? _wpf;
 
         static SwAddin()
         {
@@ -96,6 +101,11 @@ namespace SolidWorksQrAddIn
                 group.HasToolbar = true;
                 group.Activate();
 
+                // The interaction state behind the one modeless window lives
+                // here for the connection's lifetime; the view factory builds
+                // a fresh WPF window only when the command opens one.
+                _session = new QrSketchSession(CreateQrWindow);
+
                 _connected = true;
                 Diag.Log("connected");
                 return true;
@@ -116,6 +126,12 @@ namespace SolidWorksQrAddIn
         public bool DisconnectFromSW()
         {
             _connected = false;
+            // Release the modeless window first — it must not outlive the
+            // add-in — then stop the STA pump that owned it.
+            try { _session?.Release(); } catch { }
+            _session = null;
+            try { _wpf?.Shutdown(); } catch { }
+            _wpf = null;
             try
             {
                 if (_cmdMgr != null)
@@ -141,48 +157,164 @@ namespace SolidWorksQrAddIn
 
         // ---------------- command surface ----------------
 
-        /// <summary>SolidWorks invokes this by name when the command runs.</summary>
+        /// <summary>
+        /// SolidWorks invokes this by name when the command runs: open the one
+        /// modeless QR window, or focus it if it is already open.
+        /// </summary>
         public void CreateQrSketch()
         {
-            var result = ExecuteQrSketch();
-            if (!result.Succeeded)
-                _sw?.SendMsgToUser2(result.Message,
-                    (int)swMessageBoxIcon_e.swMbWarning,
-                    (int)swMessageBoxBtn_e.swMbOk);
+            try
+            {
+                if (_session == null || _sw == null || !_connected)
+                {
+                    Report("The QR add-in is not connected to SolidWorks.");
+                    return;
+                }
+                _session.OpenOrFocusWindow();
+            }
+            catch (Exception ex)
+            {
+                Report($"The QR window could not be opened: {ex.Message}");
+            }
         }
 
         /// <summary>Enable callback: always enabled; context errors are reported on invoke.</summary>
         public int EnableQrSketch() => 1;
 
-        private CommandResult ExecuteQrSketch()
+        private void Report(string message) =>
+            _sw?.SendMsgToUser2(message,
+                (int)swMessageBoxIcon_e.swMbWarning,
+                (int)swMessageBoxBtn_e.swMbOk);
+
+        /// <summary>
+        /// View factory for the session: a fresh WPF window owned by the
+        /// SolidWorks main window, created on the add-in's dedicated STA pump
+        /// (callers — menu callback or COM probe — may be on any thread; the
+        /// window marshals itself for every later call). The window pulls its
+        /// state from the session and asks for a fresh host adapter per
+        /// Create — no cached support.
+        /// </summary>
+        private IQrSketchWindow CreateQrWindow()
         {
-            if (_sw == null || !_connected)
-                return CommandResult.Failure("The QR add-in is not connected to SolidWorks.");
-            ISketchHost host = new SolidWorksSketchHost(_sw);
-            return new CreateQrSketchCommand().Execute(host);
+            var owner = OwnerHandle();
+            _wpf ??= new AddInWpfThread();
+            var window = _wpf.Invoke(() => new QrSketchWindow(_session!, () =>
+            {
+                if (_sw == null || !_connected)
+                    throw new SketchHostException(
+                        "The QR add-in is not connected to SolidWorks.");
+                return new SolidWorksSketchHost(_sw);
+            }, owner));
+            Diag.Log("QR window created");
+            return window;
+        }
+
+        /// <summary>
+        /// The SolidWorks main-window handle for WPF ownership. IFrame is the
+        /// documented route; the process main-window handle is the fallback.
+        /// Zero means "unowned" — degraded, never fatal.
+        /// </summary>
+        private IntPtr OwnerHandle()
+        {
+            try
+            {
+                var frame = _sw?.Frame() as IFrame;
+                long hwnd = frame?.GetHWndx64() ?? 0;
+                if (hwnd != 0)
+                    return new IntPtr(hwnd);
+            }
+            catch (Exception ex) { Diag.Log($"IFrame.GetHWndx64 failed: {ex.Message}"); }
+            try
+            {
+                var hwnd = Process.GetCurrentProcess().MainWindowHandle;
+                if (hwnd != IntPtr.Zero)
+                    return hwnd;
+            }
+            catch { }
+            return IntPtr.Zero;
         }
 
         // ---------------- IAddInProbe (headless/live verification hook) ----------------
 
+        /// <summary>Payload the fixed-path probes use (was the ticket-2 fixed content).</summary>
+        private const string ProbeContent = "SW-QR-MVP";
+
         public string RunQrSketchProbe()
         {
-            var result = ExecuteQrSketch();
+            if (_session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            _session.SetContent(ProbeContent);
+            return CreateQrFromWindowProbe();
+        }
+
+        public string RunFailingQrSketchProbe()
+        {
+            if (_sw == null || !_connected || _session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            _session.SetContent(ProbeContent);
+            // Wrap the real native host so line 3 of the insertion throws —
+            // the command must run the native abort/cleanup path for real.
+            var host = new FailureInjectingHost(new SolidWorksSketchHost(_sw), failOnLine: 3);
+            var result = _session.CreateSketch(host);
+            return result.Succeeded
+                ? "UNEXPECTED-OK " + result.CreatedSketchName
+                : $"FAILSAFE {result.Message}";
+        }
+
+        public string OpenQrWindowProbe()
+        {
+            if (_session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            try
+            {
+                _session.OpenOrFocusWindow();
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+            return $"OPEN open={_session.HasOpenWindow} windows={_session.WindowsCreated}";
+        }
+
+        public string CloseQrWindowProbe()
+        {
+            _session?.CloseWindow();
+            return WindowStateProbe();
+        }
+
+        public string WindowStateProbe() =>
+            _session == null
+                ? "STATE session=none"
+                : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
+                  $"hasRequest={_session.HasValidRequest}";
+
+        public string SetQrContentProbe(string content)
+        {
+            if (_session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            var result = _session.SetContent(content);
+            if (!result.Succeeded)
+                return $"INVALID {result.Error!.Kind} {result.Error.Message}";
+            var info = result.Sketch!.Info;
+            return $"VALID cells={info.CellCount} contours={info.ContourCount} segs={info.SegmentCount}";
+        }
+
+        public string CreateQrFromWindowProbe()
+        {
+            if (_sw == null || !_connected || _session == null)
+                return "ERROR The QR add-in is not connected to SolidWorks.";
+            var result = _session.CreateSketch(new SolidWorksSketchHost(_sw));
             return result.Succeeded
                 ? $"OK {result.CreatedSketchName} {result.Message}"
                 : $"ERROR {result.Message}";
         }
 
-        public string RunFailingQrSketchProbe()
+        public string PreviewSignatureProbe()
         {
-            if (_sw == null || !_connected)
-                return "ERROR The QR add-in is not connected to SolidWorks.";
-            // Wrap the real native host so line 3 of the insertion throws —
-            // the command must run the native abort/cleanup path for real.
-            ISketchHost host = new FailureInjectingHost(new SolidWorksSketchHost(_sw), failOnLine: 3);
-            var result = new CreateQrSketchCommand().Execute(host);
-            return result.Succeeded
-                ? "UNEXPECTED-OK " + result.CreatedSketchName
-                : $"FAILSAFE {result.Message}";
+            var pic = _session?.Picture;
+            return pic == null
+                ? "NO-PICTURE"
+                : $"PIC {pic.WidthPixels}x{pic.HeightPixels} dark={pic.DarkPixelCount} sha={pic.Signature()}";
         }
 
         public string AddinStateProbe() =>

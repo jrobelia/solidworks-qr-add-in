@@ -4,28 +4,28 @@ using SolidWorksQrAddIn.Core.Hosting;
 namespace SolidWorksQrAddIn.Core.Commands
 {
     /// <summary>
-    /// "Create QR Sketch" — the fixed-request command of ticket 2. Encodes the
-    /// fixed content <see cref="FixedContent"/> at <see cref="FixedSizeMm"/>
-    /// with <see cref="FixedGrowthFractionPerSide"/> outline growth, then
-    /// inserts every validated contour as native sketch lines on the selected
-    /// baseline plane and leaves the new sketch open for editing.
+    /// "Create QR Sketch" — encodes the given <paramref name="content"/>
+    /// exactly (no trim/resolve/rewrite) at <see cref="FixedSizeMm"/> with
+    /// <see cref="FixedGrowthFractionPerSide"/> outline growth, then inserts
+    /// every validated contour as native sketch lines on the currently
+    /// selected baseline plane and leaves the new sketch open for editing.
     ///
-    /// Geometry is generated and validated BEFORE any host mutation — a
-    /// rejected request never touches the part. No margin geometry, no
-    /// features. Works only through the <see cref="ISketchHost"/> seam.
+    /// Host state is captured fresh at call time — the active part, the
+    /// selected support, and the no-sketch-being-edited rule are always
+    /// revalidated, never cached. Geometry is generated and validated BEFORE
+    /// any host mutation — a rejected request never touches the part. No
+    /// margin geometry, no features. Works only through the
+    /// <see cref="ISketchHost"/> seam.
     /// </summary>
     public sealed class CreateQrSketchCommand
     {
-        /// <summary>Fixed QR payload for this slice.</summary>
-        public const string FixedContent = "SW-QR-MVP";
-
         /// <summary>Final grown QR outline width (mm), excluding the clear margin.</summary>
         public const double FixedSizeMm = 25.0;
 
         /// <summary>Per-side outline growth as a fraction of cell width (3%).</summary>
         public const double FixedGrowthFractionPerSide = 0.03;
 
-        public CommandResult Execute(ISketchHost host)
+        public CommandResult Execute(ISketchHost host, string content)
         {
             var state = host.CaptureState();
 
@@ -61,7 +61,7 @@ namespace SolidWorksQrAddIn.Core.Commands
 
             // Generate + validate all geometry before the host is touched.
             var generated = QrSketchGenerator.Generate(
-                FixedContent, FixedSizeMm, FixedGrowthFractionPerSide);
+                content, FixedSizeMm, FixedGrowthFractionPerSide);
             if (!generated.Succeeded)
                 return CommandResult.Failure(
                     $"QR geometry could not be generated: {generated.Error!.Message}");
