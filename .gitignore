@@ -1,0 +1,27 @@
+# Local scratch / planning space
+.scratch/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild/
+
+# NuGet
+packages/
+*.nupkg
+.nuget/
+
+# OS
+Thumbs.db
+Desktop.ini
