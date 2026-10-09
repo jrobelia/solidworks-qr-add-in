@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Live verification harness (developer tool, not part of the headless suite).
+    Attaches to / launches SolidWorks via the SldWorks.Application.31 ProgID,
+    drives the deployed add-in through its IAddInProbe COM hook, and reports
+    results. Requires SolidWorks 2023 SP5 installed. Never copied into the
+    add-in's registered deployment directory automatically — deploy by hand or
+    via scripts\register-dev-hkcu.ps1 workflow documented in docs\BUILDING.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>SolidWorksQrAddIn.LiveProbe</AssemblyName>
+    <RootNamespace>SolidWorksQrAddIn.LiveProbe</RootNamespace>
+
+    <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">$(SOLIDWORKS_SDK_DIR)</SolidWorksSdkDir>
+    <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksSdkDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SolidWorksQrAddIn.Core\SolidWorksQrAddIn.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded interop surfaces VARIANT returns as dynamic → binder needed. -->
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swpublished">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.swpublished.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
