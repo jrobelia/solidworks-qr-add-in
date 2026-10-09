@@ -11,7 +11,8 @@ Build tools: .NET SDK (tested with 10.0.103); no Visual Studio required.
 | `src/SolidWorksQrAddIn` | The COM-visible add-in (`SwAddin`), the native adapter (`Host/`), the WPF window (`UI/` — modeless, on a dedicated STA thread) and COM registration functions. CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` — unique to this project (NOT the InvenTree GUID). |
 | `tests/SolidWorksQrAddIn.Tests` | Headless xunit suite + the in-memory test adapter. References Core only. |
 | `tools/LiveProbe` | Live-verification console harness (drives a headless SolidWorks via COM). |
-| `scripts/` | Dev registration/unregistration (per-user, HKCU only). |
+| `scripts/` | `pack-deploy.ps1`/`verify-deploy.ps1` (deployment folder) + per-user HKCU registration/unregistration. |
+| `deploy/` | Pack staging output — gitignored; never the registered location. |
 
 ## Build
 
@@ -89,47 +90,38 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   valid↔invalid transitions through the session and command seams.
 - **Identity**: COM/registration plan (ComIdentityTests, RegistrationPlanTests).
 
-## Deploy + register (per-user, no admin)
+## Deploy + register
+
+Ticket 7 made this its own deliverable — see **`docs/DEPLOYMENT.md`** for the
+full procedure (architecture, prerequisites, folder contents, HKCU install,
+the documented-but-not-executed HKLM/RegAsm alternative, load/unload, and the
+"close SolidWorks before replacing binaries" rule). The short version:
 
 ```powershell
-$deploy = "$env:LOCALAPPDATA\SolidWorksQrAddIn"
-mkdir $deploy -Force
-$bin = "src\SolidWorksQrAddIn\bin\x64\Release\net48"
-copy $bin\SolidWorksQrAddIn.dll $deploy
-copy $bin\SolidWorksQrAddIn.Core.dll $deploy
-copy $bin\QRCoder.dll $deploy          # shipped dependency (MIT)
-copy $bin\Clipper2Lib.dll $deploy      # shipped dependency (BSL-1.0)
-.\scripts\register-dev-hkcu.ps1 -DeployDir $deploy
+.\scripts\pack-deploy.ps1                          # builds Release, packs + verifies deploy\
+robocopy deploy\SolidWorksQrAddIn "$env:LOCALAPPDATA\SolidWorksQrAddIn" /MIR
+cd "$env:LOCALAPPDATA\SolidWorksQrAddIn"
+.\register-addin-hkcu.ps1                          # HKCU only, no admin; -DeployDir defaults to the script folder
+.\unregister-addin-hkcu.ps1                        # removal — deletes only this add-in's keys
 ```
 
-This writes, under HKCU only (never HKLM, never touches other add-ins' keys):
+The deployment manifest lives in `SolidWorksQrAddIn.Core`'s `DeploymentPlan`
+(headless-tested); `pack-deploy.ps1` reads it by reflection and
+`verify-deploy.ps1 -DeployDir <folder>` re-checks any folder read-only —
+safe on the registered folder, never writes into it.
 
-- `HKCU\SOFTWARE\Classes\CLSID\{clsid}\InprocServer32` — mscoree.dll, ThreadingModel=Both, Class, Assembly, RuntimeVersion, **CodeBase** (the DLL location; there is no `Path` value in the AddIns keys)
-- `HKCU\SOFTWARE\Classes\CLSID\{clsid}\ProgId` + `HKCU\SOFTWARE\Classes\SolidWorksQrAddIn.SwAddin\CLSID`
-- `HKCU\SOFTWARE\SolidWorks\AddIns\{clsid}` — `(default)`=1, Title, Description
-- `HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}` — `(default)`=1
-
-To remove: `.\scripts\unregister-dev-hkcu.ps1` — deletes only this add-in's
-CLSID/ProgId/AddIns/AddInsStartup keys.
-
-### Machine-wide registration (admin; not run by this ticket)
-
-The COM class + SW entries can also be registered machine-wide:
-
-```powershell
-# elevated prompt — writes HKLM\SOFTWARE\Classes\CLSID + calls our
-# [ComRegisterFunction] which writes HKLM\SolidWorks\AddIns + HKCU AddInsStartup
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe /codebase <path>\SolidWorksQrAddIn.dll
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe /unregister <path>\SolidWorksQrAddIn.dll
-```
-
-`RegisterFunction` falls back to HKCU automatically when HKLM is unavailable.
+Only this add-in's CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` is ever
+touched — never the InvenTree add-in ({A1B2C3D4-…}) or any other key. The
+live acceptance checklist is `docs/ACCEPTANCE.md`.
 
 ## Live verification (requires SolidWorks)
 
+LiveProbe is dev tooling — it never ships in the deployment folder; run it
+from its own build output, passing the deployed folder:
+
 ```powershell
-copy tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
-& "$deploy\SolidWorksQrAddIn.LiveProbe.exe" $deploy
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 ```
 
 The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
@@ -215,6 +207,12 @@ useful when another SolidWorks release is already running.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
+- Ticket 7 packaging run — **live portion awaiting a session-free window**:
+  pack + verify + headless deployment-manifest checks are green and the
+  procedure is in `docs/DEPLOYMENT.md`; the repeatable live checklist is
+  `docs/ACCEPTANCE.md`. An interactive SolidWorks session was running, so
+  install/load/unload/reload and the interactive checklist items are recorded
+  *awaiting human verification* — nothing live is claimed from this run.
 - Ticket 6 failure-handling run — **awaiting a live window**: the code is
   implemented and the probe checks are built, but an interactive SolidWorks
   session was running, so the guard correctly refused and the live gates are

@@ -16,10 +16,14 @@ using SolidWorks.Interop.swconst;
 namespace SolidWorksQrAddIn.LiveProbe
 {
     /// <summary>
-    /// Live verification harness for ticket 4 (custom size + outline growth),
-    /// retaining the ticket-3 and ticket-2 checks.
-    ///   SolidWorksQrAddIn.LiveProbe.exe &lt;deployDir&gt;
+    /// Live verification harness (tickets 2–6 checks retained), plus a
+    /// ticket-7 performance mode:
+    ///   SolidWorksQrAddIn.LiveProbe.exe &lt;deployDir&gt; [progId]
+    ///   SolidWorksQrAddIn.LiveProbe.exe perf [deployDir] [progId]
     /// where deployDir contains the registered SolidWorksQrAddIn.dll.
+    /// `perf` times QR generation (no SolidWorks needed) and — only on a
+    /// session-free invisible instance — native sketch insertion for
+    /// representative short/medium/dense payloads.
     ///
     /// Drives SolidWorks via SldWorks.Application.31 + Activator.CreateInstance
     /// (the verified route — PowerShell late binding does NOT work here) and the
@@ -77,6 +81,13 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         public static int Main(string[] args)
         {
+            // `perf` mode (ticket 7): generation + native-insertion timings
+            // for representative payloads. `perf` consumes args[0]; the rest
+            // keep the usual <deployDir> <progId> shape.
+            if (args.Length > 0 &&
+                string.Equals(args[0], "perf", StringComparison.OrdinalIgnoreCase))
+                return PerfMain(args.Skip(1).ToArray());
+
             string deployDir = args.Length > 0
                 ? args[0]
                 : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
@@ -440,6 +451,175 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // an attached session.
                 try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
             }
+        }
+
+        // ================= ticket 7: performance measurement =================
+
+        /// <summary>
+        /// Representative short/medium/dense payloads. Cell counts are reported
+        /// per run — versions shift with length, that is the point.
+        /// </summary>
+        private static readonly (string tag, string content)[] PerfPayloads =
+        {
+            ("short", "SW-QR-MVP"),
+            ("medium", "https://intranet.openaeros.local/parts/OA-ACCUTECH-SHIPPING-COVER" +
+                       "?rev=C&checked=2026-10-09&bin=W4-017"),
+            ("dense", "{\"part\":\"OA-ACCUTECH-SHIPPING-COVER\",\"rev\":\"C\"," +
+                      "\"serial\":\"OA-2026-10-000742\",\"material\":\"AL6061-T6\"," +
+                      "\"finish\":\"ANODIZE-BLK\",\"lot\":\"L26-041\",\"qa\":\"PASS\"," +
+                      "\"notes\":\"machined all-over per OA-DWG-1142 rev C; inspect per " +
+                      "OA-QAP-7; ship with desiccant per OA-PKG-22; customer ref " +
+                      "PO-55219 line 14\",\"uri\":\"https://intranet.openaeros.local" +
+                      "/qa/records/OA-2026-10-000742\"}"),
+        };
+
+        /// <summary>
+        /// `LiveProbe.exe perf [deployDir] [progId]` — measures QR generation
+        /// (host-independent — always runs, no SolidWorks needed) and, only on
+        /// a session-free invisible instance, native insertion end-to-end.
+        /// Sizes are the smallest that clear the insertion guard at 3% growth
+        /// (≥25 mm) so "dense" measures real insertion, not a guard refusal —
+        /// the size used is printed for the record.
+        /// </summary>
+        private static int PerfMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            Console.WriteLine("# QR add-in performance — generation + native insertion");
+            Console.WriteLine($"# environment: .NET {System.Environment.Version}, " +
+                $"{System.Environment.OSVersion}, {System.Environment.ProcessorCount} cores");
+
+            // ---- generation timing (no SolidWorks) ----
+            var accepted = new List<(string tag, QrSketch sketch, double sizeMm, double genMs)>();
+            foreach (var (tag, content) in PerfPayloads)
+            {
+                // Smallest size that clears the insertion guard at 3% —
+                // dense QR at 25 mm can fall below the 0.05 mm feature floor.
+                QrSketchResult? result = null;
+                double sizeMm = 0;
+                foreach (var trySize in new[] { 25.0, 40.0, 60.0, 80.0, 120.0 })
+                {
+                    var r = QrSketchGenerator.Generate(content, trySize, 0.03);
+                    if (r.Succeeded) { result = r; sizeMm = trySize; break; }
+                }
+                if (result == null || !result.Succeeded)
+                {
+                    Console.WriteLine($"# {tag}: generation rejected at every tried size " +
+                        $"(last: {result?.Error?.Message ?? "n/a"})");
+                    continue;
+                }
+
+                // best of 5 — generation cost on this machine.
+                double best = double.MaxValue;
+                for (var i = 0; i < 5; i++)
+                {
+                    var t0 = System.Diagnostics.Stopwatch.StartNew();
+                    QrSketchGenerator.Generate(content, sizeMm, 0.03);
+                    t0.Stop();
+                    best = Math.Min(best, t0.Elapsed.TotalMilliseconds);
+                }
+                var info = result.Sketch!.Info;
+                Console.WriteLine($"PERF payload={tag} chars={content.Length} version={info.Version} " +
+                    $"cells={info.CellCount} contours={info.ContourCount} segs={info.SegmentCount} " +
+                    $"size_mm={sizeMm} gen_ms={best:F1}");
+                accepted.Add((tag, result.Sketch!, sizeMm, best));
+            }
+
+            // ---- native insertion timing (needs a session-free SW) ----
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null)
+                {
+                    Console.WriteLine("# insertion timing skipped — SolidWorks launch failed");
+                    return 0;
+                }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine($"# insertion timing skipped — a visible/open-docs session " +
+                        $"is running (visible={sw.Visible}, docs={openDocs}); re-run with no " +
+                        "interactive SolidWorks open.");
+                    return 0;   // never ExitApp an attached session
+                }
+                _spawnedFresh = true;
+                Console.WriteLine($"# SolidWorks revision {sw.RevisionNumber()} — invisible instance, " +
+                    "insertion timing enabled");
+
+                int loadResult = sw.LoadAddIn(dllPath);
+                if (loadResult != 0)
+                {
+                    Console.WriteLine($"# insertion timing skipped — LoadAddIn returned {loadResult} " +
+                        $"(deployed DLL: {dllPath})");
+                    return 0;
+                }
+                var probe = TryGetProbe(sw);
+                if (probe == null)
+                {
+                    Console.WriteLine("# insertion timing skipped — no probe on the loaded add-in");
+                    return 0;
+                }
+
+                string template = sw.GetUserPreferenceStringValue(
+                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                if (doc == null)
+                {
+                    Console.WriteLine($"# insertion timing skipped — NewDocument failed " +
+                        $"(template: {template})");
+                    return 0;
+                }
+                var ext = (IModelDocExtension)doc.Extension;
+                var mgr = (ISketchManager)doc.SketchManager;
+
+                foreach (var (tag, sketch, sizeMm, genMs) in accepted)
+                {
+                    doc.ClearSelection2(true);
+                    if (!ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault))
+                    {
+                        Console.WriteLine($"# {tag}: Front Plane selection failed — skipped");
+                        continue;
+                    }
+                    probe.SetQrContentProbe(
+                        PerfPayloads.First(p => p.tag == tag).content);
+                    probe.SetQrSizeProbe(sizeMm.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+                    var t0 = System.Diagnostics.Stopwatch.StartNew();
+                    string create = probe.CreateQrFromWindowProbe();
+                    t0.Stop();
+
+                    var sketchObj = mgr.ActiveSketch as ISketch;
+                    Check(create.StartsWith("OK"), $"perf {tag}: create succeeds", create);
+                    if (sketchObj != null)
+                        CheckOutline(sketchObj, sizeMm, $"perf {tag}: outline measures the used size");
+                    Console.WriteLine($"PERF payload={tag} create_ms={t0.Elapsed.TotalMilliseconds:F0} " +
+                        $"(incl. gen_ms={genMs:F1} — native insert ≈ " +
+                        $"{t0.Elapsed.TotalMilliseconds - genMs:F0} ms)");
+                    mgr.InsertSketch(false);   // exit before the next create
+                }
+
+                sw.UnloadAddIn(dllPath);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL during insertion timing: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+            Console.WriteLine(_failures == 0 ? "# PERF DONE" : $"# {_failures} perf check(s) failed");
+            return _failures == 0 ? 0 : 1;
         }
 
         // ================= ticket 5: support + coordinate convention =================
