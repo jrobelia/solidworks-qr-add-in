@@ -6,7 +6,7 @@
     drives the deployed add-in through its IAddInProbe COM hook, and reports
     results. Requires SolidWorks 2023 SP5 installed. Never copied into the
     add-in's registered deployment directory automatically — deploy by hand or
-    via scripts\register-dev-hkcu.ps1 workflow documented in docs\BUILDING.md.
+    via scripts\pack-deploy.ps1 + register-addin-hkcu.ps1 per docs\DEPLOYMENT.md.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
