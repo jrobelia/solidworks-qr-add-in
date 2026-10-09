@@ -51,7 +51,9 @@ namespace SolidWorksQrAddIn.Core
 
         /// <summary>
         /// Window/session state without changing it:
-        /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;".
+        /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
+        /// size=&lt;text&gt; growth=&lt;text&gt;" — size/growth are the field
+        /// texts exactly as shown (initially 25 and 3).
         /// </summary>
         string WindowStateProbe();
 
@@ -61,6 +63,20 @@ namespace SolidWorksQrAddIn.Core
         /// "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrContentProbe(string content);
+
+        /// <summary>
+        /// Pushes size text into the session exactly like the window's size
+        /// box: "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrSizeProbe(string sizeText);
+
+        /// <summary>
+        /// Pushes growth text into the session exactly like the window's
+        /// growth box: "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrGrowthProbe(string growthText);
 
         /// <summary>
         /// The Create Sketch button, probed: builds a fresh host adapter and

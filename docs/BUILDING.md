@@ -58,16 +58,24 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   zero-length edge, self-intersection, pinched + pair corner contacts).
 - **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
   no/other selection, already-editing sketch), insertion request through the
-  test adapter, per-content geometry (byte-exact payload, distinct payloads →
-  distinct sketches), failure cleanup + honest cleanup-failure reporting, flag
-  restoration, redraw.
+  test adapter, per-request geometry (explicit size/growth; byte-exact payload,
+  distinct payloads → distinct sketches), guard rejection before mutation,
+  failure cleanup + honest cleanup-failure reporting, flag restoration, redraw.
 - **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
   (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
   orientation, material-area parity, deterministic signature.
 - **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
-  clearing, exact content, current-request insertion, fresh host revalidation
-  (no stale cross-document support), create blocked while editing, single-window
-  lifecycle (focus-or-recreate, close, release) via the `IQrSketchWindow` seam.
+  clearing, exact content, size/growth field parsing (mm / % per side) with
+  useful errors and verbatim-kept rejected text, current-request insertion,
+  fresh host revalidation (no stale cross-document support), create blocked
+  while editing, single-window lifecycle (focus-or-recreate, close, release)
+  via the `IQrSketchWindow` seam.
+- **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
+  payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
+  two-direction scaling, preserved ring→hole→island nesting, finite overlap
+  and light gaps above the insertion guard; growth changes preserve the
+  entered outline size via pitch recalculation; invalid numeric parsing and
+  valid↔invalid transitions through the session and command seams.
 - **Identity**: COM/registration plan (ComIdentityTests, RegistrationPlanTests).
 
 ## Deploy + register (per-user, no admin)
@@ -117,29 +125,35 @@ The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
 `Activator.CreateInstance` (PowerShell late binding does **not** work — verified),
 loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
-`RunFailingQrSketchProbe`, `AddinStateProbe`, plus the ticket-3 session/window
+`RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
-`SetQrContentProbe`, `CreateQrFromWindowProbe`, `PreviewSignatureProbe`)
+`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`,
+`CreateQrFromWindowProbe`, `PreviewSignatureProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed
 `IAddInProbe` interface; invoke members by name instead.)
 
-Ticket-3 flow: open the modeless window → reopen (same window, `windows=1` —
-no duplicate) → create a part and select Front Plane **while the window is
-open** (proves the host stays interactive) → empty content rejected with no
-picture → injected line-3 insertion failure cleans up only its partial sketch
-→ `SW-QR-MVP` accepted; the shown picture's SHA-256 signature equals a local
-`QrPictureRenderer` render of the same module result, so the picture is
-exactly the grown contour geometry → Create leaves sketch A open, the window
-and picture stay up → a second create is blocked while the sketch is being
-edited → after exiting, payload B produces a different picture signature and
-a second sketch matching payload B's contours while sketch A is untouched →
-close/reopen recreates the window with session state intact → unload releases
-everything and a reload connects fresh. Retained ticket-2 checks then verify
-each native sketch against the module's expectation (segment count, contour
-count, 1:1 contour bounding boxes at ≤1e-9 m, ring→hole→island nesting) and
-build a 60×60×5 mm backing plate + 2 mm Boss-Extrude + 1 mm Cut-Extrude
-(`Dir=true`) from the QR's material regions.
+Ticket-4 flow: open the modeless window → the fresh fields read 25 mm / 3%
+→ reopen (same window, `windows=1` — no duplicate) → create a part and
+select Front Plane **while the window is open** (proves the host stays
+interactive) → empty content rejected with no picture → injected line-3
+insertion failure cleans up only its partial sketch → `SW-QR-MVP` accepted;
+the shown picture's SHA-256 signature equals a local `QrPictureRenderer`
+render of the same module result → Create leaves sketch A open and the
+native outline measures the entered 25 mm → a second create is blocked while
+the sketch is being edited → after exiting, size/growth probes drive the
+request: unparseable, zero, negative and ≥50% values are rejected (request
+invalidated, text kept verbatim, no part mutation), 40 mm is accepted and
+growth 8% preserves it → the custom-size sketch measures 40 mm natively
+while input edits never resize the open or earlier sketches → fields
+restored to 25/3 → payload B produces a different picture signature and a
+second sketch matching payload B's contours while sketch A is untouched →
+close/reopen recreates the window with session state intact → unload
+releases everything and a reload connects fresh. Retained ticket-2 checks
+then verify each native sketch against the module's expectation (segment
+count, contour count, 1:1 contour bounding boxes at ≤1e-9 m,
+ring→hole→island nesting) and build a 60×60×5 mm backing plate + 2 mm
+Boss-Extrude + 1 mm Cut-Extrude (`Dir=true`) from the QR's material regions.
 
 WPF threading note (verified): probe calls arrive on MTA COM worker threads,
 so the add-in creates its window on a dedicated STA thread
@@ -149,8 +163,27 @@ A menu-command invocation takes the same path.
 SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
 terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
 
+**Attached-session guard:** `Activator.CreateInstance` returns the *running*
+instance when one exists — so if the engineer's SolidWorks is already open,
+the probe would attach to their interactive session instead of spawning an
+invisible one. The probe therefore refuses to run when the attached instance
+is visible or already holds documents, and only calls `ExitApp` on an
+instance it spawned fresh. A second ProgID argument selects the version
+(`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
+useful when another SolidWorks release is already running.
+
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
+- Ticket 4 size/growth run — **ALL CHECKS PASSED** (87): fresh-window fields
+  read 25 mm / 3% → payload-A sketch native outline measured 25.000 mm →
+  unparseable/zero/negative size and unparseable/0%/50% growth rejected
+  (request invalidated, verbatim text kept, no part mutation) → 40 mm custom
+  size accepted (request `size=40.000`, picture re-rendered) → growth 8%
+  preserved the entered 40 mm outline (pitch recalculation) → custom sketch
+  native outline measured 40.000 mm and stayed open → input edits while the
+  sketch was open changed nothing → earlier sketch kept its 25 mm outline →
+  defaults restored, payload-B sketch + close/reopen + unload/reload +
+  plate/Boss/Cut regressions all still green.
 - Ticket 3 windowed run — **ALL CHECKS PASSED** (57): modeless window open →
   focus-not-duplicate → part + selection while window open → empty-content
   refusal with no stale picture → injected-failure cleanup → payload A picture
