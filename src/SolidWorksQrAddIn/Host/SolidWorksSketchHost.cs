@@ -108,10 +108,7 @@ namespace SolidWorksQrAddIn.Host
 
             // Capture the sketch-manager flags the session may touch so they can
             // be restored exactly, on success and on failure.
-            bool prevAddToDB = mgr.AddToDB;
-            bool prevDisplayWhenAdded = mgr.DisplayWhenAdded;
-            bool prevAutoInference = mgr.AutoInference;
-            bool prevInferenceMode = mgr.InferenceMode;
+            var previousFlags = SketchManagerFlagSnapshot.Capture(mgr);
 
             // Group the whole creation into ONE named undo step when the host
             // supports it — undoing it then reverts exactly this operation,
@@ -151,8 +148,7 @@ namespace SolidWorksQrAddIn.Host
                 try
                 {
                     return new SwSketchInsertion(
-                        doc, mgr, sketchFeature, ext, recording,
-                        prevAddToDB, prevDisplayWhenAdded, prevAutoInference, prevInferenceMode);
+                        doc, mgr, sketchFeature, ext, recording, previousFlags);
                 }
                 catch (Exception ex)
                 {
@@ -177,37 +173,23 @@ namespace SolidWorksQrAddIn.Host
 
         /// <summary>
         /// Begin-time cleanup: exit the half-entered edit session and delete
-        /// only the sketch feature this begin created. Returns "" when the
-        /// document is clean, or a "may remain" note appended to the thrown
-        /// message — honest reporting, never a claimed rollback.
+        /// only the sketch feature this begin created — the same stages the
+        /// insertion session's abort runs. Returns "" when the document is
+        /// clean, or a "may remain" note appended to the thrown message —
+        /// honest reporting, never a claimed rollback.
         /// </summary>
         private static string AbandonNewSketch(IModelDoc2 doc, ISketchManager mgr, IFeature? created)
         {
             var note = "";
-            try { mgr.InsertSketch(false); }
-            catch (Exception ex)
-            {
-                note = $" Could not exit sketch edit mode: {ex.Message}.";
-            }
+            var exitError = OwnedSketchCleanup.ExitSketchEditMode(mgr);
+            if (exitError != null)
+                note = $" Could not exit sketch edit mode: {exitError}.";
             if (created == null)
                 return note;
-            try
-            {
-                doc.ClearSelection2(true);
-                var ext = doc.Extension as IModelDocExtension;
-                bool selected = ext != null && ext.SelectByID2(
-                    created.Name, "SKETCH", 0, 0, 0, false, 0, null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
-                bool deleted = selected && ext!.DeleteSelection2(0);
-                if (!deleted)
-                    note += $" The partial sketch '{created.Name}' could not be removed " +
-                            "and may remain in the feature tree.";
-            }
-            catch (Exception ex)
-            {
+            var deleteError = OwnedSketchCleanup.DeleteSketchFeature(doc, created);
+            if (deleteError != null)
                 note += $" The partial sketch '{created.Name}' could not be removed " +
-                        $"({ex.Message}) and may remain in the feature tree.";
-            }
+                        $"({deleteError}) and may remain in the feature tree.";
             return note;
         }
 

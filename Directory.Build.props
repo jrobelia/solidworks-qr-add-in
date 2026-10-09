@@ -11,5 +11,12 @@
     <Platforms>x64</Platforms>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
     <PlatformTarget>x64</PlatformTarget>
+
+    <!-- Reproducible restore (spec: "verify the selected NuGet assets during
+         restore/build"). Every project writes a committed packages.lock.json;
+         restoring in locked mode (dotnet restore locked-mode flag) fails when
+         a project file drifts from its lock file instead of silently
+         resolving different assets. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 </Project>

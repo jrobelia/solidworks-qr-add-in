@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Preview;
@@ -18,14 +19,21 @@ namespace SolidWorksQrAddIn.UI
     ///
     ///   - pushes the three field texts verbatim into the session
     ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
-    ///     <see cref="QrSketchSession.SetGrowthText"/>) on every edit,
+    ///     <see cref="QrSketchSession.SetGrowthText"/>) — DEBOUNCED, so a
+    ///     burst of keystrokes coalesces into one regeneration instead of
+    ///     regenerating a dense QR synchronously per keystroke,
     ///   - blits <see cref="QrSketchSession.Picture"/> (a Gray8 raster) into an
     ///     Image via BitmapSource.Create — the same grown contour result that
     ///     sketch insertion consumes,
     ///   - calls <see cref="QrSketchSession.CreateSketch"/> with a freshly
     ///     created host adapter (fresh host state every press — no cached
-    ///     support),
-    ///   - shows <see cref="QrSketchSession.StatusText"/>.
+    ///     support) — only AFTER flushing every pending field edit, so a
+    ///     create can never run on a stale, not-yet-regenerated request,
+    ///   - shows <see cref="QrSketchSession.StatusText"/>,
+    ///   - re-pulls everything on <see cref="SyncFromSession"/> — the session
+    ///     calls it whenever state changed without the window driving (a
+    ///     probe edit, a create outcome), so the shown fields and picture
+    ///     can never diverge from the session.
     ///
     /// Owned by the SolidWorks main window via WindowInteropHelper so it
     /// floats with the application; shown modeless so the engineer keeps
@@ -33,6 +41,13 @@ namespace SolidWorksQrAddIn.UI
     /// </summary>
     public sealed class QrSketchWindow : Window, IQrSketchWindow
     {
+        /// <summary>
+        /// How long after the last keystroke pending field edits are pushed
+        /// into the session. Dense payloads take seconds to regenerate —
+        /// regenerating per keystroke would make typing unbearable.
+        /// </summary>
+        private static readonly TimeSpan EditDebounce = TimeSpan.FromMilliseconds(400);
+
         private readonly QrSketchSession _session;
         private readonly Func<ISketchHost> _hostProvider;
         private readonly TextBox _contentBox;
@@ -40,7 +55,12 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBox _growthBox;
         private readonly Image _picture;
         private readonly TextBlock _status;
+        private readonly DispatcherTimer _editDebounce;
         private bool _isOpen;
+        private bool _contentDirty;
+        private bool _sizeDirty;
+        private bool _growthDirty;
+        private bool _suppressFieldEvents;
 
         /// <param name="session">Session state the window renders and drives.</param>
         /// <param name="hostProvider">Builds a fresh host adapter per Create — never cached.</param>
@@ -138,27 +158,30 @@ namespace SolidWorksQrAddIn.UI
             if (ownerHandle != IntPtr.Zero)
                 new WindowInteropHelper(this).Owner = ownerHandle;
 
-            _contentBox.TextChanged += (_, __) =>
+            _editDebounce = new DispatcherTimer { Interval = EditDebounce };
+            _editDebounce.Tick += (_, __) => FlushPendingEdits();
+            _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
+            _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
+            _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
+            Closed += (_, __) =>
             {
-                _session.SetContent(_contentBox.Text);
-                RefreshView();
+                _isOpen = false;
+                // Keep the session truthful: an edit typed just before the
+                // close still lands — the next window opens on the real inputs.
+                FlushPendingEdits();
             };
-            _sizeBox.TextChanged += (_, __) =>
-            {
-                _session.SetSizeText(_sizeBox.Text);
-                RefreshView();
-            };
-            _growthBox.TextChanged += (_, __) =>
-            {
-                _session.SetGrowthText(_growthBox.Text);
-                RefreshView();
-            };
-            Closed += (_, __) => _isOpen = false;
 
             // A recreated window picks up the session's existing inputs.
-            _contentBox.Text = _session.Content;
-            _sizeBox.Text = _session.SizeText;
-            _growthBox.Text = _session.GrowthText;
+            // Suppressed: the session already holds these exact values —
+            // assigning them is a pull, not an edit to push back.
+            _suppressFieldEvents = true;
+            try
+            {
+                _contentBox.Text = _session.Content;
+                _sizeBox.Text = _session.SizeText;
+                _growthBox.Text = _session.GrowthText;
+            }
+            finally { _suppressFieldEvents = false; }
             RefreshView();
         }
 
@@ -193,6 +216,29 @@ namespace SolidWorksQrAddIn.UI
         /// <summary>Interface close — marshalled; Window.Close stays public for WPF itself.</summary>
         void IQrSketchWindow.Close() => MarshalToUi(base.Close);
 
+        /// <summary>
+        /// The session changed without this window driving it (a probe edit,
+        /// a create outcome): re-pull the field texts, picture and status so
+        /// the shown view can never diverge from the session. A field with a
+        /// pending debounced edit keeps the engineer's in-progress text —
+        /// its queued flush will push the newer text back into the session.
+        /// </summary>
+        public void SyncFromSession() => MarshalToUi(() =>
+        {
+            _suppressFieldEvents = true;
+            try
+            {
+                if (!_contentDirty && _contentBox.Text != _session.Content)
+                    _contentBox.Text = _session.Content;
+                if (!_sizeDirty && _sizeBox.Text != _session.SizeText)
+                    _sizeBox.Text = _session.SizeText;
+                if (!_growthDirty && _growthBox.Text != _session.GrowthText)
+                    _growthBox.Text = _session.GrowthText;
+            }
+            finally { _suppressFieldEvents = false; }
+            RefreshView();
+        });
+
         private void MarshalToUi(Action action)
         {
             if (Dispatcher.CheckAccess())
@@ -203,10 +249,56 @@ namespace SolidWorksQrAddIn.UI
 
         // ---------------- view internals ----------------
 
+        // ---------------- debounced field edits ----------------
+        // A keystroke only MARKS the field dirty and restarts the timer; the
+        // expensive session regeneration runs once per quiet interval, not
+        // once per keystroke. The dirty flag is also the no-stale-request
+        // guard: Create flushes every pending edit before asking the session
+        // to create, so the request it validates is always the shown one.
+
+        private void MarkEdited(ref bool dirtyFlag)
+        {
+            if (_suppressFieldEvents)
+                return;   // a session→view text pull is not an edit
+            dirtyFlag = true;
+            _editDebounce.Stop();
+            _editDebounce.Start();
+        }
+
+        /// <summary>
+        /// Push every pending field edit into the session now, regenerating
+        /// once per dirty field. The debounce tick and Create both funnel
+        /// here — a create can never run on inputs that have not been
+        /// revalidated yet.
+        /// </summary>
+        private void FlushPendingEdits()
+        {
+            _editDebounce.Stop();
+            if (_contentDirty)
+            {
+                _contentDirty = false;
+                _session.SetContent(_contentBox.Text);
+            }
+            if (_sizeDirty)
+            {
+                _sizeDirty = false;
+                _session.SetSizeText(_sizeBox.Text);
+            }
+            if (_growthDirty)
+            {
+                _growthDirty = false;
+                _session.SetGrowthText(_growthBox.Text);
+            }
+            RefreshView();
+        }
+
         private void OnCreateClicked(object? sender, RoutedEventArgs e)
         {
             try
             {
+                // Flush BEFORE create: the request being created must be the
+                // one the engineer sees, never an earlier still-valid state.
+                FlushPendingEdits();
                 var result = _session.CreateSketch(_hostProvider());
                 ShowStatus(result.Message, isError: !result.Succeeded);
             }

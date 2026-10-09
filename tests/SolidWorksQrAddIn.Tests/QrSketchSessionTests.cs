@@ -169,6 +169,26 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains("Shorten", session.StatusText);
         }
 
+        [Fact]
+        public void A_valid_request_shows_a_plain_ready_status_with_no_readouts()
+        {
+            var (session, _) = NewSession();
+
+            session.SetContent(PayloadA);
+
+            // The window budget is content/size/growth/picture/Create — the
+            // status must not smuggle in QR-version, cell-count or size
+            // readouts (spec: no additional size readouts).
+            Assert.True(session.HasValidRequest);
+            Assert.Equal("Ready — select Create Sketch.", session.StatusText);
+            Assert.DoesNotContain("version", session.StatusText,
+                System.StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("cell", session.StatusText,
+                System.StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("mm", session.StatusText,
+                System.StringComparison.OrdinalIgnoreCase);
+        }
+
         // ---------------- create sketch ----------------
 
         [Fact]
@@ -406,6 +426,82 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, session.WindowsCreated);
             Assert.Equal(PayloadA, session.Content);
             Assert.NotNull(session.Picture);
+        }
+
+        // ---------------- session → window sync ----------------
+        // Session state can change without the window driving it — probe
+        // edits arrive with no keystroke. The session must tell the open
+        // window to re-pull field texts/picture/status so what is shown can
+        // never diverge from the session.
+
+        [Fact]
+        public void An_edit_made_outside_the_window_syncs_the_shown_view()
+        {
+            var (session, windows) = NewSession();
+            session.OpenOrFocusWindow();
+            var before = windows[0].SyncCount;
+
+            session.SetContent(PayloadA);
+
+            Assert.True(windows[0].SyncCount > before);
+        }
+
+        [Fact]
+        public void Every_field_edit_syncs_the_open_window()
+        {
+            var (session, windows) = NewSession();
+            session.OpenOrFocusWindow();
+            var before = windows[0].SyncCount;
+
+            session.SetContent(PayloadA);
+            session.SetSizeText("40");
+            session.SetGrowthText("8");
+
+            Assert.True(windows[0].SyncCount >= before + 3);
+        }
+
+        [Fact]
+        public void A_create_syncs_its_outcome_status_to_the_open_window()
+        {
+            var (session, windows) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.OpenOrFocusWindow();
+            session.SetContent(PayloadA);
+            var before = windows[0].SyncCount;
+
+            session.CreateSketch(host);
+
+            Assert.True(windows[0].SyncCount > before);
+        }
+
+        [Fact]
+        public void A_failed_create_syncs_its_outcome_status_to_the_open_window()
+        {
+            var (session, windows) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.OpenOrFocusWindow();
+            session.SetContent(PayloadA);
+            host.Document!.Selection.Clear();
+            var before = windows[0].SyncCount;
+
+            session.CreateSketch(host);
+
+            Assert.True(windows[0].SyncCount > before);
+        }
+
+        [Fact]
+        public void A_closed_window_is_no_longer_synced()
+        {
+            var (session, windows) = NewSession();
+            session.OpenOrFocusWindow();
+            windows[0].SimulateUserClose();
+            var count = windows[0].SyncCount;
+
+            session.SetContent(PayloadA);
+
+            // The dead view is left alone — the next window pulls the state
+            // fresh when it is created.
+            Assert.Equal(count, windows[0].SyncCount);
         }
 
         [Fact]

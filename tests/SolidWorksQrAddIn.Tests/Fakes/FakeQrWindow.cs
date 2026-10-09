@@ -15,7 +15,13 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public int FocusCount { get; private set; }
         public int CloseCount { get; private set; }
 
+        /// <summary>Times the session told the view to re-pull its state.</summary>
+        public int SyncCount { get; private set; }
+
         public event EventHandler? Closed;
+
+        /// <summary>The fake has no pixels — it just records that the sync happened.</summary>
+        public void SyncFromSession() => SyncCount++;
 
         public void ShowModeless()
         {

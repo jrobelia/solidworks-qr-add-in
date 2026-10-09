@@ -39,6 +39,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      focus the live window or create a fresh one through the injected
     ///      view factory. <see cref="Release"/> (add-in disconnect) closes and
     ///      drops it. The window itself is a thin view; all behaviour lives here.
+    ///      Because session state can also change WITHOUT the window driving —
+    ///      a probe-driven edit or create — every mutation notifies the open
+    ///      window (<see cref="IQrSketchWindow.SyncFromSession"/>) so the shown
+    ///      fields, picture and status can never diverge from the session.
     /// </summary>
     public sealed class QrSketchSession
     {
@@ -53,12 +57,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         private const string PromptText = "Enter the text or URL to encode.";
 
+        // The fields' initial text is DERIVED from the value constants —
+        // one source of truth, so the shown defaults can never drift from
+        // the parsed defaults they produce.
+        private static readonly string InitialSizeText =
+            InitialSizeMm.ToString(CultureInfo.InvariantCulture);
+        private static readonly string InitialGrowthPercentText =
+            (InitialGrowthFractionPerSide * 100.0).ToString(CultureInfo.InvariantCulture);
+
         private readonly Func<IQrSketchWindow> _windowFactory;
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
         private string _content = string.Empty;
-        private string _sizeText = "25";
-        private string _growthText = "3";
+        private string _sizeText = InitialSizeText;
+        private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QrSketchResult? _current;
@@ -162,17 +174,30 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 var sketch = _current.Sketch!;
                 Picture = QrPictureRenderer.Render(sketch, PreviewPixelsAcross);
-                StatusText =
-                    $"Ready — QR version {sketch.Info.Version}, " +
-                    $"{sketch.Info.CellCount}×{sketch.Info.CellCount} cells at " +
-                    $"{sketch.Info.FinalSizeMm:F1} mm. Select Create Sketch.";
+                // Plain status only — the window budget is
+                // content/size/growth/picture/Create; no version, cell-count
+                // or footprint readouts belong in the UI (spec).
+                StatusText = "Ready — select Create Sketch.";
             }
             else
             {
                 Picture = null;
                 StatusText = _current.Error!.Message;
             }
+            NotifyWindow();
             return _current;
+        }
+
+        /// <summary>
+        /// Tells the open window to re-pull field texts, picture and status.
+        /// Session state can change with no keystroke — a probe-driven edit —
+        /// and the shown window must never diverge from it. Best-effort: a
+        /// stuck view must not trap the caller.
+        /// </summary>
+        private void NotifyWindow()
+        {
+            try { _window?.SyncFromSession(); }
+            catch { /* a dead dispatcher or stuck view must not trap the session */ }
         }
 
         // ---------------- field parsing ----------------
@@ -186,62 +211,75 @@ namespace SolidWorksQrAddIn.Core.Interaction
             double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
             double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
 
+        /// <summary>How the shared numeric-field parse can fail — each field names it differently.</summary>
+        private enum NumericFieldError { None, Empty, NotANumber, OutOfRange }
+
+        /// <summary>
+        /// The pipeline both numeric fields share: trim, strip one optional
+        /// trailing unit, reject empty, parse a number, reject non-finite and
+        /// out-of-range values. Never substitutes a value — the caller owns
+        /// the field-specific error text.
+        /// </summary>
+        private static NumericFieldError ParseNumericField(
+            string? text, string unitSuffix, Func<double, bool> inRange, out double value)
+        {
+            value = 0;
+            var t = (text ?? string.Empty).Trim();
+            if (t.EndsWith(unitSuffix, StringComparison.OrdinalIgnoreCase))
+                t = t.Substring(0, t.Length - unitSuffix.Length).TrimEnd();
+            if (t.Length == 0)
+                return NumericFieldError.Empty;
+            if (!TryParseNumber(t, out double v))
+                return NumericFieldError.NotANumber;
+            if (double.IsNaN(v) || double.IsInfinity(v) || !inRange(v))
+                return NumericFieldError.OutOfRange;
+            value = v;
+            return NumericFieldError.None;
+        }
+
         private static bool TryParseSize(string text, out double sizeMm, out string error)
         {
-            sizeMm = 0;
-            var t = (text ?? string.Empty).Trim();
-            if (t.EndsWith("mm", StringComparison.OrdinalIgnoreCase))
-                t = t.Substring(0, t.Length - 2).TrimEnd();
-            if (t.Length == 0)
+            switch (ParseNumericField(text, "mm", v => v > 0.0, out sizeMm))
             {
-                error = "Size is empty. Enter the final grown QR outline width " +
-                        "in millimetres, excluding the clear margin.";
-                return false;
+                case NumericFieldError.Empty:
+                    error = "Size is empty. Enter the final grown QR outline width " +
+                            "in millimetres, excluding the clear margin.";
+                    return false;
+                case NumericFieldError.NotANumber:
+                    error = $"Size must be a number of millimetres — the final grown QR outline " +
+                            $"width, excluding the clear margin; got '{Shorten(text)}'.";
+                    return false;
+                case NumericFieldError.OutOfRange:
+                    error = $"Size must be a finite positive number of millimetres; got '{Shorten(text)}'.";
+                    return false;
+                default:
+                    error = string.Empty;
+                    return true;
             }
-            if (!TryParseNumber(t, out double v))
-            {
-                error = $"Size must be a number of millimetres — the final grown QR outline " +
-                        $"width, excluding the clear margin; got '{Shorten(text)}'.";
-                return false;
-            }
-            if (double.IsNaN(v) || double.IsInfinity(v) || v <= 0.0)
-            {
-                error = $"Size must be a finite positive number of millimetres; got '{Shorten(text)}'.";
-                return false;
-            }
-            sizeMm = v;
-            error = string.Empty;
-            return true;
         }
 
         private static bool TryParseGrowth(string text, out double growthFraction, out string error)
         {
             growthFraction = 0;
-            var t = (text ?? string.Empty).Trim();
-            if (t.EndsWith("%", StringComparison.Ordinal))
-                t = t.Substring(0, t.Length - 1).TrimEnd();
-            if (t.Length == 0)
+            switch (ParseNumericField(text, "%", p => p > 0.0 && p < 50.0, out double percent))
             {
-                error = "Outline growth is empty. Enter the percentage of cell width " +
-                        "grown per side.";
-                return false;
+                case NumericFieldError.Empty:
+                    error = "Outline growth is empty. Enter the percentage of cell width " +
+                            "grown per side.";
+                    return false;
+                case NumericFieldError.NotANumber:
+                    error = $"Outline growth must be a number — percent of cell width grown " +
+                            $"per side; got '{Shorten(text)}'.";
+                    return false;
+                case NumericFieldError.OutOfRange:
+                    error = $"Outline growth must be a finite percentage greater than 0% and " +
+                            $"less than 50% of cell width per side; got '{Shorten(text)}'.";
+                    return false;
+                default:
+                    growthFraction = percent / 100.0;
+                    error = string.Empty;
+                    return true;
             }
-            if (!TryParseNumber(t, out double percent))
-            {
-                error = $"Outline growth must be a number — percent of cell width grown " +
-                        $"per side; got '{Shorten(text)}'.";
-                return false;
-            }
-            if (double.IsNaN(percent) || double.IsInfinity(percent) ||
-                percent <= 0.0 || percent >= 50.0)
-            {
-                error = $"Outline growth must be a finite percentage greater than 0% and " +
-                        $"less than 50% of cell width per side; got '{Shorten(text)}'.";
-                return false;
-            }
-            growthFraction = percent / 100.0;
-            error = string.Empty;
-            return true;
         }
 
         /// <summary>Echo of the rejected input, capped so a huge paste can't flood the status line.</summary>
@@ -283,6 +321,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     $"The sketch could not be created: {ex.Message}");
             }
             StatusText = result.Message;
+            // The create outcome is session state too — a probe-driven create
+            // must land in the shown status exactly like a button click does.
+            NotifyWindow();
             return result;
         }
 
