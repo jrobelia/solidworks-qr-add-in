@@ -168,6 +168,30 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
+        public void A_selection_changed_to_another_valid_support_between_capture_and_begin_uses_the_fresh_one()
+        {
+            // Stale-selection mirror case: eligibility saw the plane, then the
+            // user selected a planar FACE before insertion began. The fresh
+            // selection is what gets used — the request is evaluated against
+            // the state at begin, not the earlier capture.
+            var session = new QrSketchSession(() => new FakeQrWindow());
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            session.SetContent(Content);
+
+            host.MutateBeforeBegin = d =>
+            {
+                d.Selection.Clear();
+                d.Selection.Add(FakeSelType.Face);
+            };
+
+            var result = session.CreateSketch(host);
+
+            Assert.True(result.Succeeded, result.Message);
+            Assert.Single(doc.Sketches);
+        }
+
+        [Fact]
         public void A_document_switched_to_one_without_a_valid_selection_is_refused_not_redirected()
         {
             // The dangerous stale-support case: eligibility saw doc A's plane,
