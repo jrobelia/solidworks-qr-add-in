@@ -9,7 +9,8 @@ namespace SolidWorksQrAddIn.Core.Commands
     /// <paramref name="sizeMm"/> final grown outline width with the requested
     /// <paramref name="growthFractionPerSide"/> outline growth, then inserts
     /// every validated contour as native sketch lines on the currently
-    /// selected baseline plane and leaves the new sketch open for editing.
+    /// selected support — one reference plane or one planar face — and leaves
+    /// the new sketch open for editing.
     ///
     /// Host state is captured fresh at call time — the active part, the
     /// selected support, and the no-sketch-being-edited rule are always
@@ -31,7 +32,7 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 case HostDocumentKind.None:
                     return CommandResult.Failure(
-                        "No active document. Open a part document, select a baseline plane, and run the command again.");
+                        "No active document. Open a part document, select a plane or planar face, and run the command again.");
                 case HostDocumentKind.Assembly:
                     return CommandResult.Failure(
                         "The active document is an assembly. The QR sketch command requires a part document.");
@@ -45,16 +46,34 @@ namespace SolidWorksQrAddIn.Core.Commands
 
             if (state.IsEditingSketch)
                 return CommandResult.Failure(
-                    "A sketch is already open for editing. Exit the current sketch, select a baseline plane, and run the command again.");
+                    "A sketch is already open for editing. Exit the current sketch, select a plane or planar face, and run the command again.");
 
             switch (state.Selection)
             {
+                // The two supported supports — proceed to generation.
+                case SupportSelection.ReferencePlane:
+                case SupportSelection.PlanarFace:
+                    break;
                 case SupportSelection.None:
                     return CommandResult.Failure(
-                        "No baseline plane is selected. Select one plane (e.g. Front Plane) and run the command again.");
+                        "No sketch support is selected. Select one reference plane or one planar face " +
+                        "and run the command again.");
+                case SupportSelection.Ambiguous:
+                    return CommandResult.Failure(
+                        "More than one entity is selected. Select exactly one reference plane or " +
+                        "planar face and run the command again.");
+                case SupportSelection.NonPlanarFace:
+                    return CommandResult.Failure(
+                        "The selected face is not planar. Select a flat (planar) face or a reference " +
+                        "plane and run the command again.");
                 case SupportSelection.Other:
                     return CommandResult.Failure(
-                        "The current selection is not a single baseline plane. Select exactly one plane and run the command again.");
+                        "The selected entity cannot support a sketch. Select one reference plane or " +
+                        "one planar face and run the command again.");
+                default:
+                    return CommandResult.Failure(
+                        "The current selection is not a usable sketch support. Select one reference " +
+                        "plane or one planar face and run the command again.");
             }
 
             // Generate + validate all geometry before the host is touched.

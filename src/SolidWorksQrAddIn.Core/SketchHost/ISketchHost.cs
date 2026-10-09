@@ -17,9 +17,31 @@ namespace SolidWorksQrAddIn.Core.Hosting
     {
         /// <summary>Nothing is selected.</summary>
         None,
-        /// <summary>Exactly one baseline datum plane (RefPlane feature) is selected.</summary>
-        BaselinePlane,
-        /// <summary>A selection exists but is not a single baseline plane.</summary>
+        /// <summary>
+        /// Exactly one reference (datum) plane is selected — a built-in plane
+        /// or a user-created one, at any orientation. (swSelDATUMPLANES.)
+        /// </summary>
+        ReferencePlane,
+        /// <summary>
+        /// Exactly one model face is selected and it is planar — it can
+        /// support a 2D sketch.
+        /// </summary>
+        PlanarFace,
+        /// <summary>
+        /// Exactly one face is selected but its surface is not planar
+        /// (cylinder, cone, sphere, B-surface, ...) — it cannot support a
+        /// 2D sketch.
+        /// </summary>
+        NonPlanarFace,
+        /// <summary>
+        /// More than one entity is selected — the intended support is
+        /// ambiguous. (Any combination, even two valid supports.)
+        /// </summary>
+        Ambiguous,
+        /// <summary>
+        /// Exactly one entity of a kind that cannot support a sketch is
+        /// selected (edge, vertex, axis, sketch, ...).
+        /// </summary>
         Other,
     }
 
@@ -49,10 +71,11 @@ namespace SolidWorksQrAddIn.Core.Hosting
         SketchHostState CaptureState();
 
         /// <summary>
-        /// Enters sketch-edit mode on the currently selected baseline plane and
-        /// returns a session bound to the newly created sketch. Throws
-        /// <see cref="SketchHostException"/> if the host cannot begin (the state
-        /// may have changed since <see cref="CaptureState"/>).
+        /// Enters sketch-edit mode on the currently selected support — one
+        /// reference plane or one planar face — and returns a session bound to
+        /// the newly created sketch. The selection is re-read at this point:
+        /// a stale or changed support must throw <see cref="SketchHostException"/>
+        /// rather than steer insertion onto a wrong entity.
         /// </summary>
         ISketchInsertion BeginSketchInsertion();
     }

@@ -80,7 +80,7 @@ namespace SolidWorksQrAddIn
                     AddinIdentity.CommandGroupUserId,
                     "QR Sketch",
                     "QR sketch commands",
-                    "Create QR sketches on a selected plane",
+                    "Create QR sketches on a selected plane or planar face",
                     -1, false, ref errors);
                 Diag.Log($"CreateCommandGroup2 errors={errors} group={(group == null ? "null" : "ok")}");
                 if (group == null)
@@ -89,8 +89,8 @@ namespace SolidWorksQrAddIn
                 group.AddCommandItem2(
                     "Create QR Sketch",
                     -1,
-                    "Insert a native QR-code sketch on the selected plane",
-                    "Encodes the fixed payload and creates one QR sketch on the selected plane, left open for editing",
+                    "Insert a native QR-code sketch on the selected plane or planar face",
+                    "Creates one QR sketch on the selected reference plane or planar face, left open for editing",
                     0,
                     "CreateQrSketch",
                     "EnableQrSketch",

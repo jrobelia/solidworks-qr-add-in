@@ -41,9 +41,13 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// "Baseline plane" for ticket 1 means exactly one selected datum plane
-        /// (swSelDATUMPLANES). Anything else — nothing selected, a planar face,
-        /// a multi-selection — is rejected so the error stays actionable.
+        /// Classifies the current selection in the terms the command needs.
+        /// A supported sketch support is exactly one reference plane
+        /// (swSelDATUMPLANES — built-in or user-created, any orientation) or
+        /// exactly one planar face (swSelFACES whose surface IsPlane()). A
+        /// face that fails the planarity check, an unsupported entity kind,
+        /// and any multi-selection each get their own classification so the
+        /// command's error can name the actual problem.
         /// </summary>
         private static SupportSelection ReadSelection(IModelDoc2 doc)
         {
@@ -53,10 +57,38 @@ namespace SolidWorksQrAddIn.Host
             int count = selMgr.GetSelectedObjectCount2(-1);
             if (count == 0)
                 return SupportSelection.None;
-            if (count == 1 &&
-                selMgr.GetSelectedObjectType3(1, -1) == (int)swSelectType_e.swSelDATUMPLANES)
-                return SupportSelection.BaselinePlane;
-            return SupportSelection.Other;
+            if (count > 1)
+                return SupportSelection.Ambiguous;
+            switch ((swSelectType_e)selMgr.GetSelectedObjectType3(1, -1))
+            {
+                case swSelectType_e.swSelDATUMPLANES:
+                    return SupportSelection.ReferencePlane;
+                case swSelectType_e.swSelFACES:
+                    return IsSelectedFacePlanar(selMgr)
+                        ? SupportSelection.PlanarFace
+                        : SupportSelection.NonPlanarFace;
+                default:
+                    return SupportSelection.Other;
+            }
+        }
+
+        /// <summary>
+        /// Planarity of the single selected face, via its surface. Any failure
+        /// to inspect the face counts as non-planar — an unsupported selection
+        /// must produce an error, never a sketch.
+        /// </summary>
+        private static bool IsSelectedFacePlanar(ISelectionMgr selMgr)
+        {
+            try
+            {
+                var face = selMgr.GetSelectedObject6(1, -1) as IFace2;
+                var surface = face?.GetSurface() as ISurface;
+                return surface?.IsPlane() == true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public ISketchInsertion BeginSketchInsertion()
@@ -68,9 +100,12 @@ namespace SolidWorksQrAddIn.Host
 
             // The selection could have changed since CaptureState — re-verify so
             // a stale selection can never steer insertion onto a wrong support.
-            if (ReadSelection(doc) != SupportSelection.BaselinePlane)
+            var selection = ReadSelection(doc);
+            if (selection != SupportSelection.ReferencePlane &&
+                selection != SupportSelection.PlanarFace)
                 throw new SketchHostException(
-                    "The selection changed; exactly one baseline plane must be selected.");
+                    "The selection changed; exactly one sketch support " +
+                    "(a reference plane or a planar face) must be selected.");
 
             // Capture the sketch-manager flags the session may touch so they can
             // be restored exactly, on success and on failure.

@@ -7,7 +7,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 {
     /// <summary>
     /// Selection-type codes mirroring swSelectType_e values, so the fake
-    /// exercises the same "is this a baseline plane" decision the native
+    /// exercises the same "can this support a sketch" decision the native
     /// adapter makes.
     /// </summary>
     public static class FakeSelType
@@ -52,6 +52,13 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>Selection as swSelectType_e-like codes, in selection order.</summary>
         public List<int> Selection { get; } = new List<int>();
+
+        /// <summary>
+        /// Whether the selected face is planar — the in-memory stand-in for
+        /// the native adapter's ISurface.IsPlane() check. Only consulted when
+        /// the single selected entity is a Face.
+        /// </summary>
+        public bool SelectedFaceIsPlanar { get; set; } = true;
 
         /// <summary>Sketch currently in edit mode, or null. Non-null means "already editing".</summary>
         public FakeSketch? ActiveSketch { get; set; }
@@ -103,6 +110,13 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
+        /// <summary>
+        /// Invoked inside <see cref="BeginSketchInsertion"/> just before its
+        /// re-validation — models a selection that changed between the
+        /// command's eligibility capture and the insertion begin.
+        /// </summary>
+        public Action<FakeDocument>? MutateBeforeBegin { get; set; }
+
         /// <summary>Times CaptureState was invoked — proves the host was (not) consulted.</summary>
         public int CaptureCount { get; private set; }
 
@@ -120,8 +134,14 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             SupportSelection selection;
             if (doc == null || doc.Selection.Count == 0)
                 selection = SupportSelection.None;
-            else if (doc.Selection.Count == 1 && doc.Selection[0] == FakeSelType.DatumPlane)
-                selection = SupportSelection.BaselinePlane;
+            else if (doc.Selection.Count > 1)
+                selection = SupportSelection.Ambiguous;
+            else if (doc.Selection[0] == FakeSelType.DatumPlane)
+                selection = SupportSelection.ReferencePlane;
+            else if (doc.Selection[0] == FakeSelType.Face)
+                selection = doc.SelectedFaceIsPlanar
+                    ? SupportSelection.PlanarFace
+                    : SupportSelection.NonPlanarFace;
             else
                 selection = SupportSelection.Other;
 
@@ -130,6 +150,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         public ISketchInsertion BeginSketchInsertion()
         {
+            var doc0 = Document;
+            if (doc0 != null)
+                MutateBeforeBegin?.Invoke(doc0);
             var state = CaptureState();
             if (BeginFailure != null)
                 throw new SketchHostException(BeginFailure);
@@ -137,8 +160,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                 throw new SketchHostException("BeginSketchInsertion requires an active part document.");
             if (state.IsEditingSketch)
                 throw new SketchHostException("A sketch is already open for editing.");
-            if (state.Selection != SupportSelection.BaselinePlane)
-                throw new SketchHostException("BeginSketchInsertion requires exactly one selected baseline plane.");
+            if (state.Selection != SupportSelection.ReferencePlane &&
+                state.Selection != SupportSelection.PlanarFace)
+                throw new SketchHostException(
+                    "BeginSketchInsertion requires exactly one selected support: " +
+                    "a reference plane or a planar face.");
 
             var doc = Document!;
             var sketch = new FakeSketch("Sketch" + doc.NextSketchNumber++);
