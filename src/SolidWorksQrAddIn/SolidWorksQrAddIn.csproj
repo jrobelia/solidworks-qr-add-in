@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The COM-visible SolidWorks add-in. References the SolidWorks 2023 SP5 API
+    interop assemblies from the installed SDK. The SDK location is configurable:
+      - MSBuild property:   -p:SolidWorksSdkDir="C:\path\to\api\redist"
+      - environment var:    SOLIDWORKS_SDK_DIR
+    Default: the standard install location for SOLIDWORKS 2023.
+    Interop types are embedded (EmbedInteropTypes) so no SolidWorks interop DLL
+    is copied into or required next to the add-in output.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>SolidWorksQrAddIn</AssemblyName>
+    <RootNamespace>SolidWorksQrAddIn</RootNamespace>
+
+    <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">$(SOLIDWORKS_SDK_DIR)</SolidWorksSdkDir>
+    <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksSdkDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.InteropServices.ComVisibleAttribute">
+      <_Parameter1>false</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SolidWorksQrAddIn.Core\SolidWorksQrAddIn.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SolidWorks.Interop.swpublished">
+      <HintPath>$(SolidWorksSdkDir)\SolidWorks.Interop.swpublished.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

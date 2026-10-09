@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Host-independent core: command logic, sketch-geometry plans, the host seam
+    (ISketchHost/ISketchInsertion), the test-hook contract, and the registration
+    plan. MUST NOT reference SolidWorks interop assemblies — the headless test
+    suite loads this assembly on machines with no SolidWorks installed.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>SolidWorksQrAddIn.Core</AssemblyName>
+    <RootNamespace>SolidWorksQrAddIn.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.InteropServices.ComVisibleAttribute">
+      <_Parameter1>false</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>
