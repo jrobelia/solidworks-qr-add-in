@@ -198,6 +198,15 @@ machine-wide changes are always an explicit user action.
   <deployDir>`). It refuses to touch a visible or document-holding
   SolidWorks session — run it only when no interactive session is open, then
   `taskkill /IM SLDWORKS.exe /F` reaps the invisible instance it spawned.
+- **Toolbar renders as a tiny empty sliver?** SolidWorks persists
+  command-group toolbar geometry per user under
+  `HKCU\Software\SolidWorks\SOLIDWORKS <year>\User Interface` — a toolbar
+  first shown without icons can be cached collapsed (observed 2026-10-09:
+  a 39×8 px docked rect). With SolidWorks closed, delete the toolbar's
+  records — the `Custom API Toolbars\<ToolbarID>` key (match `ModuleName`
+  to this add-in's CLSID), its `General-Bar<N>` record
+  (`BarID` = that ToolbarID), and every `uiCustomApiToolbars_c<ToolbarID>`
+  value — then reload; it regenerates at proper size.
 
 ## Verified record
 
