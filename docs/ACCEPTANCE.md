@@ -46,16 +46,14 @@ Run with SolidWorks **closed**.
       `HKCU\SOFTWARE\Classes\CLSID\{…}\InprocServer32\CodeBase` points at the
       installed DLL. **No other add-in's keys changed** — InvenTree
       `{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}` entries untouched.
-- [ ] Start SolidWorks → Tools → Add-Ins… — "SolidWorks QR Add-In" listed,
-      both boxes ticked → loads at startup. *(In the invisible COM-launched
-      instance the add-in did NOT auto-load despite AddInsStartup=1 —
-      consistent with earlier observations; interactive enumeration is
-      awaiting human verification. Runtime load/unload/reload via
-      `LoadAddIn`/`UnloadAddIn` is proven — see E.)*
-- [ ] Command present once: QR Sketch → **Create QR Sketch** (menu — no
+- [x] Start SolidWorks → Tools → Add-Ins… — "SolidWorks QR Add-In" listed,
+      both boxes ticked → loads at startup. *(Verified 2026-10-10 — the
+      Inno installer registered HKLM `AddIns`, the add-in appears in the
+      list and loads, and the task-pane surface works. Runtime
+      load/unload/reload via `LoadAddIn`/`UnloadAddIn` also proven — see E.)*
+- [x] Command present once: QR Sketch → **Create QR Sketch** (menu — no
       custom toolbar; the QR UI is a docked **QR Sketch task-pane tab**).
-      *(Command group created live — `CONNECTED group=20906` — but the
-      visual menu entry and task-pane tab need human verification.)*
+      *(Verified 2026-10-10 — engineer used the command and the pane.)*
 - [ ] Untick the session box → add-in unloads; retick → reloads.
       *(Proven programmatically instead: UnloadAddIn→LoadAddIn round-trip
       reconnects cleanly, single command group, no orphaned window.)*
@@ -80,7 +78,7 @@ Setup: open a fresh part document.
 Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 `(E)`; items that need eyes on an interactive session stay unchecked.
 
-- [ ] **D0a** Pane text entry: click into the **Text or URL** field and type —
+- [x] **D0a** Pane text entry: click into the **Text or URL** field and type —
       characters appear (`PaneElementHost` answers `WM_GETDLGCODE` with
       `DLGC_WANTCHARS|WANTALLKEYS|WANTARROWS|WANTTAB` at both the host and
       nested `HwndSource`; a forward-only `IMessageFilter` stays installed
@@ -88,12 +86,12 @@ Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
       (`%LOCALAPPDATA%\SolidWorksQrAddIn\debug.log`) should show `pane
       keyboard filter installed`, `pane host answered WM_GETDLGCODE`, and
       `pane host saw WM_CHAR` after typing. *(Inherently interactive —
-      awaiting human verification.)*
-- [ ] **D0b** Pane tab icon: the **QR Sketch** task-pane tab shows the QR
+      verified 2026-10-10 — engineer confirmed typing works.)*
+- [x] **D0b** Pane tab icon: the **QR Sketch** task-pane tab shows the QR
       glyph icon — a dedicated `qr-tab-18.png` extracted under
       `%LOCALAPPDATA%\SolidWorksQrAddIn\icons` (tab icons render ~16-18px;
       the 32px menu strip was silently ignored). *(Awaiting human
-      verification.)*
+      verified 2026-10-10 — engineer confirmed.)*
 - [x] **D1** Select **Front Plane** → run the command → the modeless window
       opens: fields read **25** (mm) and **3** (%), no size presets. (E)
 - [ ] **D2** Enter content `SW-QR-MVP` → a black-on-white QR picture appears;
