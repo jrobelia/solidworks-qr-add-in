@@ -117,6 +117,21 @@ namespace SolidWorksQrAddIn.Core
         string UndoRedoQrProbe();
 
         /// <summary>
+        /// Sketch-block-instance spike (verification-only): each test number
+        /// creates a fresh throwaway part document on the SolidWorks UI
+        /// thread, runs one block-API experiment, closes the document, and
+        /// returns a one-line "BLK&lt;n&gt; ..." result. -1 is a ping (no
+        /// document touched).
+        ///   1 block-instance geometry as an extrude/cut profile
+        ///   2 driving-dimension rescale + direct instance Scale/Angle
+        ///   3 relations from host-sketch entities to block-instance geometry
+        ///   4 the MakeSketchBlockFromSelected / InsertSketchBlockInstance
+        ///     creation sequence
+        ///   5 AddDimension2 inside the definition travelling into the block
+        /// </summary>
+        string BlockSpikeProbe(int test);
+
+        /// <summary>
         /// Fingerprint of the session's current picture:
         /// "PIC &lt;w&gt;x&lt;h&gt; dark=&lt;n&gt; sha=&lt;hash&gt;" or "NO-PICTURE"
         /// when the current content is invalid. Lets the harness prove the
