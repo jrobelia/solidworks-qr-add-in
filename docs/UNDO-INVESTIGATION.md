@@ -133,3 +133,41 @@ Run when no interactive session is open:
   machine). Activation attached to the running session; the probe's
   visible/docs guard correctly refused (`visible=True docs=192`). **No
   session-free window exists; matrix deferred.**
+
+## Live run — 2026-10-09 (session-free invisible SW 2023 SP5, rev 31.5.0)
+
+    ARR9  finish=false  (empty recording, control)
+    ARR0  finish=not-called  undoRemoved=False  (no recording, interactive)
+    ARR1  finish=TRUE   undoRemoved=True   (rec BEFORE InsertSketch, AddToDB off)
+    ARR2  finish=false  undoRemoved=False  (rec BEFORE InsertSketch, AddToDB ON)
+    ARR3  finish=TRUE   undoRemoved=False  (rec AFTER InsertSketch, AddToDB off)
+    ARR4  finish=false  undoRemoved=False  (= product shape: rec after, AddToDB on)
+    ARR5,6,8,10,11,14  finish=false  undoRemoved=False  (all AddToDB-on variants)
+    ARR12(inner=1) finish=TRUE   undoRemoved=True   (STA UI thread)
+    ARR7 (inner=4) finish=false  undoRemoved=False  (STA UI thread)
+    ARR13(inner=0) finish=not-called undoRemoved=False (STA control)
+
+### Verdict
+
+- **H1 disproved** — STA vs MTA made zero difference (ARR12=ARR1, ARR7=ARR4).
+  The probe path was not the problem.
+- **H2 confirmed** — recording must start BEFORE `InsertSketch`; ARR3
+  (start after) finished TRUE but captured an empty unit (undoRemoved=False).
+- **AddToDB confirmed as the killer** — every AddToDB-on arrangement failed
+  regardless of timing/thread; direct-to-DB writes bypass the undo log.
+- ARR9's false matches "nothing recorded → false", not a dead context —
+  ARR1 proves recording works on this build.
+
+### Root cause + fix paths
+
+Product path uses `AddToDB=true` (needed for reliable ~250-segment
+insertion) + starts recording after `InsertSketch`. Both must change for a
+native named undo — or keep AddToDB and add a custom undo object:
+
+- **A. `SetApiUndoObject` custom undo** — keep AddToDB performance;
+  after creation, register an undo object whose Undo deletes the created
+  sketch (and Redo restores). Genuine fix, medium effort, verifiable live.
+- **B. Drop AddToDB + record before InsertSketch** — simplest; native undo
+  for free (ARR1 proves it); but insertion speed/reliability at QR segment
+  counts is unproven (AddToDB was chosen for exactly that).
+- **C. Accept limitation** — D17 wording already honest.
