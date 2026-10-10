@@ -42,11 +42,15 @@ unregister-addin-hkcu.ps1    per-user removal
 licenses\                    full license texts for the shipped dependencies
 ```
 
-At first load the add-in also writes `icons\qr-cmd-{20,32,40,64,96,128}.png`
-next to the DLL — the QR command group carries icons
-(`ICommandGroup.IconList`/`MainIconList`, one PNG strip per SolidWorks
-resolution; the single command is `ImageIndex` 0). The write is idempotent
-and best-effort: a read-only folder leaves the command reachable by name.
+At first load the add-in also writes `qr-cmd-{20,32,40,64,96,128}.png` into
+`%LOCALAPPDATA%\SolidWorksQrAddIn\icons` (falling back to `icons\` beside the
+DLL when the per-user folder is unavailable — the unpacked dev case) — the QR
+command group carries icons (`ICommandGroup.IconList`/`MainIconList`, one PNG
+strip per SolidWorks resolution; the single command is `ImageIndex` 0) and
+the 32px strip doubles as the task-pane tab icon. Per-user-first matters
+under the Inno installer: the deployed DLL lives in Program Files, which is
+read-only. The write is idempotent and best-effort: a failed extraction
+leaves the command reachable by name and the tab unadorned.
 
 **Not shipped, on purpose:** `SolidWorks.Interop.*.dll` — interop types are
 embedded (`EmbedInteropTypes`), so the installed SDK's assemblies are not
@@ -150,6 +154,16 @@ a bare file check would let 4.6/4.7 hosts through and fail mid-install.
    `ElementHost`). There is no custom toolbar; engineers who want a button
    can add the command via Tools → Customize.
 
+   *Keyboard note:* SolidWorks' task-pane message pump consumes `WM_CHAR`
+   before a hosted WPF `HwndSource` sees it — without mitigation the pane's
+   text boxes accept Backspace but no typed characters. For the pane's
+   lifetime (ConnectToSW → DisconnectFromSW, once each) the add-in installs a
+   forward-only WinForms `IMessageFilter` that re-raises every thread message
+   through `System.Windows.Interop.ComponentDispatcher` — the canonical
+   hosted-WPF fix; it never eats messages, so SolidWorks and other add-ins
+   are unaffected. Install/removal are logged (`pane keyboard filter
+   installed` / `removed`) and are best-effort, never fatal.
+
 ## Loading and unloading inside SolidWorks
 
 - **Tools → Add-Ins…**: the left checkbox loads/unloads for the current
@@ -221,7 +235,10 @@ machine-wide changes are always an explicit user action.
 ## Diagnostics
 
 - The add-in appends `SolidWorksQrAddIn.debug.log` beside the deployed DLL
-  (connection, `task pane created`, failures).
+  (connection, `task pane created`, `pane keyboard filter installed`,
+  icon-extraction target, failures). Under a Program Files install the log
+  write itself is best-effort and may silently not appear — it is never
+  fatal.
 - Dependencies (`Core`, `QRCoder`, `Clipper2Lib`) resolve from the deployed
   folder via an `AssemblyResolve` handler — all four DLLs must stay together.
 - The `IAddInProbe` COM methods (`RunQrSketchProbe`, `RunFailingQrSketchProbe`,

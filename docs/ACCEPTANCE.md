@@ -80,6 +80,15 @@ Setup: open a fresh part document.
 Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 `(E)`; items that need eyes on an interactive session stay unchecked.
 
+- [ ] **D0a** Pane text entry: click into the **Text or URL** field and type —
+      characters appear (a WinForms `IMessageFilter` forwarding thread
+      messages through `ComponentDispatcher` is installed for the pane's
+      lifetime; `pane keyboard filter installed` appears in the debug log).
+      *(Inherently interactive — awaiting human verification.)*
+- [ ] **D0b** Pane tab icon: the **QR Sketch** task-pane tab shows the QR
+      glyph icon — extracted under `%LOCALAPPDATA%\SolidWorksQrAddIn\icons`
+      (per-user; the installed DLL folder is read-only). *(Awaiting human
+      verification.)*
 - [x] **D1** Select **Front Plane** → run the command → the modeless window
       opens: fields read **25** (mm) and **3** (%), no size presets. (E)
 - [ ] **D2** Enter content `SW-QR-MVP` → a black-on-white QR picture appears;
