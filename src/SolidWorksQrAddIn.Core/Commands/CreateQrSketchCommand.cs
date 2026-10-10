@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 
@@ -123,6 +124,11 @@ namespace SolidWorksQrAddIn.Core.Commands
                 foreach (var edge in sketch.Edges)
                     insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
                 insertion.KeepOpen();
+                // A committed creation earns its named undo step — custom
+                // undo objects (AddToDB bypasses native recording, so this
+                // is THE undo step). Best-effort: undo plumbing must never
+                // fail or mutate a creation that already succeeded.
+                TryRegisterUndo(host, sketch, insertion);
             }
             catch (Exception ex)
             {
@@ -155,6 +161,25 @@ namespace SolidWorksQrAddIn.Core.Commands
             }
 
             return CommandResult.Success(SafeSketchName(insertion), SafeLineCount(insertion));
+        }
+
+        /// <summary>
+        /// Hands the host the undo-step registration for the just-committed
+        /// sketch. The contract already forbids throwing here; this guard is
+        /// belt-and-braces so even a host violating it cannot fail or undo a
+        /// creation that succeeded.
+        /// </summary>
+        private static void TryRegisterUndo(
+            ISketchHost host, QrSketch sketch, ISketchInsertion insertion)
+        {
+            try
+            {
+                host.RegisterSketchUndo(new SketchUndoRegistration(
+                    SketchHostContract.CreationUndoName,
+                    SafeSketchName(insertion),
+                    sketch.Edges.ToList()));
+            }
+            catch { /* the undo step is a nicety; the created sketch stands */ }
         }
 
         /// <summary>

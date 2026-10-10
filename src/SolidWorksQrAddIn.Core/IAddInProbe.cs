@@ -105,6 +105,18 @@ namespace SolidWorksQrAddIn.Core
         string UndoArrangementProbe(int arrangement);
 
         /// <summary>
+        /// Custom-undo verification (SetApiUndoObject): creates a throwaway
+        /// part document, draws a small USER sketch first (prior work that
+        /// must survive), runs the real session create for the QR sketch,
+        /// then EditUndo2(1) → EditRedo2(1) → EditUndo2(1) and reports what
+        /// each step did. Returns one line:
+        /// "APIUNDO undoRemoved=&lt;bool&gt; userIntact=&lt;bool&gt;
+        ///  redoRestored=&lt;bool&gt; undoneAgain=&lt;bool&gt; ..." plus the
+        /// sketch names involved. The document is closed afterwards.
+        /// </summary>
+        string UndoRedoQrProbe();
+
+        /// <summary>
         /// Fingerprint of the session's current picture:
         /// "PIC &lt;w&gt;x&lt;h&gt; dark=&lt;n&gt; sha=&lt;hash&gt;" or "NO-PICTURE"
         /// when the current content is invalid. Lets the harness prove the

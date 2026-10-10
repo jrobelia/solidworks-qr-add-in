@@ -171,3 +171,78 @@ native named undo — or keep AddToDB and add a custom undo object:
   for free (ARR1 proves it); but insertion speed/reliability at QR segment
   counts is unproven (AddToDB was chosen for exactly that).
 - **C. Accept limitation** — D17 wording already honest.
+
+## Fix implemented — path A (branch `feature/custom-undo`, live-verified 2026-10-10)
+
+### API found (SW 2023 SP5 interop)
+
+- `bool IModelDocExtension.SetApiUndoObject(object PHandler, string DisplayName)`
+  — PHandler marshals as an interface pointer; DisplayName appears on the
+  document's undo list. Available since SW 2008.
+- `ISwUndoAPIHandler` (swpublished, IID `CE926859-CD92-4BC6-A0AF-1079544AC3EA`):
+  `DoUndo()` + `UndoReSet()` — the ONLY callbacks. No redo method exists.
+  `UndoReSet` fires on undo-list reset (doc close, ClearUndoList) — release
+  all document references there.
+
+### Marshal pitfall (found live)
+
+Passing a class exposing only `ISwUndoAPIHandler` with
+`ClassInterfaceType.None` fails inside `InterfaceMarshaler.ConvertToNative`
+with `InvalidCastException`. Working shape: `ComVisible(true)` +
+`ClassInterfaceType.AutoDispatch` + implement BOTH `ISwUndoAPIHandler` and
+the `SwUndoAPIHandler` coclass interface — verified on SW 31.5.0.
+
+### Live results (session-free invisible SW 31.5.0, probe `UndoRedoQrProbe` /
+`LiveProbe.exe undoapi`)
+
+```
+APIUNDO user='Sketch1' qr='Sketch2' n0=2
+  undoPresses=2 removed=True
+  nativeRedoPresses=2 (dead — EditRedo never calls the handler)
+  restored=True restorePresses=1 userIntact=True
+u1: re-entered sketch edit mode (the exit-session step above ours)
+u2: DoUndo → "created sketch deleted" (n=1, only the QR sketch)
+r1,r2: no handler invocation, nothing restored
+x1: DoUndo toggle → sketch reinserted via the same insertion pipeline (n=2)
+```
+
+### Semantics verified
+
+- **Registration stacks** — each create registers a fresh undo object; the
+  shipped VBA sample loops registrations the same way.
+- **Undo granularity** — the creation leaves the sketch open in edit mode,
+  so exiting pushes an edit-session step ABOVE the API step: the first
+  Ctrl+Z re-enters the edit session (identical to undoing any open sketch),
+  the second fires `DoUndo` and deletes exactly the created sketch.
+- **Delete safety** — the handler deletes by feature ID (`IFeature.GetID()`,
+  document-unique, never reused), not by name: a user sketch reusing the
+  name is a different ID and survives; an already-deleted sketch is a no-op.
+- **Redo is not supported by the API** — `EditRedo2` never invokes the
+  handler (verified: 2 presses, no callback, nothing restored). The restore
+  path: after a successful delete the handler re-registers ITSELF, so the
+  next undo press re-fires `DoUndo` and the toggle re-inserts the captured
+  edges on the reselected support (datum-plane feature via `Select2`, face
+  entity via `IEntity.Select4`) through the same
+  `SolidWorksSketchHost.BeginOnSelectedSupport` pipeline. The reinsert
+  branch deliberately does NOT re-register — a permanent self-renewing
+  toggle on top of the undo list would block deeper undo history.
+- **Fail-open** — any registration failure only logs; creation never breaks
+  for undo plumbing.
+- Not live-verified: redo reinsert on a planar FACE support (probe used
+  Front Plane); multiple QR creates' stacked undo objects behave per the
+  one-verify run.
+
+### Files
+
+- `src/SolidWorksQrAddIn/Host/QrSketchUndoObject.cs` — COM-visible
+  `ISwUndoAPIHandler`/`SwUndoAPIHandler` implementation + registry
+  (refcount for the CCW; `UndoReSet`/`DisconnectFromSW` release COM refs).
+- `SolidWorksSketchHost` — captures the pending-undo context at Begin
+  (doc, sketch feature, support object); `RegisterSketchUndo` calls
+  `SetApiUndoObject`. `BeginOnSelectedSupport` is shared with the redo path.
+- `CreateQrSketchCommand` — calls `host.RegisterSketchUndo(...)` after a
+  committed `KeepOpen`, wrapped so it can never fail the creation.
+- `ISketchHost.RegisterSketchUndo` + `SketchUndoRegistration` — the seam;
+  `TestSketchHost` models the step (identity-delete revert + redo re-add);
+  7 new tests (`CustomUndoRegistrationTests`) — 245 total, was 238.
+- `IAddInProbe.UndoRedoQrProbe` + `LiveProbe undoapi` — the live gate.

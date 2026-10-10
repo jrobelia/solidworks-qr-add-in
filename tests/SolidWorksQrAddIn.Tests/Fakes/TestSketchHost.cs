@@ -50,6 +50,13 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public FakeUndoStep(string name) { Name = name; }
         public string Name { get; }
         public List<Action> Reverts { get; } = new List<Action>();
+
+        /// <summary>
+        /// The redo half for steps registered by an API undo object — the
+        /// single-callback toggle modelled after ISwUndoAPIHandler.DoUndo.
+        /// Null for recorded steps (no redo support).
+        /// </summary>
+        public Action? DoRedo { get; set; }
     }
 
     /// <summary>A lightweight in-memory part/assembly/drawing.</summary>
@@ -116,6 +123,18 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>Records one undoable mutation inside the open scope.</summary>
         public void RecordUndoable(Action revert) => _recording?.Add(revert);
 
+        /// <summary>
+        /// Closes the recording scope WITHOUT producing a step — mirrors the
+        /// live-verified verdict that FinishRecordingUndoObject2 is refused
+        /// for AddToDB insertion: a committed creation's recording leaves no
+        /// trace on the undo list; the named step now comes from
+        /// RegisterSketchUndo instead.
+        /// </summary>
+        public void DiscardUndoRecording()
+        {
+            _recording = null;
+        }
+
         /// <summary>Closes the scope as ONE named undo step (FinishRecordingUndoObject).</summary>
         public void FinishUndoRecording(string name)
         {
@@ -138,9 +157,16 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             UndoSteps.Add(step);
         }
 
+        // Redo stack — an undone step lands here, newest last.
+        private readonly List<FakeUndoStep> _redoSteps = new List<FakeUndoStep>();
+
+        /// <summary>Steps waiting to be redone (EditRedo), oldest first.</summary>
+        public IReadOnlyList<FakeUndoStep> RedoSteps => _redoSteps;
+
         /// <summary>
         /// EditUndo2(1): reverts exactly the newest step, newest recorded
-        /// mutation first. Returns false when nothing is undoable.
+        /// mutation first, and moves it to the redo stack. Returns false
+        /// when nothing is undoable.
         /// </summary>
         public bool UndoLastStep()
         {
@@ -149,6 +175,22 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             UndoSteps.RemoveAt(UndoSteps.Count - 1);
             for (var i = step.Reverts.Count - 1; i >= 0; i--)
                 step.Reverts[i]();
+            _redoSteps.Add(step);
+            return true;
+        }
+
+        /// <summary>
+        /// EditRedo2(1): re-applies the most recently undone step — for an
+        /// API-undo step, the same handler toggles back (reinsert). Returns
+        /// false when nothing is redoable.
+        /// </summary>
+        public bool RedoLastStep()
+        {
+            if (_redoSteps.Count == 0) return false;
+            var step = _redoSteps[_redoSteps.Count - 1];
+            _redoSteps.RemoveAt(_redoSteps.Count - 1);
+            step.DoRedo?.Invoke();
+            UndoSteps.Add(step);
             return true;
         }
 
@@ -248,6 +290,51 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>Times BeginSketchInsertion ran — proves no host mutation happened when 0.</summary>
         public int BeginCount { get; private set; }
+
+        /// <summary>
+        /// When true, RegisterSketchUndo throws a non-seam exception — models
+        /// a SetApiUndoObject failure. The creation must still succeed: undo
+        /// plumbing can never break a committed sketch.
+        /// </summary>
+        public bool FailUndoRegistration { get; set; }
+
+        /// <summary>Every registration the command handed this host, in order.</summary>
+        public List<SketchUndoRegistration> UndoRegistrations { get; } =
+            new List<SketchUndoRegistration>();
+
+        /// <summary>
+        /// The custom-undo registration the native adapter performs through
+        /// SetApiUndoObject. Modelled as one named undo step whose revert
+        /// removes exactly the created sketch (by identity — an
+        /// already-removed sketch is a safe no-op, a user feature is never
+        /// touched) and whose redo re-adds it, like DoUndo toggling.
+        /// </summary>
+        public void RegisterSketchUndo(SketchUndoRegistration registration)
+        {
+            UndoRegistrations.Add(registration);
+            if (FailUndoRegistration)
+                throw new InvalidOperationException(
+                    "Injected: the host could not register the undo step.");
+            var doc = Document;
+            if (doc == null) return;
+            var target = doc.Sketches.Find(s => s.Name == registration.SketchName);
+            var step = new FakeUndoStep(registration.UndoName);
+            step.Reverts.Add(() =>
+            {
+                if (target != null)
+                {
+                    doc.Sketches.Remove(target);
+                    if (ReferenceEquals(doc.ActiveSketch, target))
+                        doc.ActiveSketch = null;
+                }
+            });
+            step.DoRedo = () =>
+            {
+                if (target != null && !doc.Sketches.Contains(target))
+                    doc.Sketches.Add(target);
+            };
+            doc.UndoSteps.Add(step);
+        }
 
         public SketchHostState CaptureState()
         {
@@ -390,8 +477,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             if (_host.KeepOpenThrows)
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
             _committed = true;
-            // The creation becomes ONE named undo step on commit.
-            _doc.FinishUndoRecording(SketchHostContract.CreationUndoName);
+            // Live-verified on SW 2023 SP5: the AddToDB recording is refused
+            // (FinishRecordingUndoObject2 returns false), so a committed
+            // creation produces NO step from the recording — the named undo
+            // step arrives separately via RegisterSketchUndo.
+            _doc.DiscardUndoRecording();
         }
 
         public CleanupOutcome Abort()

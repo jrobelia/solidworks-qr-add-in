@@ -14,6 +14,22 @@ namespace SolidWorksQrAddIn.Host
     {
         private readonly ISldWorks _sw;
 
+        /// <summary>
+        /// The document/feature/support captured by the last successful
+        /// <see cref="BeginSketchInsertion"/> on this adapter — what
+        /// <see cref="RegisterSketchUndo"/> binds the custom undo object to.
+        /// Null until the first begin on this instance.
+        /// </summary>
+        private PendingUndoContext? _pendingUndo;
+
+        /// <summary>What a custom undo object needs beyond the seam-level registration payload.</summary>
+        private sealed class PendingUndoContext
+        {
+            public IModelDoc2 Doc = null!;
+            public IFeature Sketch = null!;
+            public object? Support;   // IFeature (datum plane) or IEntity (face)
+        }
+
         public SolidWorksSketchHost(ISldWorks sw)
         {
             _sw = sw ?? throw new ArgumentNullException(nameof(sw));
@@ -94,6 +110,75 @@ namespace SolidWorksQrAddIn.Host
         {
             var doc = _sw.IActiveDoc2 as IModelDoc2
                 ?? throw new SketchHostException("No active document.");
+            var insertion = BeginOnSelectedSupport(doc, recordUndo: true, out var support);
+            // The undo-step plumbing the command calls next binds to THIS
+            // begin's context — the doc, the sketch feature it created, and
+            // the support a redo would reselect.
+            _pendingUndo = new PendingUndoContext
+            {
+                Doc = doc,
+                Sketch = insertion.Feature,
+                Support = support,
+            };
+            return insertion;
+        }
+
+        /// <summary>
+        /// Registers the custom undo object for the sketch the last begin
+        /// created: AddToDB insertion bypasses native undo recording
+        /// (live-verified on SW 2023 SP5 — FinishRecordingUndoObject2 is
+        /// refused in every arrangement), so SetApiUndoObject is the only
+        /// working named step. A step named "Create QR Sketch" lands on the
+        /// document's undo list; its handler deletes exactly the created
+        /// feature on undo and re-inserts the captured geometry on redo.
+        /// Best-effort: every failure only logs — creation must never break
+        /// for undo plumbing.
+        /// </summary>
+        public void RegisterSketchUndo(SketchUndoRegistration registration)
+        {
+            try
+            {
+                var pending = _pendingUndo;
+                _pendingUndo = null;
+                if (pending == null)
+                {
+                    Diag.Log("RegisterSketchUndo called without a pending insertion — skipped");
+                    return;
+                }
+                var ext = pending.Doc.Extension as IModelDocExtension;
+                if (ext == null)
+                {
+                    Diag.Log("RegisterSketchUndo: the document exposed no extension interface");
+                    return;
+                }
+                var handler = new QrSketchUndoObject();
+                handler.Initialize(
+                    pending.Doc, pending.Sketch, pending.Support,
+                    registration.UndoName, registration.Edges);
+                if (ext.SetApiUndoObject(handler, registration.UndoName))
+                    QrSketchUndoRegistry.Keep(handler);
+                else
+                    Diag.Log("SetApiUndoObject returned false — no named undo step registered");
+            }
+            catch (Exception ex)
+            {
+                Diag.Log($"SetApiUndoObject registration failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// The shared "enter edit mode on the current selection + open a
+        /// session" pipeline — the user create path
+        /// (<paramref name="recordUndo"/>=true wraps it in the best-effort
+        /// recording scope) and the undo object's redo reinsert
+        /// (<paramref name="recordUndo"/>=false — the step IS the undo
+        /// object, a recording inside it would only be refused again).
+        /// Also captures the selected support object (datum-plane feature or
+        /// face entity) for the undo object's redo path.
+        /// </summary>
+        internal static SwSketchInsertion BeginOnSelectedSupport(
+            IModelDoc2 doc, bool recordUndo, out object? capturedSupport)
+        {
             var mgr = doc.SketchManager as ISketchManager
                 ?? throw new SketchHostException("SolidWorks did not expose a sketch manager.");
 
@@ -105,6 +190,12 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchHostException(
                     "The selection changed; exactly one sketch support " +
                     "(a reference plane or a planar face) must be selected.");
+
+            // Grab the support OBJECT before InsertSketch clears the
+            // selection — the undo object's redo needs it to reselect the
+            // same plane/face. Best-effort: losing it still leaves a working
+            // undo (delete), just no redo reinsert.
+            capturedSupport = CaptureSelectedSupport(doc);
 
             // Capture the sketch-manager flags the session may touch so they can
             // be restored exactly, on success and on failure.
@@ -138,7 +229,7 @@ namespace SolidWorksQrAddIn.Host
 
                 try
                 {
-                    if (ext != null)
+                    if (recordUndo && ext != null)
                     {
                         ext.StartRecordingUndoObject();
                         recording = true;
@@ -174,6 +265,27 @@ namespace SolidWorksQrAddIn.Host
                     : $"SolidWorks could not start a sketch on the selected support: {ex.Message}";
                 throw new SketchHostException(why + leftover);
             }
+        }
+
+        /// <summary>
+        /// The selected support as a COM object the undo object's redo can
+        /// reselect: a datum plane arrives as its IFeature, a face as the
+        /// IFace2's IEntity. Anything unreadable is null — undo still works,
+        /// redo just has nothing to reselect.
+        /// </summary>
+        private static object? CaptureSelectedSupport(IModelDoc2 doc)
+        {
+            try
+            {
+                var selMgr = doc.ISelectionManager as ISelectionMgr;
+                var selected = selMgr?.GetSelectedObject6(1, -1);
+                if (selected is IEntity entity)
+                    return entity;              // faces (any entity-shaped support)
+                if (selected is IFeature planeFeature)
+                    return planeFeature;        // datum/reference planes
+            }
+            catch { /* support capture is best-effort */ }
+            return null;
         }
 
         /// <summary>
