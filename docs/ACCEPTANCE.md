@@ -52,9 +52,10 @@ Run with SolidWorks **closed**.
       consistent with earlier observations; interactive enumeration is
       awaiting human verification. Runtime load/unload/reload via
       `LoadAddIn`/`UnloadAddIn` is proven — see E.)*
-- [ ] Command present once: QR Sketch → **Create QR Sketch** (menu and/or
-      toolbar). *(Command group created live — `CONNECTED group=20906` —
-      but the visual menu entry needs human verification.)*
+- [ ] Command present once: QR Sketch → **Create QR Sketch** (menu — no
+      custom toolbar; the QR UI is a docked **QR Sketch task-pane tab**).
+      *(Command group created live — `CONNECTED group=20906` — but the
+      visual menu entry and task-pane tab need human verification.)*
 - [ ] Untick the session box → add-in unloads; retick → reloads.
       *(Proven programmatically instead: UnloadAddIn→LoadAddIn round-trip
       reconnects cleanly, single command group, no orphaned window.)*
@@ -66,7 +67,13 @@ Run with SolidWorks **closed**.
       spawned SolidWorks instance held the DLL mapped, completing after the
       process exited. Documented requirement confirmed.
 
-## D. Interactive workflow (user drives SolidWorks; window stays modeless)
+## D. Interactive workflow (user drives SolidWorks)
+
+> **Surface change:** the QR UI is now a docked **task-pane tab** ("QR
+> Sketch"), not a floating modeless window — the menu command brings the tab
+> forward (`ITaskpaneView.ShowView`) and the pane stays alive for the
+> session. References to "the window" below mean this pane; the probe
+> semantics (open/focus/close) are unchanged.
 
 Setup: open a fresh part document.
 

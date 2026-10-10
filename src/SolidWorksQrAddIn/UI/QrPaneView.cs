@@ -1,21 +1,22 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Preview;
-using SolidWorksQrAddIn.Core.Registration;
 
 namespace SolidWorksQrAddIn.UI
 {
     /// <summary>
-    /// The one modeless "Create QR Sketch" window — a thin WPF view over
-    /// <see cref="QrSketchSession"/>. All content→picture→create behaviour
-    /// lives in the session (headlessly tested); this class only:
+    /// The QR add-in's pane content — a code-built WPF <see cref="UserControl"/>
+    /// hosted inside the SolidWorks task-pane tab via
+    /// <see cref="QrTaskPaneControl"/> (WinForms + ElementHost). It is the same
+    /// thin view over <see cref="QrSketchSession"/> the retired modeless window
+    /// was: all content→picture→create behaviour lives in the session
+    /// (headlessly tested); this class only:
     ///
     ///   - pushes the three field texts verbatim into the session
     ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
@@ -31,15 +32,11 @@ namespace SolidWorksQrAddIn.UI
     ///     create can never run on a stale, not-yet-regenerated request,
     ///   - shows <see cref="QrSketchSession.StatusText"/>,
     ///   - re-pulls everything on <see cref="SyncFromSession"/> — the session
-    ///     calls it whenever state changed without the window driving (a
-    ///     probe edit, a create outcome), so the shown fields and picture
-    ///     can never diverge from the session.
-    ///
-    /// Owned by the SolidWorks main window via WindowInteropHelper so it
-    /// floats with the application; shown modeless so the engineer keeps
-    /// interacting with SolidWorks (select supports, edit the open sketch).
+    ///     calls it (through the task-pane adapter, already on this
+    ///     dispatcher) whenever state changed without the view driving, so
+    ///     the shown fields and picture can never diverge from the session.
     /// </summary>
-    public sealed class QrSketchWindow : Window, IQrSketchWindow
+    public sealed class QrPaneView : System.Windows.Controls.UserControl
     {
         /// <summary>
         /// How long after the last keystroke pending field edits are pushed
@@ -56,27 +53,17 @@ namespace SolidWorksQrAddIn.UI
         private readonly Image _picture;
         private readonly TextBlock _status;
         private readonly DispatcherTimer _editDebounce;
-        private bool _isOpen;
         private bool _contentDirty;
         private bool _sizeDirty;
         private bool _growthDirty;
         private bool _suppressFieldEvents;
 
-        /// <param name="session">Session state the window renders and drives.</param>
+        /// <param name="session">Session state the view renders and drives.</param>
         /// <param name="hostProvider">Builds a fresh host adapter per Create — never cached.</param>
-        /// <param name="ownerHandle">SolidWorks main-window handle (may be IntPtr.Zero).</param>
-        public QrSketchWindow(QrSketchSession session, Func<ISketchHost> hostProvider, IntPtr ownerHandle)
+        public QrPaneView(QrSketchSession session, Func<ISketchHost> hostProvider)
         {
             _session = session ?? throw new ArgumentNullException(nameof(session));
             _hostProvider = hostProvider ?? throw new ArgumentNullException(nameof(hostProvider));
-
-            Title = AddinIdentity.Title;
-            Width = 320;
-            SizeToContent = SizeToContent.Height;
-            ResizeMode = ResizeMode.NoResize;
-            ShowInTaskbar = false;
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            Topmost = false;
 
             var panel = new StackPanel { Margin = new Thickness(10) };
             panel.Children.Add(new TextBlock
@@ -95,7 +82,7 @@ namespace SolidWorksQrAddIn.UI
             };
             panel.Children.Add(_contentBox);
 
-            // Spec window budget: content, size, growth, picture, Create.
+            // Spec budget: content, size, growth, picture, Create.
             panel.Children.Add(new TextBlock
             {
                 Text = "Final grown QR outline size (mm) — the grown QR outline " +
@@ -155,25 +142,15 @@ namespace SolidWorksQrAddIn.UI
             panel.Children.Add(_status);
             Content = panel;
 
-            if (ownerHandle != IntPtr.Zero)
-                new WindowInteropHelper(this).Owner = ownerHandle;
-
             _editDebounce = new DispatcherTimer { Interval = EditDebounce };
             _editDebounce.Tick += (_, __) => FlushPendingEdits();
             _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
             _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
             _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
-            Closed += (_, __) =>
-            {
-                _isOpen = false;
-                // Keep the session truthful: an edit typed just before the
-                // close still lands — the next window opens on the real inputs.
-                FlushPendingEdits();
-            };
 
-            // A recreated window picks up the session's existing inputs.
-            // Suppressed: the session already holds these exact values —
-            // assigning them is a pull, not an edit to push back.
+            // The pane outlives any one "open" — pull the session's existing
+            // inputs so a session that outlives a hidden tab still shows the
+            // real values. Suppressed: assigning them is a pull, not an edit.
             _suppressFieldEvents = true;
             try
             {
@@ -185,45 +162,16 @@ namespace SolidWorksQrAddIn.UI
             RefreshView();
         }
 
-        // ---------------- IQrSketchWindow ----------------
-        // Callers arrive on arbitrary threads (menu callback, COM probe), so
-        // every member marshals to the window's own dispatcher thread.
-
-        public bool IsOpen => _isOpen;
-
-        public void ShowModeless()
-        {
-            MarshalToUi(() =>
-            {
-                Show();          // modeless — SolidWorks stays interactive
-                _isOpen = true;
-                Activate();
-            });
-        }
-
-        public void FocusWindow()
-        {
-            MarshalToUi(() =>
-            {
-                if (!_isOpen)
-                    throw new InvalidOperationException("A closed QR window cannot be focused.");
-                if (WindowState == WindowState.Minimized)
-                    WindowState = WindowState.Normal;
-                Activate();
-            });
-        }
-
-        /// <summary>Interface close — marshalled; Window.Close stays public for WPF itself.</summary>
-        void IQrSketchWindow.Close() => MarshalToUi(base.Close);
-
         /// <summary>
-        /// The session changed without this window driving it (a probe edit,
+        /// The session changed without this view driving it (a probe edit,
         /// a create outcome): re-pull the field texts, picture and status so
         /// the shown view can never diverge from the session. A field with a
         /// pending debounced edit keeps the engineer's in-progress text —
         /// its queued flush will push the newer text back into the session.
+        /// Callers must already be on this view's dispatcher (the task-pane
+        /// adapter marshals).
         /// </summary>
-        public void SyncFromSession() => MarshalToUi(() =>
+        public void SyncFromSession()
         {
             _suppressFieldEvents = true;
             try
@@ -237,17 +185,7 @@ namespace SolidWorksQrAddIn.UI
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
-        });
-
-        private void MarshalToUi(Action action)
-        {
-            if (Dispatcher.CheckAccess())
-                action();
-            else
-                Dispatcher.Invoke(action);
         }
-
-        // ---------------- view internals ----------------
 
         // ---------------- debounced field edits ----------------
         // A keystroke only MARKS the field dirty and restarts the timer; the
@@ -269,9 +207,10 @@ namespace SolidWorksQrAddIn.UI
         /// Push every pending field edit into the session now, regenerating
         /// once per dirty field. The debounce tick and Create both funnel
         /// here — a create can never run on inputs that have not been
-        /// revalidated yet.
+        /// revalidated yet. Also called by the task-pane adapter when the tab
+        /// is hidden, so a queued edit still lands in the session.
         /// </summary>
-        private void FlushPendingEdits()
+        public void FlushPendingEdits()
         {
             _editDebounce.Stop();
             if (_contentDirty)

@@ -111,8 +111,11 @@ tooling stays in the repo.
    without admin, use **File → Open** on `SolidWorksQrAddIn.dll` (the Open
    dialog has an "Add-Ins (*.dll)" filter). To appear in Tools → Add-Ins
    durably, use the machine-wide (elevated) route below. Once loaded, the
-   command appears as **QR Sketch → Create QR Sketch** on the menu/command
-   toolbar.
+   command appears as **QR Sketch → Create QR Sketch** on the menu, and the
+   QR UI lives in a docked **QR Sketch task-pane tab** (created via
+   `CreateTaskpaneView2`, hosting the WPF view through a WinForms
+   `ElementHost`). There is no custom toolbar; engineers who want a button
+   can add the command via Tools → Customize.
 
 ## Loading and unloading inside SolidWorks
 
@@ -120,7 +123,7 @@ tooling stays in the repo.
   session; the right checkbox controls startup. Toggling unloads and reloads
   the add-in cleanly — `DisconnectFromSW` removes the command group
   permanently (never runtime-only), so reload never duplicates the command or
-  orphans the QR window (the add-in closes it during unload).
+  orphans the QR pane (the add-in deletes the task-pane view during unload).
 - While loaded, the DLL is file-mapped into `SLDWORKS.exe`.
 
 ## Replacing binaries — always close SolidWorks first
@@ -184,13 +187,13 @@ machine-wide changes are always an explicit user action.
 ## Diagnostics
 
 - The add-in appends `SolidWorksQrAddIn.debug.log` beside the deployed DLL
-  (connection, window, failures).
+  (connection, `task pane created`, failures).
 - Dependencies (`Core`, `QRCoder`, `Clipper2Lib`) resolve from the deployed
   folder via an `AssemblyResolve` handler — all four DLLs must stay together.
 - The `IAddInProbe` COM methods (`RunQrSketchProbe`, `RunFailingQrSketchProbe`,
   `RunCleanupFailQrSketchProbe`, the session/window probes) exist for the
   LiveProbe diagnostics harness. They are **not** commands: nothing in the
-  menu, toolbar, or window exposes them — the only user-facing action is
+  menu or task pane exposes them — the only user-facing action is
   **Create QR Sketch**. Failure injection is reachable only through
   `GetAddInObject` + `IDispatch` from a live-verification harness.
 - LiveProbe is never installed: run it from its own build output
@@ -198,7 +201,8 @@ machine-wide changes are always an explicit user action.
   <deployDir>`). It refuses to touch a visible or document-holding
   SolidWorks session — run it only when no interactive session is open, then
   `taskkill /IM SLDWORKS.exe /F` reaps the invisible instance it spawned.
-- **Toolbar renders as a tiny empty sliver?** SolidWorks persists
+- **(Historical — the add-in no longer ships a toolbar)** A persisted
+  command-group toolbar could render as a tiny empty sliver: SolidWorks keeps
   command-group toolbar geometry per user under
   `HKCU\Software\SolidWorks\SOLIDWORKS <year>\User Interface` — a toolbar
   first shown without icons can be cached collapsed (observed 2026-10-09:
