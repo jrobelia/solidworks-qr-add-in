@@ -55,7 +55,40 @@ needed beside the add-in and are not redistributed (RESEARCH.md §2;
 **Not shipped:** `SolidWorksQrAddIn.LiveProbe.exe`, test assemblies — dev
 tooling stays in the repo.
 
-## Install (per-user, no admin) — dev/quick-start route
+## Install (recommended for all users) — the Inno Setup installer
+
+`Installer\Package.ps1` packs the deployment folder and compiles
+`Installer\Setup.iss` into `Installer\SolidWorksQrAddIn-<version>-Setup.exe`
+— a normal Windows installer built with Inno Setup 6 (a scripted setup EXE,
+not an MSI).
+
+1. Close SolidWorks if it is running (the installer can prompt to close it
+   for you — `CloseApplications=yes`).
+2. Run the `-Setup.exe`. The wizard requires admin (one UAC prompt) because
+   the **Tools → Add-Ins** dialog enumerates
+   `HKLM\SOFTWARE\SolidWorks\AddIns` and COM registration lands under
+   `HKLM\SOFTWARE\Classes`.
+3. Files land in `%ProgramFiles%\SolidWorks QR Add-In\` — exactly the
+   verified pack-deploy contents (the four runtime DLLs, notices, docs, the
+   HKCU fallback scripts, `licenses\`). The wizard then runs
+   `Framework64\v4.0.30319\RegAsm.exe /codebase /s` on the installed DLL;
+   elevated RegAsm takes the `MachineWide` registration plan —
+   `HKLM\SOFTWARE\SolidWorks\AddIns\{clsid}` (default=1, Title,
+   Description) plus the per-user `AddInsStartup` flag — so the add-in
+   appears in **Tools → Add-Ins** and auto-loads at startup.
+4. A failed RegAsm aborts the "success" ending with an error box that
+   quotes the exact manual-repair command — the exit code is checked, never
+   silently swallowed.
+5. **Uninstall** via Settings → Apps / Add or Remove Programs: the
+   uninstaller runs `RegAsm /u /s` *before* file removal so
+   `[ComUnregisterFunction]` can clean this add-in's SolidWorks keys, then
+   deletes the install folder and the Apps entry.
+
+Prerequisite gate: the wizard refuses to start on machines without .NET
+Framework 4.8 (NDP `Release` ≥ 528040) — RegAsm itself ships with 4.x, so
+a bare file check would let 4.6/4.7 hosts through and fail mid-install.
+
+## Install (per-user, no admin) — dev/fallback route
 
 > Note (verified 2026-10-09): this route registers the add-in so COM
 > automation and File→Open can load it, but it does **not** list the add-in
@@ -164,9 +197,10 @@ fingerprints, and the add-in's COM CLSID (must be
    keys under HKCU.
 3. Delete the installed folder.
 
-## Machine-wide alternative (elevated — documented, not run by this repo)
+## Machine-wide alternative (elevated — what the installer runs)
 
-The same registration can be done machine-wide with the 64-bit RegAsm (use
+The installer above performs this registration automatically; done by hand,
+the same registration can be applied machine-wide with the 64-bit RegAsm (use
 `Framework64` — SolidWorks is x64):
 
 ```powershell

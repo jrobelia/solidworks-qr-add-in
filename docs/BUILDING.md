@@ -13,6 +13,7 @@ Build tools: .NET SDK (tested with 10.0.103); no Visual Studio required.
 | `tools/LiveProbe` | Live-verification console harness (drives a headless SolidWorks via COM). |
 | `scripts/` | `pack-deploy.ps1`/`verify-deploy.ps1` (deployment folder) + per-user HKCU registration/unregistration. |
 | `deploy/` | Pack staging output — gitignored; never the registered location. |
+| `Installer/` | Inno Setup installer: `Setup.iss`, `Package.ps1`, ISCC resolvers. Compiled `*-Setup.exe` is gitignored. |
 
 ## Build
 
@@ -133,6 +134,21 @@ The deployment manifest lives in `SolidWorksQrAddIn.Core`'s `DeploymentPlan`
 (headless-tested); `pack-deploy.ps1` reads it by reflection and
 `verify-deploy.ps1 -DeployDir <folder>` re-checks any folder read-only —
 safe on the registered folder, never writes into it.
+
+### Packaging the installer (end-user route)
+
+```powershell
+.\Installer\Package.ps1        # pack-deploy + ISCC -> Installer\SolidWorksQrAddIn-<version>-Setup.exe
+```
+
+Requires **Inno Setup 6** — `Resolve-ISCC.ps1` checks `$env:INNO_SETUP`,
+`%LOCALAPPDATA%\Programs\Inno Setup 6`, and both Program Files locations;
+`Ensure-ISCC.ps1` winget-installs it (used by CI, not local builds). With no
+compiler the pack still runs and the script prints the manual
+`iscc /DAppVersion=<version> Installer\Setup.iss` command. Version comes
+from `git describe` (nearest tag, else commit hash). The installer EXE and
+its behaviour are documented in `docs/DEPLOYMENT.md` — the install itself
+needs admin and a real machine, so only the compile is verified here.
 
 Only this add-in's CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` is ever
 touched — never the InvenTree add-in ({A1B2C3D4-…}) or any other key. The
