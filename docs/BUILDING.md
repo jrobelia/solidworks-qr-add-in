@@ -227,8 +227,9 @@ invisible one. The probe therefore refuses to run when the attached instance
 is visible or already holds documents, and only calls `ExitApp` on an
 instance it spawned fresh. A second ProgID argument selects the version
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
-useful when another SolidWorks release is already running (this box has
-both SW 2022 and 2023; the unqualified ProgID belongs to the last installed).
+useful when another SolidWorks release is already running. This box has
+only SW 2023 installed — `SldWorks.Application.30`/`.31` both resolve to
+the same server (the unqualified ProgID belongs to the last installed).
 
 `NewDocument` requires an explicit template path — an empty one pops a
 template dialog that hangs a headless run. The probe passes the configured
