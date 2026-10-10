@@ -25,6 +25,11 @@ Everything is x64 (`Directory.Build.props` sets `Platforms=x64` and defaults
 `Platform` to x64, so single-project builds produce the same `bin\x64\...` path
 as the solution build).
 
+Under Git Bash, use MSBuild dash syntax — `/t:Rebuild` is path-mangled to
+`t:Rebuild` (MSB1008); write `-t:Rebuild` / `-p:Name=Value`. `> nul` and
+`dir /b` are cmd-isms: `> nul` creates a literal file named `nul`, `dir` is
+GNU dir — use `>/dev/null` and `ls`.
+
 ### Pinned NuGet assets — verified during restore
 
 Package versions are pinned in the project files **and** locked: every project
@@ -222,7 +227,15 @@ invisible one. The probe therefore refuses to run when the attached instance
 is visible or already holds documents, and only calls `ExitApp` on an
 instance it spawned fresh. A second ProgID argument selects the version
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
-useful when another SolidWorks release is already running.
+useful when another SolidWorks release is already running (this box has
+both SW 2022 and 2023; the unqualified ProgID belongs to the last installed).
+
+`NewDocument` requires an explicit template path — an empty one pops a
+template dialog that hangs a headless run. The probe passes the configured
+`swDefaultTemplatePart`; on this box that resolves to the `G:` shared drive
+(`OA SW Document Templates\...prtdot`, verified mounted). The stock
+`C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2023\templates\` has no plain
+`Part.PRTDOT`, only `MBD\*.prtdot`.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
 
