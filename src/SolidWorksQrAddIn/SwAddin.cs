@@ -171,7 +171,10 @@ namespace SolidWorksQrAddIn
             // released _sw — nothing can create geometry after unload.
             _connected = false;
             // Release the pane surface first — it must not outlive the
-            // add-in — then remove the task-pane view itself.
+            // add-in — then remove the task-pane view itself. Registered
+            // undo handlers release their document references too, so an
+            // unloaded add-in can never be called back into dead state.
+            try { QrSketchUndoRegistry.ReleaseAll(); } catch { }
             try { _session?.Release(); } catch { }
             _session = null;
             try { _taskPaneView?.DeleteView(); } catch { }

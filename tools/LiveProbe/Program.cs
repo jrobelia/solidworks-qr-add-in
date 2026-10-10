@@ -91,6 +91,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "undo", StringComparison.OrdinalIgnoreCase))
                 return UndoMatrixMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "undoapi", StringComparison.OrdinalIgnoreCase))
+                return UndoApiMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -709,6 +712,96 @@ namespace SolidWorksQrAddIn.LiveProbe
                 foreach (var arr in new[] { 9, 0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 14, 13, 12, 7 })
                     Console.WriteLine(probe.UndoArrangementProbe(arr));
                 return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe undoapi [deployDir] [progId]` — the custom undo
+        /// object (SetApiUndoObject) verification through
+        /// <see cref="IAddInProbe.UndoRedoQrProbe"/> on a session-free
+        /// instance: a user sketch is drawn first, then the real create
+        /// path, then EditUndo2 → EditRedo2 → EditUndo2. PASS requires the
+        /// undo removing the QR sketch and leaving the user sketch intact;
+        /// redo behaviour is reported (and checked) separately.
+        /// </summary>
+        private static int UndoApiMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            Console.WriteLine("# Custom undo object (SetApiUndoObject) verification");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                var probe = TryGetProbe(sw);
+                // A previously registered build may have auto-loaded — ping
+                // for the new probe; if absent, replace with this build.
+                string? line = null;
+                if (probe != null)
+                {
+                    try
+                    {
+                        line = probe.UndoRedoQrProbe();
+                        Console.WriteLine("# auto-loaded build already has the probe — warm-up ran it");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"# probe missing on loaded build " +
+                            $"({ex.GetType().Name}) — loading requested DLL");
+                    }
+                }
+                if (line == null)
+                {
+                    string registered = Path.Combine(
+                        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    try { sw.UnloadAddIn(registered); } catch { }
+                    if (!string.Equals(registered, dllPath, StringComparison.OrdinalIgnoreCase))
+                        try { sw.UnloadAddIn(dllPath); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                    if (probe == null) { Console.WriteLine("# FATAL: no probe object"); return 1; }
+                    line = probe.UndoRedoQrProbe();
+                }
+                Console.WriteLine(line);
+                // Stage report: undo presses walk the stack (the open sketch's
+                // edit-session steps sit above our API step) until the QR
+                // sketch is gone; redo presses restore it. "user" = the
+                // pre-existing user sketch that must always survive.
+                Check(line.Contains("removed=True"), "undo removed exactly the QR sketch", line);
+                Check(line.Contains("userIntact=True"), "pre-existing user sketch survived everything", line);
+                Check(line.Contains("restored=True"), "redo restored the QR sketch", line);
+                Console.WriteLine(_failures == 0 ? "# UNDO-API ALL PASSED" : $"# {_failures} check(s) failed");
+                return _failures == 0 ? 0 : 1;
             }
             catch (Exception ex)
             {
@@ -2081,6 +2174,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
             public string UndoArrangementProbe(int arrangement) => Invoke("UndoArrangementProbe", arrangement);
+            public string UndoRedoQrProbe() => Invoke("UndoRedoQrProbe");
             public string PreviewSignatureProbe() => Invoke("PreviewSignatureProbe");
         }
     }

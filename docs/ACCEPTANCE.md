@@ -123,14 +123,19 @@ Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 - [x] **D15** Cancel: valid inputs then close the window → part unchanged. (E)
 - [x] **D16** Document switch: Create landed in the second document; the
       first's sketch count unchanged. (E)
-- [ ] **D17** Undo: **LIMITATION — verified live.** The named "Create QR
-      Sketch" undo step never registers on SW 2023 SP5:
-      `FinishRecordingUndoObject2` returns false in every arrangement tried
-      (recording opened before/after `InsertSketch`, finished inside/outside
-      sketch edit mode) — the AddToDB bulk insertion the contour set needs
-      bypasses the undo system. `EditUndo2` presses instead act on older
-      history; prior user work was never removed (asserted live). One-press
-      removal of the generated sketch does **not** hold.
+- [x] **D17** Undo: **partial pass — verified live (2026-10-10, SW 31.5.0).**
+      `FinishRecordingUndoObject2` stays refused for AddToDB insertion
+      (docs/UNDO-INVESTIGATION.md), so a custom undo object is registered on
+      the document instead: `IModelDocExtension.SetApiUndoObject` adds a
+      "Create QR Sketch" step whose handler deletes exactly the created
+      sketch — verified by feature ID, so a user sketch reusing the name
+      survives and an already-deleted sketch is a no-op; prior user work
+      never removed (asserted live). Caveats: the created sketch is left
+      open in edit mode, so the first Ctrl+Z re-enters the edit session
+      (same as any sketch) and the SECOND removes it; SolidWorks' EditRedo
+      never invokes API undo objects — a further undo press restores the
+      sketch instead (the handler re-registers itself and reinserts the
+      captured geometry on the captured support).
 - [x] **D18** Different content → different picture signature and different
       sketch; earlier sketches unchanged. (E)
 - [x] **D19** Close/reopen the window → fresh window keeps session inputs. (E)
@@ -204,7 +209,7 @@ invent a hidden QR-capacity limit.
 | Interactive workflow (D1–D20) | 17/20 proven via (E); D2/D11 visual checks + D20 dialog path awaiting human | §E run |
 | LiveProbe suite (E) | **PASS — ALL CHECKS PASSED, 185 checks, exit 0** | 2026-10-09, SW 31.5.0 invisible instance |
 | Performance (F) | PASS | create_ms 951 / 1930 / 8905 (short/medium/dense), exact outlines |
-| Named undo live | **LIMITATION** | `FinishRecordingUndoObject2` refused in every arrangement — AddToDB insertion bypasses undo; one-press removal does not hold; prior work never removed (asserted) |
+| Named undo live | **PASS w/ caveats** | `SetApiUndoObject` custom undo object verified: named "Create QR Sketch" step deletes exactly the created sketch (feature-ID checked), user work intact; second undo press removes (first re-enters edit mode), SW EditRedo unsupported — another undo reinserts instead |
 | Rotated plane / planar face | PASS | 4.8°-tilted datum (Plane5), Top Plane (90° datum), plate top face, vertical side face — convention verbatim, on-plane, no mirroring |
 | Boss/cut without corner-contact failure | PASS | Boss-Extrude + Cut-Extrude on plate QR and top-face QR succeeded |
 

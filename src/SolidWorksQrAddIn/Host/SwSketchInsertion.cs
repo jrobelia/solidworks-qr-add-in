@@ -64,6 +64,12 @@ namespace SolidWorksQrAddIn.Host
         public string SketchName => _sketchFeature.Name;
         public int LineCount => _lineCount;
 
+        /// <summary>
+        /// The sketch feature this session owns — the undo object needs it to
+        /// delete (and re-track) exactly this sketch after a redo re-insert.
+        /// </summary>
+        internal IFeature Feature => _sketchFeature;
+
         public void AddLine(double x1, double y1, double x2, double y2)
         {
             if (_committed || _aborted)

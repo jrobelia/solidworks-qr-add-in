@@ -181,6 +181,155 @@ namespace SolidWorksQrAddIn
         public string AddinStateProbe() =>
             _connected ? $"CONNECTED group={AddinIdentity.CommandGroupUserId}" : "NOT-CONNECTED";
 
+        // ---------------- custom undo object (SetApiUndoObject) verification ----------------
+
+        /// <summary>
+        /// Live check for the custom undo object. On a throwaway part it
+        /// draws a small USER sketch first (prior work that must survive),
+        /// runs the real session create for a QR sketch, exits it, then
+        /// presses EditUndo2 → EditRedo2 → EditUndo2 and reports what each
+        /// did to the feature tree. Runs on the SolidWorks UI thread via the
+        /// pane's Invoke — the real Create-button context.
+        /// </summary>
+        public string UndoRedoQrProbe()
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var pane = _pane;
+                if (pane != null && pane.IsHandleCreated)
+                    return "APIUNDO " + (pane.Invoke(
+                        new Func<string>(RunUndoRedoQrProbe)) as string);
+                return "APIUNDO " + RunUndoRedoQrProbe();
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
+        private string RunUndoRedoQrProbe()
+        {
+            var sw = _sw!;
+            string template = sw.GetUserPreferenceStringValue(
+                (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+            if (string.IsNullOrEmpty(template))
+                return "no-template";
+            var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+            if (doc == null) return "no-doc";
+            try
+            {
+                var ext = (IModelDocExtension)doc.Extension;
+                var mgr = (ISketchManager)doc.SketchManager;
+
+                // Prior work: a small user sketch on Front Plane.
+                ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                mgr.InsertSketch(true);
+                var userName = (mgr.ActiveSketch as IFeature)?.Name ?? "SketchUser";
+                mgr.CreateLine(-0.01, 0.0, 0, 0.01, 0.0, 0);
+                mgr.InsertSketch(false);
+
+                // The real create path, in the window's call context.
+                doc.ClearSelection2(true);
+                ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                var session = ReadySession!;
+                session.SetContent(ProbeContent);
+                var result = session.CreateSketch(new SolidWorksSketchHost(sw));
+                if (!result.Succeeded)
+                    return $"createFailed: {result.Message}";
+                string qrName = result.CreatedSketchName ?? "";
+                try { mgr.InsertSketch(false); } catch { }   // engineer exits the sketch
+
+                bool Present(string name) => FindSketch(doc, name) != null;
+                // Any sketch that is not the user's = the QR sketch (by
+                // whatever name its current incarnation carries).
+                bool HasQrSketch()
+                {
+                    for (var f = doc.FirstFeature() as IFeature; f != null;
+                         f = f.GetNextFeature() as IFeature)
+                        if (string.Equals(f.GetTypeName2(), "ProfileFeature",
+                                StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(f.Name, userName, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    return false;
+                }
+
+                int n0 = CountSketchFeatures(doc);
+                var trace = new System.Text.StringBuilder();
+                // The QR creation leaves the sketch open; exiting it pushes
+                // edit-session steps ABOVE our API undo step. Press undo until
+                // the QR sketch is gone (bounded) — mimics a user holding
+                // Ctrl+Z; each press is reported so the stack shape is visible.
+                int undoPresses = 0;
+                try
+                {
+                    while (undoPresses < 6 && HasQrSketch())
+                    {
+                        doc.EditUndo2(1);
+                        undoPresses++;
+                        trace.Append(
+                            $" u{undoPresses}:qr=T user={Present(userName)} " +
+                            $"n={CountSketchFeatures(doc)} edit={(mgr.ActiveSketch != null)} |");
+                        // An undo that re-enters sketch edit mode only
+                        // restores the pre-exit state — the user exits the
+                        // reopened sketch before pressing undo again.
+                        if (mgr.ActiveSketch != null)
+                            try { mgr.InsertSketch(false); } catch { }
+                    }
+                }
+                catch (Exception ex) { trace.Append($" undoEX:{ex.GetType().Name} |"); }
+                bool removed = !HasQrSketch();
+
+                // Native redo of an API undo item: verified dead — SW never
+                // calls the handler. Two presses prove it stays that way.
+                int redoPresses = 0;
+                try
+                {
+                    while (redoPresses < 2 && !HasQrSketch())
+                    {
+                        doc.EditRedo2(1);
+                        redoPresses++;
+                        trace.Append(
+                            $" r{redoPresses}:qr={HasQrSketch()} " +
+                            $"n={CountSketchFeatures(doc)} edit={(mgr.ActiveSketch != null)} |");
+                    }
+                }
+                catch (Exception ex) { trace.Append($" redoEX:{ex.GetType().Name} |"); }
+
+                // The restore path this API offers: the handler re-registered
+                // itself, so another undo press re-fires DoUndo and the
+                // toggle reinserts the sketch.
+                int restorePresses = 0;
+                try
+                {
+                    while (restorePresses < 4 && !HasQrSketch())
+                    {
+                        doc.EditUndo2(1);
+                        restorePresses++;
+                        trace.Append(
+                            $" x{restorePresses}:qr={HasQrSketch()} user={Present(userName)} " +
+                            $"n={CountSketchFeatures(doc)} edit={(mgr.ActiveSketch != null)} |");
+                        if (mgr.ActiveSketch != null)
+                            try { mgr.InsertSketch(false); } catch { }
+                    }
+                }
+                catch (Exception ex) { trace.Append($" restoreEX:{ex.GetType().Name} |"); }
+
+                return $"user='{userName}' qr='{qrName}' n0={n0} undoPresses={undoPresses} " +
+                       $"removed={removed} nativeRedoPresses={redoPresses} " +
+                       $"restored={HasQrSketch()} restorePresses={restorePresses} " +
+                       $"userIntact={Present(userName)} |{trace}";
+            }
+            finally
+            {
+                try { sw.CloseDoc(doc.GetTitle()); } catch { }
+            }
+        }
+
         // ---------------- undo-recording diagnostic (verification only) ----------------
 
         /// <summary>

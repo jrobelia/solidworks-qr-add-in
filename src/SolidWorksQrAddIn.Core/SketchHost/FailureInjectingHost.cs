@@ -38,6 +38,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         public SketchHostState CaptureState() => _inner.CaptureState();
 
+        public void RegisterSketchUndo(SketchUndoRegistration registration) =>
+            _inner.RegisterSketchUndo(registration);
+
         public ISketchInsertion BeginSketchInsertion()
         {
             if (_failBegin != null)
