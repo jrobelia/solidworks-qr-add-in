@@ -28,8 +28,20 @@ namespace SolidWorksQrAddIn.UI
     /// </summary>
     internal sealed class PaneKeyboardFilter : IMessageFilter
     {
+        // One-shot diagnostic: whether the filter ever runs proves whether
+        // WinForms' component-manager preprocessing is wired into
+        // SolidWorks' pump at all (Application.AddMessageFilter only sees
+        // messages when it is).
+        private bool _loggedFirstMessage;
+
         public bool PreFilterMessage(ref Message m)
         {
+            if (!_loggedFirstMessage)
+            {
+                _loggedFirstMessage = true;
+                Diag.Log($"pane keyboard filter saw first message 0x{m.Msg:X4} " +
+                    $"on thread {System.Threading.Thread.CurrentThread.ManagedThreadId}");
+            }
             try
             {
                 // WinForms and WPF carry the same Win32 MSG in different

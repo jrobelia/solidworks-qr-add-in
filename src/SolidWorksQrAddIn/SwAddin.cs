@@ -111,6 +111,7 @@ namespace SolidWorksQrAddIn
                 // the command reachable by name and the tab unadorned.
                 string paneIcon = string.Empty;
                 string[]? icons = null;
+                string? iconDir = null;
                 string addinDir = Path.GetDirectoryName(
                     Assembly.GetExecutingAssembly().Location) ?? ".";
                 foreach (var dir in QrIconLocations.ExtractionDirectories(addinDir))
@@ -118,6 +119,7 @@ namespace SolidWorksQrAddIn
                     try
                     {
                         icons = QrToolbarIcons.EnsureExtracted(dir);
+                        iconDir = dir;
                         Diag.Log($"icons extracted to {dir}");
                         break;
                     }
@@ -132,8 +134,10 @@ namespace SolidWorksQrAddIn
                     {
                         group.IconList = icons;
                         group.MainIconList = icons;
-                        paneIcon = QrIconLocations.PickPaneIcon(icons);
-                        Diag.Log($"command group icons set ({icons.Length} sizes)");
+                        // The task-pane tab renders ~16-18px and silently
+                        // ignores the 32px strip — dedicated small render.
+                        paneIcon = QrToolbarIcons.EnsurePaneIcon(iconDir!);
+                        Diag.Log($"command group icons set ({icons.Length} sizes); pane icon {paneIcon}");
                     }
                     catch (Exception ex)
                     {
@@ -174,7 +178,7 @@ namespace SolidWorksQrAddIn
                 {
                     _keyboardFilter = new PaneKeyboardFilter();
                     System.Windows.Forms.Application.AddMessageFilter(_keyboardFilter);
-                    Diag.Log("pane keyboard filter installed");
+                    Diag.Log($"pane keyboard filter installed on thread {System.Threading.Thread.CurrentThread.ManagedThreadId}");
                 }
                 catch (Exception ex)
                 {
