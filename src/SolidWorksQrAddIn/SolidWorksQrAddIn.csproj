@@ -14,9 +14,13 @@
     <AssemblyName>SolidWorksQrAddIn</AssemblyName>
     <RootNamespace>SolidWorksQrAddIn</RootNamespace>
 
-    <!-- The QR window is WPF (spec baseline) but code-built — no XAML files.
-         UseWPF pulls in the PresentationFramework/Core references. -->
+    <!-- The QR task-pane content is WPF (spec baseline) but code-built — no
+         XAML files — hosted in the WinForms control SolidWorks displays via
+         ElementHost. UseWPF pulls in PresentationFramework/Core; UseWindowsForms
+         pulls in System.Windows.Forms; WindowsFormsIntegration (ElementHost)
+         is referenced explicitly below. -->
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
 
     <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">$(SOLIDWORKS_SDK_DIR)</SolidWorksSdkDir>
     <SolidWorksSdkDir Condition="'$(SolidWorksSdkDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksSdkDir>
@@ -30,6 +34,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SolidWorksQrAddIn.Core\SolidWorksQrAddIn.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="WindowsFormsIntegration" />
   </ItemGroup>
 
   <ItemGroup>

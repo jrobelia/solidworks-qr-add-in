@@ -28,8 +28,9 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// Drives SolidWorks via SldWorks.Application.31 + Activator.CreateInstance
     /// (the verified route — PowerShell late binding does NOT work here) and the
     /// add-in through its IAddInProbe COM hook, which exercises the SAME session
-    /// + window code paths the WPF window uses. Prints PASS/FAIL lines; exit
-    /// code 0 when every check passes.
+    /// + view code paths the QR task-pane tab uses (the *Window* probe names are
+    /// historical — the surface is now the docked pane). Prints PASS/FAIL lines;
+    /// exit code 0 when every check passes.
     ///
     /// Ticket-4 checks: fresh-window 25 mm/3% fields; native outline measured
     /// at the default 25 mm and at a custom 40 mm; a growth change preserving
