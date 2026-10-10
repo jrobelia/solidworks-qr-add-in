@@ -5,8 +5,7 @@ using System.IO;
 namespace SolidWorksQrAddIn.Core.Icons
 {
     /// <summary>
-    /// Decides WHERE the QR icon PNGs are extracted at runtime, and which
-    /// extracted file dresses the task-pane tab.
+    /// Decides WHERE the QR icon PNGs are extracted at runtime.
     ///
     /// The installed add-in lives under Program Files — read-only — so
     /// extracting beside the DLL fails there. Extraction therefore prefers a
@@ -52,20 +51,11 @@ namespace SolidWorksQrAddIn.Core.Icons
             return Path.Combine(local, PerUserFolderName, IconsFolderName);
         }
 
-        /// <summary>
-        /// Picks the PNG handed to <c>CreateTaskpaneView2</c> from the
-        /// extracted set: the 32px strip when present (the task-pane tab's
-        /// size class), otherwise the first file — but only a path that
-        /// actually exists on disk, and empty when the extraction produced
-        /// nothing usable (SolidWorks tolerates an empty icon path: the tab
-        /// still works, just unadorned).
-        /// </summary>
-        public static string PickPaneIcon(IReadOnlyList<string> extractedPaths)
-        {
-            if (extractedPaths == null || extractedPaths.Count == 0)
-                return string.Empty;
-            string preferred = extractedPaths.Count > 1 ? extractedPaths[1] : extractedPaths[0];
-            return File.Exists(preferred) ? preferred : string.Empty;
-        }
+        // Note: the icon handed to CreateTaskpaneView2 is NOT one of the menu
+        // strips — SolidWorks draws task-pane tab icons at ~16-18px and
+        // silently ignores a 32px PNG. QrToolbarIcons.EnsurePaneIcon renders
+        // the dedicated PaneTabSize file into whichever extraction directory
+        // won above; an empty icon path is tolerated (the tab still works,
+        // just unadorned), so failure stays best-effort at the call site.
     }
 }

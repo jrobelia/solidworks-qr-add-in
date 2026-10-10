@@ -1,6 +1,5 @@
 using System;
 using System.Windows.Forms;
-using System.Windows.Forms.Integration;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 
@@ -44,7 +43,7 @@ namespace SolidWorksQrAddIn.UI
             _activatePane = activatePane ?? throw new ArgumentNullException(nameof(activatePane));
             _hidePane = hidePane ?? throw new ArgumentNullException(nameof(hidePane));
             _view = new QrPaneView(session, hostProvider);
-            Controls.Add(new ElementHost { Dock = DockStyle.Fill, Child = _view });
+            Controls.Add(new PaneElementHost { Dock = DockStyle.Fill, Child = _view });
             Dock = DockStyle.Fill;
         }
 

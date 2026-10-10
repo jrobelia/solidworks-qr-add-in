@@ -114,6 +114,56 @@ namespace SolidWorksQrAddIn.Tests
             }
         }
 
+        // ---------- task-pane tab icon ----------
+
+        [Fact]
+        public void EnsurePaneIcon_writes_a_small_png_and_returns_its_path()
+        {
+            string path = QrToolbarIcons.EnsurePaneIcon(_dir);
+
+            Assert.Equal(QrToolbarIcons.PaneTabFileName, Path.GetFileName(path));
+            Assert.True(File.Exists(path));
+            using (var bmp = new Bitmap(path))
+            {
+                // SolidWorks draws task-pane tab icons at ~16-18px and ignores
+                // larger images — the tab file must stay in that size class.
+                Assert.Equal(QrToolbarIcons.PaneTabSize, bmp.Width);
+                Assert.Equal(QrToolbarIcons.PaneTabSize, bmp.Height);
+                Assert.True(bmp.Width <= 18, "tab icons must stay in the 16-18px class");
+            }
+        }
+
+        [Fact]
+        public void EnsurePaneIcon_is_idempotent_and_repairs_drift()
+        {
+            string path = QrToolbarIcons.EnsurePaneIcon(_dir);
+            var stamp = File.GetLastWriteTimeUtc(path);
+
+            Assert.Equal(path, QrToolbarIcons.EnsurePaneIcon(_dir));
+            Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
+
+            File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+            QrToolbarIcons.EnsurePaneIcon(_dir);
+            byte[] repaired = File.ReadAllBytes(path);
+            Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, repaired.Take4());
+        }
+
+        [Fact]
+        public void RenderPng_produces_an_exact_size_pane_icon()
+        {
+            byte[] png = QrToolbarIcons.RenderPng(QrToolbarIcons.PaneTabSize);
+            using (var bmp = new Bitmap(new MemoryStream(png)))
+            {
+                Assert.Equal(QrToolbarIcons.PaneTabSize, bmp.Width);
+                // Even at 18px the finder pattern must leave dark pixels.
+                bool anyDark = false;
+                for (int y = 0; y < bmp.Height && !anyDark; y++)
+                    for (int x = 0; x < bmp.Width && !anyDark; x++)
+                        anyDark = bmp.GetPixel(x, y).ToArgb() == Color.Black.ToArgb();
+                Assert.True(anyDark, "expected dark finder-pattern pixels at tab size");
+            }
+        }
+
         [Fact]
         public void EnsureExtracted_is_idempotent_and_repairs_drift()
         {

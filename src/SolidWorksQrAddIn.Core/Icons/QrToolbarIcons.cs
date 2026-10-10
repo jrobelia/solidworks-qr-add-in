@@ -24,6 +24,18 @@ namespace SolidWorksQrAddIn.Core.Icons
         /// </summary>
         public static readonly int[] Sizes = { 20, 32, 40, 64, 96, 128 };
 
+        /// <summary>
+        /// Task-pane tab icon size. SolidWorks' tab strip renders icons at
+        /// ~16-18px (the API docs historically specify 16x18; the sibling
+        /// InvenTree add-in's working tab icon is 18x18). A 32px PNG passed
+        /// to <c>CreateTaskpaneView2</c> is silently ignored — the menu strips
+        /// keep <see cref="Sizes"/>; the tab gets its own dedicated render.
+        /// </summary>
+        public const int PaneTabSize = 18;
+
+        /// <summary>File name of the extracted task-pane tab icon.</summary>
+        public const string PaneTabFileName = "qr-tab-18.png";
+
         /// <summary>PNG bytes of the QR glyph rendered at <paramref name="sizePx"/>.</summary>
         public static byte[] RenderPng(int sizePx)
         {
@@ -89,6 +101,24 @@ namespace SolidWorksQrAddIn.Core.Icons
                 paths[i] = path;
             }
             return paths;
+        }
+
+        /// <summary>
+        /// Writes the dedicated task-pane tab icon (<see cref="PaneTabSize"/>,
+        /// <see cref="PaneTabFileName"/>) into <paramref name="directory"/> —
+        /// the same extraction dir the menu strips went to — and returns its
+        /// path. Same idempotent repair semantics as
+        /// <see cref="EnsureExtracted"/>. Throws on I/O failure; the caller
+        /// treats the pane icon as best-effort.
+        /// </summary>
+        public static string EnsurePaneIcon(string directory)
+        {
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, PaneTabFileName);
+            byte[] png = RenderPng(PaneTabSize);
+            if (!File.Exists(path) || !ContentEquals(path, png))
+                File.WriteAllBytes(path, png);
+            return path;
         }
 
         private static bool ContentEquals(string path, byte[] expected)

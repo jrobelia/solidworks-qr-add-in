@@ -44,11 +44,16 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 LicenseFile=..\THIRD-PARTY-NOTICES.md
+; Installer exe + Settings > Apps icon — a multi-size ICO of the QR glyph,
+; checked in beside this script (same convention as the InvenTree add-in).
+SetupIconFile=qr-addin.ico
 OutputDir=.
 OutputBaseFilename=SolidWorksQrAddIn-{#AppVersion}-Setup
 UninstallDisplayName={#AppName}
+UninstallDisplayIcon={app}\qr-addin.ico
 
 [Files]
+Source: "qr-addin.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Ship exactly the pack-deploy output — the same folder DeploymentPlan
 ; verifies headlessly: the four runtime DLLs, notices, install docs, the
 ; HKCU registration scripts (still useful for a per-user fallback), and the
