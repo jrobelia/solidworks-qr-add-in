@@ -196,14 +196,15 @@ namespace SolidWorksQrAddIn
         ///    4 start AFTER  InsertSketch, AddToDB on,  finish after exit (= product shape)
         ///    5 start after InsertSketch,  AddToDB on,  finish WHILE sketch open
         ///    6 = 4 but FinishRecordingUndoObject (v1)
-        ///    7 = 4 but the whole arrangement runs on the add-in's WPF STA
-        ///        thread — the real Create-button call context
+        ///    7 = 4 but the whole arrangement runs on the SolidWorks STA UI
+        ///        thread (via the task-pane control's Invoke) — the real
+        ///        Create-button call context
         ///    8 start before InsertSketch, AddToDB on,  finish while open
         ///    9 empty recording: start + finish, no sketch at all
         ///   10 start after lines drawn (mid-sketch), AddToDB on, finish after exit
         ///   11 = 4 but FinishRecordingUndoObject2(name, MakeHidden=true)
-        ///   12 = 1 but the whole arrangement runs on the WPF STA thread
-        ///   13 control on WPF STA thread: no recording, interactive line
+        ///   12 = 1 but the whole arrangement runs on the SW UI thread
+        ///   13 control on SW UI thread: no recording, interactive line
         ///   14 start before the SELECTION itself, AddToDB on, finish after exit
         /// </summary>
         public string UndoArrangementProbe(int arrangement)
@@ -224,9 +225,15 @@ namespace SolidWorksQrAddIn
                 else if (arrangement == 13) inner = 0;
                 if (arrangement is 7 or 12 or 13)
                 {
-                    _wpf ??= new AddInWpfThread();
-                    return $"ARR{arrangement}(inner={inner}) " +
-                           _wpf.Invoke(() => RunUndoArrangement(inner));
+                    // STA = SolidWorks' own UI thread: the task-pane control's
+                    // handle was created there, so WinForms Invoke marshals
+                    // onto it — the same context the pane's Create button uses.
+                    var pane = _pane;
+                    if (pane == null || !pane.IsHandleCreated)
+                        return $"ARR{arrangement} no-ui-thread";
+                    var staResult = pane.Invoke(
+                        new Func<string>(() => RunUndoArrangement(inner))) as string;
+                    return $"ARR{arrangement}(inner={inner}) {staResult}";
                 }
                 return $"ARR{arrangement} " + RunUndoArrangement(inner);
             }
