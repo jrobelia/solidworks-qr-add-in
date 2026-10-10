@@ -37,6 +37,7 @@ namespace SolidWorksQrAddIn
         private ICommandManager? _cmdMgr;
         private ITaskpaneView? _taskPaneView;
         private QrTaskPaneControl? _pane;
+        private PaneKeyboardFilter? _keyboardFilter;
         private int _cookie;
         private bool _connected;
         private QrSketchSession? _session;
@@ -101,26 +102,43 @@ namespace SolidWorksQrAddIn
                 // Menu icons: IconList is a string[] of PNG paths — one strip
                 // file per resolution (20..128), one icon wide for our single
                 // command (ImageIndex 0). MainIconList dresses the group's own
-                // button the same way. Extraction is idempotent into
-                // <deployed add-in folder>\icons and must never fail
-                // ConnectToSW — a read-only folder leaves the command
-                // reachable by name, just unadorned. The task-pane tab reuses
-                // one of these PNGs as its icon.
+                // button the same way. The task-pane tab reuses one of these
+                // PNGs as its icon. Extraction must never fail ConnectToSW.
+                // Icon extraction target is per-user first: an Inno-installed
+                // DLL lives in Program Files (read-only), so beside-the-DLL
+                // extraction fails there. QrIconLocations orders candidates;
+                // the first that writes wins. Best-effort — a failure leaves
+                // the command reachable by name and the tab unadorned.
                 string paneIcon = string.Empty;
-                try
+                string[]? icons = null;
+                string addinDir = Path.GetDirectoryName(
+                    Assembly.GetExecutingAssembly().Location) ?? ".";
+                foreach (var dir in QrIconLocations.ExtractionDirectories(addinDir))
                 {
-                    string addinDir = Path.GetDirectoryName(
-                        Assembly.GetExecutingAssembly().Location) ?? ".";
-                    var icons = QrToolbarIcons.EnsureExtracted(
-                        Path.Combine(addinDir, "icons"));
-                    group.IconList = icons;
-                    group.MainIconList = icons;
-                    paneIcon = icons.Length > 1 ? icons[1] : icons[0]; // 32px
-                    Diag.Log($"command group icons set ({icons.Length} sizes)");
+                    try
+                    {
+                        icons = QrToolbarIcons.EnsureExtracted(dir);
+                        Diag.Log($"icons extracted to {dir}");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Diag.Log($"icon extraction to {dir} failed: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
+                if (icons != null)
                 {
-                    Diag.Log($"icon setup skipped: {ex.GetType().Name}: {ex.Message}");
+                    try
+                    {
+                        group.IconList = icons;
+                        group.MainIconList = icons;
+                        paneIcon = QrIconLocations.PickPaneIcon(icons);
+                        Diag.Log($"command group icons set ({icons.Length} sizes)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Diag.Log($"icon setup skipped: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
 
                 // Menu-only command surface: no custom toolbar — the QR UI is a
@@ -147,6 +165,23 @@ namespace SolidWorksQrAddIn
                 _taskPaneView.DisplayWindowFromHandlex64(_pane.Handle.ToInt64());
                 Diag.Log("task pane created");
 
+                // SolidWorks' pump eats WM_CHAR before the hosted WPF
+                // HwndSource sees it ("can delete but not type"). A thread
+                // message filter re-raising through ComponentDispatcher feeds
+                // it back to WPF. Installed once per connect, forward-only,
+                // best-effort: no filter must never break the pane.
+                try
+                {
+                    _keyboardFilter = new PaneKeyboardFilter();
+                    System.Windows.Forms.Application.AddMessageFilter(_keyboardFilter);
+                    Diag.Log("pane keyboard filter installed");
+                }
+                catch (Exception ex)
+                {
+                    _keyboardFilter = null;
+                    Diag.Log($"pane keyboard filter skipped: {ex.GetType().Name}: {ex.Message}");
+                }
+
                 _connected = true;
                 Diag.Log("connected");
                 return true;
@@ -170,6 +205,16 @@ namespace SolidWorksQrAddIn
             // in flight sees "not connected" and reports instead of touching a
             // released _sw — nothing can create geometry after unload.
             _connected = false;
+            // Uninstall the keyboard message filter FIRST — it must never
+            // outlive the hosted WPF surface it forwards messages to.
+            try
+            {
+                if (_keyboardFilter != null)
+                    System.Windows.Forms.Application.RemoveMessageFilter(_keyboardFilter);
+                Diag.Log("pane keyboard filter removed");
+            }
+            catch { /* unloading must never throw back into SolidWorks */ }
+            _keyboardFilter = null;
             // Release the pane surface first — it must not outlive the
             // add-in — then remove the task-pane view itself. Registered
             // undo handlers release their document references too, so an
