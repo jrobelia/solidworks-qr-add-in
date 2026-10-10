@@ -15,3 +15,12 @@ The five canonical roles use identical label strings: `needs-triage`, `needs-inf
 ### Domain docs
 
 Single-context layout: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`, both created lazily. See `docs/agents/domain.md`.
+
+## Repo guides
+
+- Build/test, repo layout, LiveProbe live-verify harness → `docs/BUILDING.md`
+- Deploy/register/unregister, add-in debug log, SolidWorks-side fixes → `docs/DEPLOYMENT.md`
+- Live acceptance gates (need exclusive SolidWorks access) → `docs/ACCEPTANCE.md`
+- Proven `CreateLine` coordinate conventions → `docs/SKETCH-COORDINATES.md`
+- Geometry insertion limits → `docs/INSERTION-GUARD.md`
+- Pack/verify + HKCU registration scripts → `scripts/`
