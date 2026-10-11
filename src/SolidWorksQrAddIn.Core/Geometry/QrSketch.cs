@@ -64,14 +64,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// <summary>Size information about a generated QR sketch (all physical values in mm).</summary>
     public sealed class QrSketchInfo
     {
+        /// <summary>
+        /// The fixed quiet zone every working matrix carries: 4 light cells per
+        /// side (ISO 18004, ADR 0002) — always present, never a setting.
+        /// </summary>
+        public const int QuietZoneCellsPerSide = 4;
+
         public QrSketchInfo(
-            int version, int cellCount, double pitchMm,
+            int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
             int contourCount, int segmentCount)
         {
             Version = version;
             CellCount = cellCount;
+            MatrixCellCount = matrixCellCount;
             PitchMm = pitchMm;
             GrowthFractionPerSide = growthFractionPerSide;
             GrowthMmPerSide = growthMmPerSide;
@@ -87,6 +94,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Data cells per side N (quiet zone excluded).</summary>
         public int CellCount { get; }
+
+        /// <summary>
+        /// Working-matrix cells per side M = N + 2·<see cref="QuietZoneCellsPerSide"/> —
+        /// the data cells plus the fixed 4-cell light margin (ADR 0002).
+        /// </summary>
+        public int MatrixCellCount { get; }
 
         /// <summary>Cell pitch p = S/(N + 2r′) where r′ is the effective growth fraction.</summary>
         public double PitchMm { get; }
