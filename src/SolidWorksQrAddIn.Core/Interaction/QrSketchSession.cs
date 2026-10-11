@@ -56,6 +56,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>Preview raster resolution (pixels per side, incl. margin).</summary>
         public const int PreviewPixelsAcross = 240;
 
+        /// <summary>
+        /// The pane's static note (spec #10): the created QR is one block
+        /// instance whose PropertyManager Scale field IS the size — resize is
+        /// an edit of that field, not a re-create.
+        /// </summary>
+        public const string ResizeNote =
+            "The QR is created as one sketch block instance — to resize it, " +
+            "edit the block's Scale property (it reads as the QR size in " +
+            "document units).";
+
         private const string PromptText = "Enter the text or URL to encode.";
 
         // The fields' initial text is DERIVED from the value constants —
@@ -67,6 +77,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             (InitialGrowthFractionPerSide * 100.0).ToString(CultureInfo.InvariantCulture);
 
         private readonly Func<IQrSketchWindow> _windowFactory;
+        private readonly Func<ISketchHost>? _hostProvider;
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
         private string _content = string.Empty;
@@ -76,10 +87,21 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QrSketchResult? _current;
 
-        public QrSketchSession(Func<IQrSketchWindow> windowFactory)
+        /// <param name="windowFactory">Builds the surface the session drives.</param>
+        /// <param name="hostProvider">
+        /// Optional fresh-host factory the session consults ONLY for the
+        /// document's length unit when it formats the cell-size readout —
+        /// display state, never an insertion route (creates still take the
+        /// host per call). Null or a host that cannot be read leaves the
+        /// readout in millimetres, honestly labelled.
+        /// </param>
+        public QrSketchSession(
+            Func<IQrSketchWindow> windowFactory, Func<ISketchHost>? hostProvider = null)
         {
             _windowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
+            _hostProvider = hostProvider;
             StatusText = PromptText;
+            CellSizeReadout = string.Empty;
         }
 
         // ---------------- inputs → geometry → picture ----------------
@@ -113,6 +135,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         /// <summary>What the window shows under the picture (prompt, error, or result).</summary>
         public string StatusText { get; private set; }
+
+        /// <summary>
+        /// The read-only cell (module) size readout in document units — the
+        /// module pitch p = S/(N + 2r′), the same number the insertion guard
+        /// enforces — e.g. "1.187 mm". Empty whenever the current inputs are
+        /// invalid: a stale readout must never describe an unusable request.
+        /// The unit is the host document's own length unit, re-read on every
+        /// regeneration through the injected host provider.
+        /// </summary>
+        public string CellSizeReadout { get; private set; }
 
         /// <summary>True when the current inputs produced insertable geometry.</summary>
         public bool HasValidRequest => _current?.Succeeded == true;
@@ -177,16 +209,46 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 Picture = QrPictureRenderer.Render(sketch, PreviewPixelsAcross);
                 // Plain status only — the window budget is
                 // content/size/growth/picture/Create; no version, cell-count
-                // or footprint readouts belong in the UI (spec).
+                // or footprint readouts belong in the UI (spec). The cell
+                // size is a separate read-only readout, not status text.
                 StatusText = "Ready — select Create Sketch.";
+                CellSizeReadout = FormatCellSize(sketch.Info.PitchMm);
             }
             else
             {
                 Picture = null;
                 StatusText = _current.Error!.Message;
+                CellSizeReadout = string.Empty;
             }
             NotifyWindow();
             return _current;
+        }
+
+        /// <summary>
+        /// The module pitch expressed in the document's length unit. The unit
+        /// is host state — the injected provider is re-asked on every
+        /// regeneration so a document switch lands in the readout live. A
+        /// missing/failed provider shows millimetres: the pitch genuinely IS
+        /// that many millimetres, so the label stays honest.
+        /// </summary>
+        private string FormatCellSize(double pitchMm)
+        {
+            var unit = ReadLengthUnit();
+            double pitchDocUnits = pitchMm / 1000.0 / unit.MetresPerUnit;
+            return pitchDocUnits.ToString("G4", CultureInfo.InvariantCulture) + " " + unit.Symbol;
+        }
+
+        private HostLengthUnit ReadLengthUnit()
+        {
+            try
+            {
+                var state = _hostProvider?.Invoke().CaptureState();
+                return state?.LengthUnit ?? HostLengthUnit.Millimetres;
+            }
+            catch
+            {
+                return HostLengthUnit.Millimetres;
+            }
         }
 
         /// <summary>

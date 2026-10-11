@@ -155,7 +155,10 @@ namespace SolidWorksQrAddIn
                 // The interaction state behind the pane lives here for the
                 // connection's lifetime; the view factory returns the pane
                 // adapter — the task-pane tab is the single surface.
-                _session = new QrSketchSession(CreateQrWindow);
+                // The host provider doubles as the session's document-unit
+                // source — the cell-size readout re-asks a FRESH host for its
+                // length unit on every regeneration (never a cached doc).
+                _session = new QrSketchSession(CreateQrWindow, CreateSketchHost);
 
                 _pane = new QrTaskPaneControl(
                     _session, CreateSketchHost,

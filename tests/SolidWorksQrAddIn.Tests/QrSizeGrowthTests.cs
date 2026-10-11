@@ -400,10 +400,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(result.Succeeded, result.Message);
             var expected = QrSketchGenerator.Generate(Payload, 40.0, 0.08).Sketch!;
             var sketch = host.Document!.Sketches.Single();
-            Assert.Equal(expected.Info.SegmentCount, sketch.Segments.Count);
+            var segs = sketch.EffectiveSegments.ToList();
+            Assert.Equal(expected.Info.SegmentCount, segs.Count);
             double half = 40.0 / 2.0 / 1000.0;
-            Assert.Equal(half, sketch.Segments.Max(s => System.Math.Max(s.X1, s.X2)), 9);
-            Assert.Equal(-half, sketch.Segments.Min(s => System.Math.Min(s.X1, s.X2)), 9);
+            Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
+            Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
         }
 
         [Fact]
@@ -444,8 +445,8 @@ namespace SolidWorksQrAddIn.Tests
             session.SetContent(Payload);
             Assert.True(session.CreateSketch(host).Succeeded);
             var first = host.Document!.Sketches.Single();
-            int firstSegCount = first.Segments.Count;
-            var firstEdges = first.Segments
+            int firstSegCount = first.EffectiveSegments.Count();
+            var firstEdges = first.EffectiveSegments
                 .Select(s => (s.X1, s.Y1, s.X2, s.Y2)).ToList();
             host.Document.ActiveSketch = null; // engineer exits the sketch
 
@@ -453,8 +454,8 @@ namespace SolidWorksQrAddIn.Tests
             session.SetGrowthText("12");
             session.SetContent("DIFFERENT-CONTENT");
 
-            Assert.Equal(firstSegCount, first.Segments.Count);
-            Assert.Equal(firstEdges, first.Segments
+            Assert.Equal(firstSegCount, first.EffectiveSegments.Count());
+            Assert.Equal(firstEdges, first.EffectiveSegments
                 .Select(s => (s.X1, s.Y1, s.X2, s.Y2)).ToList());
         }
 
@@ -474,11 +475,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, host.Document.Sketches.Count);
             // Sketch 1 is still the 25 mm request…
             double quarter = 25.0 / 2.0 / 1000.0;
-            var segs1 = host.Document.Sketches[0].Segments;
+            var segs1 = host.Document.Sketches[0].EffectiveSegments.ToList();
             Assert.Equal(quarter, segs1.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             // …and sketch 2 spans the new 40 mm.
             double half40 = 40.0 / 2.0 / 1000.0;
-            var segs2 = host.Document.Sketches[1].Segments;
+            var segs2 = host.Document.Sketches[1].EffectiveSegments.ToList();
             Assert.Equal(half40, segs2.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             Assert.Equal(segs1.Count, segs2.Count); // same payload, same contours
         }
@@ -499,13 +500,14 @@ namespace SolidWorksQrAddIn.Tests
             double half = 25.0 / 2.0 / 1000.0;
             foreach (var sketch in host.Document!.Sketches)
             {
-                Assert.Equal(half, sketch.Segments.Max(s => System.Math.Max(s.X1, s.X2)), 9);
-                Assert.Equal(-half, sketch.Segments.Min(s => System.Math.Min(s.X1, s.X2)), 9);
+                var segs = sketch.EffectiveSegments.ToList();
+                Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
+                Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
             }
             // But the geometry is different — 10% growth ≠ 3% growth.
             Assert.NotEqual(
-                host.Document.Sketches[0].Segments.Select(s => (s.X1, s.X2)).ToList(),
-                host.Document.Sketches[1].Segments.Select(s => (s.X1, s.X2)).ToList());
+                host.Document.Sketches[0].EffectiveSegments.Select(s => (s.X1, s.X2)).ToList(),
+                host.Document.Sketches[1].EffectiveSegments.Select(s => (s.X1, s.X2)).ToList());
         }
 
         [Fact]
@@ -534,7 +536,7 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             double half = 40.0 / 2.0 / 1000.0;
-            var segs = host.Document!.Sketches.Single().Segments;
+            var segs = host.Document!.Sketches.Single().EffectiveSegments.ToList();
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.Y1, s.Y2)), 9);

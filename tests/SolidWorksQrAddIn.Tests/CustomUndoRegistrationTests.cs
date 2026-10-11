@@ -107,7 +107,9 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(doc.RedoLastStep());         // the same handler toggles back
             Assert.Contains(qrSketch, doc.Sketches);
-            Assert.Equal(Expected.Info.SegmentCount, qrSketch.Segments.Count);
+            // Redo restores the sketch whole — block instance and contours.
+            Assert.Equal(Expected.Info.SegmentCount,
+                qrSketch.EffectiveSegments.Count());
         }
 
         [Fact]
