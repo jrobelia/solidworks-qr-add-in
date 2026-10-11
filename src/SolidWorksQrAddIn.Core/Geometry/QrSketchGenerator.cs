@@ -11,13 +11,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// outline size + per-side growth in, validated closed contours with
     /// nesting and size info out — or one actionable error.
     ///
-    /// Pipeline (spec "Geometry generation"):
+    /// Pipeline (spec "Geometry generation"; matrix model per ADR 0002):
     ///   1. encode exactly — standard QR, automatic version, ECC M;
-    ///   2. strip the encoder's 4-cell quiet-zone padding (N = Count − 8);
+    ///   2. the working matrix is the encoder's full (N+8)×(N+8) matrix —
+    ///      N×N data cells plus the fixed 4-cell light quiet zone per side;
     ///   3. pitch p = S/(N + 2r′), grown-cell pitch on a normalized integer
-    ///      grid of <see cref="QrInsertionGuard.GridUnitsPerCell"/> units/cell;
-    ///   4. expand every dark cell by g = round(r·U) units on all four sides;
-    ///   5. union (Clipper2 NonZero) into a PolyTree64 — outer/hole/island
+    ///      grid of <see cref="QrInsertionGuard.GridUnitsPerCell"/> units/cell
+    ///      (S still measures the N-cell data area — size semantics unchanged);
+    ///   4. expand every dark cell by g = round(r·U) units on all four sides —
+    ///      quiet-zone cells are light and never emit;
+    ///   5. union (Clipper2 NonZero) and clip to the working-matrix square —
+    ///      a guaranteed no-op in normal mode (grown dark cells cannot reach
+    ///      the 4-cell border) — into a PolyTree64 with outer/hole/island
     ///      nesting preserved;
     ///   6. strip redundant collinear vertices (epsilon 0);
     ///   7. validate on the grid: nonzero area, no zero-length edges, no
@@ -25,6 +30,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   8. convert to physical sketch metres — a pure affine map, so shared
     ///      endpoints stay bit-identical — centred on the origin, matrix row 0
     ///      at +y so the QR is upright rather than mirrored.
+    ///
+    /// The result carries the sized contour set PLUS (ADR 0001/0002): the
+    /// same contours unit-proportioned (grown outline = 1×1, the block-
+    /// definition space), the QR square and keep-out square as construction
+    /// geometry, and the dimension spec linking them.
     ///
     /// Contains no SolidWorks objects.
     /// </summary>
@@ -41,23 +51,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 return QrSketchResult.Fail(QrSketchErrorKind.EmptyContent,
                     "QR content is empty. Enter the text or URL to encode.");
 
-            bool[,] cells;
+            bool[,] matrix;
             int version;
             try
             {
                 using (var generator = new QRCodeGenerator())
                 using (var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M))
                 {
-                    // ModuleMatrix INCLUDES a 4-cell quiet zone on every side —
-                    // strip it: data cells live at indices [4, Count−4).
-                    var matrix = data.ModuleMatrix;
-                    int n = matrix.Count - 8;
-                    cells = new bool[n, n];
-                    for (var row = 0; row < n; row++)
+                    // ModuleMatrix IS the working matrix (ADR 0002): N×N data
+                    // cells plus the standard 4-cell light quiet zone on every
+                    // side — keep it whole, data cells live at [4, Count−4).
+                    var encoded = data.ModuleMatrix;
+                    int m = encoded.Count;
+                    matrix = new bool[m, m];
+                    for (var row = 0; row < m; row++)
                     {
-                        BitArray bits = matrix[row + 4];
-                        for (var col = 0; col < n; col++)
-                            cells[row, col] = bits[col + 4];
+                        BitArray bits = encoded[row];
+                        for (var col = 0; col < m; col++)
+                            matrix[row, col] = bits[col];
                     }
                     version = data.Version;
                 }
@@ -74,14 +85,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"The QR encoder rejected the content: {ex.Message}");
             }
 
-            return Build(cells, sizeMm, growthFractionPerSide, version);
+            return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
+                sizeMm, growthFractionPerSide, version);
         }
 
         /// <summary>
         /// The same pipeline fed directly from a dark-cell matrix (no encoder):
         /// <paramref name="darkCells"/>[row, col] == true means dark, indexed
         /// from the top-left data cell. Deterministic-fixture seam for tests;
-        /// the encoded path funnels through it after stripping the quiet zone.
+        /// the encoded path funnels through it with a full encoded matrix —
+        /// both are padded into the same (N+8)×(N+8) working matrix.
         /// </summary>
         public static QrSketchResult GenerateFromCells(bool[,] darkCells, double sizeMm, double growthFractionPerSide)
         {
@@ -89,12 +102,28 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 throw new ArgumentNullException(nameof(darkCells));
             if (darkCells.GetLength(0) != darkCells.GetLength(1))
                 throw new ArgumentException("The QR cell matrix must be square.", nameof(darkCells));
-            return Build(darkCells, sizeMm, growthFractionPerSide, version: 0);
+
+            // Fixtures hand over the N×N data cells; the working matrix pads
+            // them with the same fixed light quiet zone the encoder provides.
+            int n = darkCells.GetLength(0);
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            var matrix = new bool[n + 2 * q, n + 2 * q];
+            for (var row = 0; row < n; row++)
+                for (var col = 0; col < n; col++)
+                    matrix[row + q, col + q] = darkCells[row, col];
+            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0);
         }
 
-        private static QrSketchResult Build(bool[,] cells, double sizeMm, double growthFraction, int version)
+        /// <summary>
+        /// Runs the pipeline on a working matrix: <paramref name="matrix"/> is
+        /// the full (N+8)×(N+8) grid where <paramref name="dataCells"/> is the
+        /// N×N payload extent inside it (the margin cells are always light).
+        /// </summary>
+        private static QrSketchResult Build(
+            bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version)
         {
-            int n = cells.GetLength(0);
+            int m = matrix.GetLength(0);
+            int n = dataCells;
             int u = QrInsertionGuard.GridUnitsPerCell;
 
             // ---------- input validation ----------
@@ -135,13 +164,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion guard. Increase the size " +
                     "or adjust the growth percentage.");
 
-            // ---------- expand dark cells + union ----------
+            // ---------- expand dark cells + union, clipped to the matrix ----------
             var subject = new Paths64();
             int darkCount = 0;
-            for (var row = 0; row < n; row++)
-                for (var col = 0; col < n; col++)
+            for (var row = 0; row < m; row++)
+                for (var col = 0; col < m; col++)
                 {
-                    if (!cells[row, col]) continue;
+                    if (!matrix[row, col]) continue;
                     darkCount++;
                     long x0 = (long)col * u - g;
                     long y0 = (long)row * u - g;
@@ -158,8 +187,22 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
                     "The cell matrix contains no dark cells; nothing would be sketched.");
 
+            // ADR 0002: all geometry is clipped to the working-matrix square
+            // [0, M·U] — a guaranteed no-op in normal mode (grown dark cells
+            // stay g < U/2 < 4U inside the border), a clean field edge when a
+            // future mode emits light cells.
+            long matrixEdge = (long)m * u;
+            var clip = new Paths64
+            {
+                new Path64(4)
+                {
+                    new Point64(0, 0), new Point64(matrixEdge, 0),
+                    new Point64(matrixEdge, matrixEdge), new Point64(0, matrixEdge),
+                },
+            };
+
             var tree = new PolyTree64();
-            Clipper.BooleanOp(ClipType.Union, subject, null, tree, FillRule.NonZero);
+            Clipper.BooleanOp(ClipType.Intersection, subject, clip, tree, FillRule.NonZero);
             if (tree.Count == 0)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
                     "The union of expanded cells produced no contours.");
@@ -185,12 +228,25 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"Generated contours failed validation: {violation}.");
 
             // ---------- convert to physical metres ----------
+            // S measures the N-cell grown data area (unchanged); the matrix is
+            // symmetric about the data, so centring on M·U/2 keeps the data
+            // centred on the origin.
             double mPerUnit = (sizeMm / 1000.0) / ((double)n * u + 2 * g);
-            double gridCentre = n * (double)u / 2.0;
+            double gridCentre = m * (double)u / 2.0;
             var regions = new List<QrRegion>(gridRegions.Count);
             var contours = new List<QrContour>(flatPaths.Count);
             foreach (var gr in gridRegions)
-                regions.Add(ConvertRegion(gr, contours, mPerUnit, gridCentre));
+                regions.Add(ConvertRegion(gr, contours,
+                    p => ToMetres(p, mPerUnit, gridCentre)));
+
+            // The same contour model unit-proportioned: the grown QR outline
+            // spans exactly 1×1 — the block-definition space (ADR 0001).
+            double grownUnits = n * (double)u + 2 * g;
+            var unitRegions = new List<QrRegion>(gridRegions.Count);
+            var unitContours = new List<QrContour>(flatPaths.Count);
+            foreach (var gr in gridRegions)
+                unitRegions.Add(ConvertRegion(gr, unitContours,
+                    p => ToUnit(p, grownUnits, gridCentre)));
 
             // Actual smallest delivered edge (integer units → mm).
             long minEdgeUnits = long.MaxValue;
@@ -215,6 +271,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var info = new QrSketchInfo(
                 version: version,
                 cellCount: n,
+                matrixCellCount: m,
                 pitchMm: u * mmPerUnit,
                 growthFractionPerSide: (double)g / u,
                 growthMmPerSide: g * mmPerUnit,
@@ -224,8 +281,35 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount);
 
-            return QrSketchResult.Ok(new QrSketch(regions, contours, info));
+            // ---------- construction squares + dimension spec ----------
+            // The squares live in the HOST sketch (ADR 0001) at real sketch
+            // size: the QR square bounds the grown QR-cell extent (S per
+            // side); the keep-out square IS the working-matrix boundary
+            // (M·p per side — ADR 0002, not "4 cells outside the QR square").
+            double qrHalf = sizeMm / 2000.0;
+            double keepOutHalf = m * u * mPerUnit / 2.0;
+            var squares = new List<QrConstructionSquare>(2)
+            {
+                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(qrHalf)),
+                new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(keepOutHalf)),
+            };
+            // keep-out side − QR-square side = M·p − (N + 2r′)·p = (8 − 2r′)·p.
+            double keepOutOffsetCells =
+                2.0 * (QrSketchInfo.QuietZoneCellsPerSide - (double)g / u);
+            var dimensionSpec = new QrDimensionSpec(keepOutOffsetCells);
+
+            return QrSketchResult.Ok(new QrSketch(
+                regions, contours, new QrContourSet(unitRegions, unitContours),
+                squares, dimensionSpec, info));
         }
+
+        private static SketchPoint2[] SquareVertices(double half) =>
+            // Centred on the origin like the contours; CCW from bottom-left.
+            new[]
+            {
+                new SketchPoint2(-half, -half), new SketchPoint2(+half, -half),
+                new SketchPoint2(+half, +half), new SketchPoint2(-half, +half),
+            };
 
         // ----- grid-space tree -----
 
@@ -281,27 +365,38 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 (p.X - gridCentre) * mPerUnit,
                 (gridCentre - p.Y) * mPerUnit);
 
-        private static QrContour ToContour(Path64 path, bool isHole, double mPerUnit, double gridCentre)
+        /// <summary>
+        /// The unit-proportioned map: divide by the grown-extent grid width
+        /// (rather than multiply by a reciprocal) so the outline lands on
+        /// exactly ±0.5 — the block definition is drawn at literal unit size.
+        /// </summary>
+        private static SketchPoint2 ToUnit(Point64 p, double grownUnits, double gridCentre) =>
+            new SketchPoint2(
+                (p.X - gridCentre) / grownUnits,
+                (gridCentre - p.Y) / grownUnits);
+
+        private static QrContour ToContour(
+            Path64 path, bool isHole, Func<Point64, SketchPoint2> map)
         {
             var vertices = new List<SketchPoint2>(path.Count);
             foreach (var p in path)
-                vertices.Add(ToMetres(p, mPerUnit, gridCentre));
+                vertices.Add(map(p));
             return new QrContour(vertices, isHole);
         }
 
         private static QrRegion ConvertRegion(
-            GridRegion grid, List<QrContour> flat, double mPerUnit, double gridCentre)
+            GridRegion grid, List<QrContour> flat, Func<Point64, SketchPoint2> map)
         {
-            var boundary = ToContour(grid.Path, isHole: false, mPerUnit, gridCentre);
+            var boundary = ToContour(grid.Path, isHole: false, map);
             flat.Add(boundary);
             var holes = new List<QrHole>(grid.Holes.Count);
             foreach (var gh in grid.Holes)
             {
-                var holeBoundary = ToContour(gh.Path, isHole: true, mPerUnit, gridCentre);
+                var holeBoundary = ToContour(gh.Path, isHole: true, map);
                 flat.Add(holeBoundary);
                 var islands = new List<QrRegion>(gh.Islands.Count);
                 foreach (var island in gh.Islands)
-                    islands.Add(ConvertRegion(island, flat, mPerUnit, gridCentre));
+                    islands.Add(ConvertRegion(island, flat, map));
                 holes.Add(new QrHole(holeBoundary, islands));
             }
             return new QrRegion(boundary, holes);

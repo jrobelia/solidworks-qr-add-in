@@ -64,14 +64,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// <summary>Size information about a generated QR sketch (all physical values in mm).</summary>
     public sealed class QrSketchInfo
     {
+        /// <summary>
+        /// The fixed quiet zone every working matrix carries: 4 light cells per
+        /// side (ISO 18004, ADR 0002) — always present, never a setting.
+        /// </summary>
+        public const int QuietZoneCellsPerSide = 4;
+
         public QrSketchInfo(
-            int version, int cellCount, double pitchMm,
+            int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
             int contourCount, int segmentCount)
         {
             Version = version;
             CellCount = cellCount;
+            MatrixCellCount = matrixCellCount;
             PitchMm = pitchMm;
             GrowthFractionPerSide = growthFractionPerSide;
             GrowthMmPerSide = growthMmPerSide;
@@ -87,6 +94,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Data cells per side N (quiet zone excluded).</summary>
         public int CellCount { get; }
+
+        /// <summary>
+        /// Working-matrix cells per side M = N + 2·<see cref="QuietZoneCellsPerSide"/> —
+        /// the data cells plus the fixed 4-cell light margin (ADR 0002).
+        /// </summary>
+        public int MatrixCellCount { get; }
 
         /// <summary>Cell pitch p = S/(N + 2r′) where r′ is the effective growth fraction.</summary>
         public double PitchMm { get; }
@@ -114,16 +127,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
     }
 
     /// <summary>
-    /// The validated geometry the host inserts: nested filled regions plus a
-    /// flat contour list in insertion order. Contains no SolidWorks objects.
+    /// A complete contour hierarchy — nested regions, the flat contour list,
+    /// the edge enumeration — expressed in one coordinate space.
     /// </summary>
-    public sealed class QrSketch
+    public sealed class QrContourSet
     {
-        public QrSketch(IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours, QrSketchInfo info)
+        public QrContourSet(IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours)
         {
             Regions = regions;
             Contours = contours;
-            Info = info;
         }
 
         /// <summary>Top-level filled regions (disjoint dark areas of the QR pattern).</summary>
@@ -131,6 +143,66 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Every contour — region outlines, hole loops, island outlines — flat.</summary>
         public IReadOnlyList<QrContour> Contours { get; }
+
+        /// <summary>All contour edges in insertion order.</summary>
+        public IEnumerable<SketchEdge> Edges
+        {
+            get
+            {
+                foreach (var contour in Contours)
+                    foreach (var edge in contour.Edges)
+                        yield return edge;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The validated geometry the host inserts: nested filled regions plus a
+    /// flat contour list in insertion order. Contains no SolidWorks objects.
+    /// </summary>
+    public sealed class QrSketch
+    {
+        public QrSketch(
+            IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
+            QrContourSet unit,
+            IReadOnlyList<QrConstructionSquare> constructionSquares,
+            QrDimensionSpec dimensionSpec, QrSketchInfo info)
+        {
+            Regions = regions;
+            Contours = contours;
+            Unit = unit;
+            ConstructionSquares = constructionSquares;
+            DimensionSpec = dimensionSpec;
+            Info = info;
+        }
+
+        /// <summary>
+        /// Top-level filled regions (disjoint dark areas of the QR pattern), in
+        /// sketch-space metres at the requested size.
+        /// </summary>
+        public IReadOnlyList<QrRegion> Regions { get; }
+
+        /// <summary>Every contour — region outlines, hole loops, island outlines — flat.</summary>
+        public IReadOnlyList<QrContour> Contours { get; }
+
+        /// <summary>
+        /// The same contour model normalized so the grown QR outline spans
+        /// exactly 1×1 — the block-definition space (ADR 0001: definition drawn
+        /// at unit size, instance Scale = requested size). Same
+        /// <see cref="SketchPoint2"/> space as the sized set; the host applies
+        /// the document's length-unit conversion at insertion.
+        /// </summary>
+        public QrContourSet Unit { get; }
+
+        /// <summary>
+        /// The QR square and keep-out square, flagged construction geometry for
+        /// the host sketch (ADR 0001/0002) — bounds/clearance markers, never
+        /// cuttable profile and never part of <see cref="Contours"/>.
+        /// </summary>
+        public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
+
+        /// <summary>Which square carries the driven dim, which the equation-linked one, and the relation.</summary>
+        public QrDimensionSpec DimensionSpec { get; }
 
         public QrSketchInfo Info { get; }
 
