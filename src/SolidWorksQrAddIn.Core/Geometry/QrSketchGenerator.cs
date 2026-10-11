@@ -31,6 +31,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      endpoints stay bit-identical — centred on the origin, matrix row 0
     ///      at +y so the QR is upright rather than mirrored.
     ///
+    /// The result carries the sized contour set PLUS (ADR 0001/0002): the
+    /// same contours unit-proportioned (grown outline = 1×1, the block-
+    /// definition space), the QR square and keep-out square as construction
+    /// geometry, and the dimension spec linking them.
+    ///
     /// Contains no SolidWorks objects.
     /// </summary>
     public static class QrSketchGenerator
@@ -231,7 +236,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var regions = new List<QrRegion>(gridRegions.Count);
             var contours = new List<QrContour>(flatPaths.Count);
             foreach (var gr in gridRegions)
-                regions.Add(ConvertRegion(gr, contours, mPerUnit, gridCentre));
+                regions.Add(ConvertRegion(gr, contours,
+                    p => ToMetres(p, mPerUnit, gridCentre)));
+
+            // The same contour model unit-proportioned: the grown QR outline
+            // spans exactly 1×1 — the block-definition space (ADR 0001).
+            double grownUnits = n * (double)u + 2 * g;
+            var unitRegions = new List<QrRegion>(gridRegions.Count);
+            var unitContours = new List<QrContour>(flatPaths.Count);
+            foreach (var gr in gridRegions)
+                unitRegions.Add(ConvertRegion(gr, unitContours,
+                    p => ToUnit(p, grownUnits, gridCentre)));
 
             // Actual smallest delivered edge (integer units → mm).
             long minEdgeUnits = long.MaxValue;
@@ -284,7 +299,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var dimensionSpec = new QrDimensionSpec(keepOutOffsetCells);
 
             return QrSketchResult.Ok(new QrSketch(
-                regions, contours, squares, dimensionSpec, info));
+                regions, contours, new QrContourSet(unitRegions, unitContours),
+                squares, dimensionSpec, info));
         }
 
         private static SketchPoint2[] SquareVertices(double half) =>
@@ -349,27 +365,38 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 (p.X - gridCentre) * mPerUnit,
                 (gridCentre - p.Y) * mPerUnit);
 
-        private static QrContour ToContour(Path64 path, bool isHole, double mPerUnit, double gridCentre)
+        /// <summary>
+        /// The unit-proportioned map: divide by the grown-extent grid width
+        /// (rather than multiply by a reciprocal) so the outline lands on
+        /// exactly ±0.5 — the block definition is drawn at literal unit size.
+        /// </summary>
+        private static SketchPoint2 ToUnit(Point64 p, double grownUnits, double gridCentre) =>
+            new SketchPoint2(
+                (p.X - gridCentre) / grownUnits,
+                (gridCentre - p.Y) / grownUnits);
+
+        private static QrContour ToContour(
+            Path64 path, bool isHole, Func<Point64, SketchPoint2> map)
         {
             var vertices = new List<SketchPoint2>(path.Count);
             foreach (var p in path)
-                vertices.Add(ToMetres(p, mPerUnit, gridCentre));
+                vertices.Add(map(p));
             return new QrContour(vertices, isHole);
         }
 
         private static QrRegion ConvertRegion(
-            GridRegion grid, List<QrContour> flat, double mPerUnit, double gridCentre)
+            GridRegion grid, List<QrContour> flat, Func<Point64, SketchPoint2> map)
         {
-            var boundary = ToContour(grid.Path, isHole: false, mPerUnit, gridCentre);
+            var boundary = ToContour(grid.Path, isHole: false, map);
             flat.Add(boundary);
             var holes = new List<QrHole>(grid.Holes.Count);
             foreach (var gh in grid.Holes)
             {
-                var holeBoundary = ToContour(gh.Path, isHole: true, mPerUnit, gridCentre);
+                var holeBoundary = ToContour(gh.Path, isHole: true, map);
                 flat.Add(holeBoundary);
                 var islands = new List<QrRegion>(gh.Islands.Count);
                 foreach (var island in gh.Islands)
-                    islands.Add(ConvertRegion(island, flat, mPerUnit, gridCentre));
+                    islands.Add(ConvertRegion(island, flat, map));
                 holes.Add(new QrHole(holeBoundary, islands));
             }
             return new QrRegion(boundary, holes);

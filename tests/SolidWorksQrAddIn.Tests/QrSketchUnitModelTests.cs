@@ -190,5 +190,102 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(keepOutSideMm,
                 qrSideMm + spec.KeepOutSideOffsetCells * sketch.Info.PitchMm, 9);
         }
+
+        // ---------- unit-proportioned contours alongside the sized set ----------
+
+        [Fact]
+        public void Unit_contours_span_exactly_one_unit_at_the_grown_outline()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            // The block-definition space: the grown QR outline reads 1×1 —
+            // finder cells reach all four grown edges, so the extreme
+            // coordinates are exactly ±0.5 (the host converts to document
+            // units later).
+            var xs = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
+            var ys = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.Y).ToList();
+            Assert.Equal(0.5, xs.Max());
+            Assert.Equal(-0.5, xs.Min());
+            Assert.Equal(0.5, ys.Max());
+            Assert.Equal(-0.5, ys.Min());
+        }
+
+        [Fact]
+        public void Unit_contours_preserve_the_sized_contour_structure()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            // Same model, second coordinate space: identical contour list,
+            // hole flags and vertex counts — nothing re-shaped.
+            Assert.Equal(sketch.Contours.Count, sketch.Unit.Contours.Count);
+            Assert.Equal(sketch.Regions.Count, sketch.Unit.Regions.Count);
+            for (var i = 0; i < sketch.Contours.Count; i++)
+            {
+                Assert.Equal(sketch.Contours[i].IsHole, sketch.Unit.Contours[i].IsHole);
+                Assert.Equal(sketch.Contours[i].Vertices.Count,
+                    sketch.Unit.Contours[i].Vertices.Count);
+            }
+
+            // Nesting preserved: at least one ring→hole→island survives.
+            int nestedRings = sketch.Unit.Regions.Count(r =>
+                r.Holes.Any(h => h.Islands.Count > 0));
+            Assert.True(nestedRings >= 1, "unit regions must keep hole/island nesting");
+        }
+
+        [Fact]
+        public void Unit_contours_are_centred_and_keep_axis_aligned_shared_endpoints()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            foreach (var contour in sketch.Unit.Contours)
+            {
+                var edges = contour.Edges.ToList();
+                Assert.Equal(contour.Vertices.Count, edges.Count);
+                for (var i = 0; i < edges.Count; i++)
+                {
+                    // Same affine guarantee as the sized set: shared endpoints
+                    // are bit-identical and every edge is axis-aligned.
+                    var end = edges[i].End;
+                    var nextStart = edges[(i + 1) % edges.Count].Start;
+                    Assert.Equal(nextStart.X, end.X);
+                    Assert.Equal(nextStart.Y, end.Y);
+                }
+                foreach (var e in edges)
+                    Assert.True(e.Start.X == e.End.X || e.Start.Y == e.End.Y,
+                        "unit contour edges must be axis-aligned");
+            }
+        }
+
+        [Fact]
+        public void Sized_and_unit_contours_emit_side_by_side()
+        {
+            // Expand-contract: today's sized metre-space contours are still
+            // there, unchanged — the unit set rides alongside, never replaces.
+            var sketch = QrSketchGenerator.GenerateFromCells(
+                Cells(3, (0, 0), (1, 1), (2, 2)), SizeMm, Growth).Sketch!;
+
+            double half = SizeMm / 2.0 / 1000.0;
+            var sizedXs = sketch.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
+            var unitXs = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
+            Assert.True(sizedXs.Max() <= half, "sized set stays inside the grown extent");
+            Assert.True(unitXs.Max() <= 0.5, "unit set stays inside the unit outline");
+
+            // The two sets tell the same shape at two scales: unit = sized / S.
+            double sizeM = SizeMm / 1000.0;
+            var sizedVertex = sketch.Contours[0].Vertices[0];
+            var unitVertex = sketch.Unit.Contours[0].Vertices[0];
+            Assert.Equal(unitVertex.X, sizedVertex.X / sizeM, 12);
+            Assert.Equal(unitVertex.Y, sizedVertex.Y / sizeM, 12);
+        }
+
+        [Fact]
+        public void Unit_edges_enumerate_every_contour_edge()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            int expected = sketch.Unit.Contours.Sum(c => c.Vertices.Count);
+            Assert.Equal(expected, sketch.Unit.Edges.Count());
+            Assert.Equal(sketch.Info.SegmentCount, sketch.Unit.Edges.Count());
+        }
     }
 }
