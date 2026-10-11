@@ -7,6 +7,7 @@ using System.Threading;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Preview;
 using SolidWorksQrAddIn.Core.Registration;
@@ -97,6 +98,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "block", StringComparison.OrdinalIgnoreCase))
                 return BlockSpikeMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "blockqr", StringComparison.OrdinalIgnoreCase))
+                return BlockQrMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -1578,6 +1582,1178 @@ namespace SolidWorksQrAddIn.LiveProbe
                 sb.Append($"defDim0='{d0dim?.FullName}' v={d0dim?.SystemValue * 1000:F2}mm ");
             }
             return sb.ToString().Trim();
+        }
+
+        // ================= spec-10: QR-as-block-instance live gates =================
+
+        /// <summary>Everything a blockqr gate doc needs — the create delegate plus the expected model.</summary>
+        private sealed class BlockQrContext
+        {
+            public ISldWorks Sw = null!;
+            /// <summary>"OK &lt;sketchName&gt; …" or "ERROR …" — one create on the currently selected support.</summary>
+            public Func<string> Create = null!;
+            public QrSketch Expected = null!;
+            /// <summary>Which verification route drives the create ("in-proc" / "out-of-proc").</summary>
+            public string Route = "?";
+            /// <summary>mm — (N+8)·p, the working-matrix boundary per ADR 0002.</summary>
+            public double KeepOutSideMm => Expected.Info.MatrixCellCount * Expected.Info.PitchMm;
+            /// <summary>keep-out side / QR-square side — the equation's multiplier.</summary>
+            public double Ratio => KeepOutSideMm / Expected.Info.FinalSizeMm;
+        }
+
+        /// <summary>One enumerable sketch line, flattened to sketch-space metres.</summary>
+        private sealed class SegSpan
+        {
+            public double X1, Y1, X2, Y2;
+            public bool Construction;
+        }
+
+        /// <summary>Post-edit measurement: the square groups + display dims re-read live.</summary>
+        private sealed class ScaleMeasure
+        {
+            public List<double> Halves = new List<double>();
+            public List<(string Name, double ValueM, int Driven)> Dims =
+                new List<(string, double, int)>();
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe blockqr [deployDir] [progId]` — the spec-#10 live
+        /// gates (ticket #19, recorded in docs/BLOCK-GATES.md): the QR lands
+        /// as ONE sketch block instance at Scale = size-in-document-units
+        /// with the coincident-bound QR square (driven dim) and the
+        /// equation-linked keep-out square in the same host sketch.
+        ///
+        /// Two create routes, chosen live and reported:
+        ///   A) in-proc — the deployed build answers BlockSpikeProbe(-1) with
+        ///      PING; creates go through the session probes exactly like the
+        ///      pane's Create button.
+        ///   B) out-of-process — when a stale registered build shadows the
+        ///      deployed one (the BLOCK-SPIKE harness note: HKLM CodeBase
+        ///      wins COM activation), LiveProbe loads the deployed
+        ///      SolidWorksQrAddIn.dll itself and drives the REAL adapter —
+        ///      SolidWorksSketchHost + CreateQrSketchCommand — over the
+        ///      spawned instance's COM objects. Embedded-interop type
+        ///      equivalence makes the add-in's ISldWorks accept ours; the
+        ///      custom undo object still registers through the genuine
+        ///      RegisterSketchUndo path.
+        /// Every gate prints PASS/FAIL and the doc note records the route.
+        /// </summary>
+        private static int BlockQrMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(
+                        System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            var expected = ExpectedOf(PayloadA);
+            Console.WriteLine($"# spec-10 live gates — '{PayloadA}' N={expected.Info.CellCount} " +
+                $"M={expected.Info.MatrixCellCount} pitch={expected.Info.PitchMm:F5}mm " +
+                $"keepOutSide={expected.Info.MatrixCellCount * expected.Info.PitchMm:F4}mm");
+            {
+                double ex0 = double.MaxValue, ey0 = double.MaxValue,
+                       ex1 = double.MinValue, ey1 = double.MinValue;
+                foreach (var e in expected.Edges)
+                {
+                    ex0 = Math.Min(ex0, Math.Min(e.Start.X, e.End.X));
+                    ex1 = Math.Max(ex1, Math.Max(e.Start.X, e.End.X));
+                    ey0 = Math.Min(ey0, Math.Min(e.Start.Y, e.End.Y));
+                    ey1 = Math.Max(ey1, Math.Max(e.Start.Y, e.End.Y));
+                }
+                Console.WriteLine($"#   model edges bbox [{ex0 * 1000:F3},{ey0 * 1000:F3}] -> " +
+                    $"[{ex1 * 1000:F3},{ey1 * 1000:F3}] mm");
+            }
+
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                // ---- route selection: which build answers, and what drives creates ----
+                var probe = TryGetProbe(sw);
+                bool newBuild = ProbeIsNewBuild(probe);
+                if (!newBuild)
+                {
+                    // Swap whatever is loaded for the deployed DLL: unload by
+                    // every candidate path, load the requested one, re-ping.
+                    string local = Path.Combine(
+                        System.Environment.GetFolderPath(
+                            System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    foreach (var p in new[]
+                             {
+                                 dllPath, local,
+                                 @"C:\Program Files\SolidWorks QR Add-In\SolidWorksQrAddIn.dll",
+                             })
+                        try { sw.UnloadAddIn(p); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    probe = TryGetProbe(sw);
+                    newBuild = ProbeIsNewBuild(probe);
+                }
+
+                var ctx = new BlockQrContext { Sw = sw, Expected = expected };
+                if (newBuild && probe != null)
+                {
+                    var p = probe;
+                    ctx.Route = "in-proc (deployed build answers BlockSpikeProbe; " +
+                        "creates via SetQrContentProbe+CreateQrFromWindowProbe — the pane's path)";
+                    Console.WriteLine("# ROUTE A — " + ctx.Route);
+                    Check(probe.AddinStateProbe().StartsWith("CONNECTED"),
+                        "add-in connected", probe.AddinStateProbe());
+                    ctx.Create = () =>
+                    {
+                        p.SetQrContentProbe(PayloadA);
+                        return p.CreateQrFromWindowProbe();
+                    };
+                }
+                else
+                {
+                    var host = ReflectiveSketchHost(dllPath, sw, out var hostInfo);
+                    ctx.Route = "out-of-process adapter (stale build shadows the CLSID; " +
+                        "SolidWorksQrAddIn.Host driven reflectively — embedded-interop equivalence)";
+                    Console.WriteLine("# ROUTE B — " + ctx.Route);
+                    Check(host != null,
+                        "reflective SolidWorksSketchHost over the spawned instance", hostInfo);
+                    if (host == null) return 1;
+                    ctx.Create = () =>
+                    {
+                        try
+                        {
+                            var r = new CreateQrSketchCommand().Execute(host, PayloadA, 25.0, 0.03);
+                            return r.Succeeded
+                                ? $"OK {r.CreatedSketchName} {r.Message}"
+                                : $"ERROR {r.Message}";
+                        }
+                        catch (Exception ex) { return $"ERROR {ex.GetType().Name}: {ex.Message}"; }
+                    };
+                }
+
+                // Doc A: block structure, squares, dims, equations, drag/scale
+                // tracking, coincident proof, unexploded extrude, named undo,
+                // explode control.
+                WithSpikeDocVoid(sw, BlockQrDocA, ctx);
+                // Doc B: insertion centring on a planar face + rotated datums.
+                WithSpikeDocVoid(sw, BlockQrDocB, ctx);
+
+                Console.WriteLine(_failures == 0
+                    ? "# BLOCK-QR ALL CHECKS PASSED"
+                    : $"# {_failures} check(s) failed");
+                return _failures == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// The new-build discriminator: BlockSpikeProbe(-1) answers "PING" only
+        /// on a build that contains the spec-10 spike probe. A stale deployed
+        /// build throws (unknown IDispatch member) or never connects.
+        /// </summary>
+        private static bool ProbeIsNewBuild(IAddInProbe? probe)
+        {
+            if (probe == null) { Console.WriteLine("# no add-in object present"); return false; }
+            try
+            {
+                string ping = probe.BlockSpikeProbe(-1);
+                Console.WriteLine($"# discriminator BlockSpikeProbe(-1) -> {ping}");
+                return ping.StartsWith("PING");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# discriminator BlockSpikeProbe(-1) -> {ex.GetType().Name} " +
+                    "(the answering build predates spec-10)");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Loads the deployed add-in assembly into LiveProbe and constructs
+        /// the REAL host adapter reflectively. The add-in embeds its interop
+        /// types (TypeIdentifier) so its ISldWorks ctor parameter accepts the
+        /// LiveProbe RCW — the same product code runs, the COM calls just
+        /// marshal out-of-process. Used only when COM activation keeps
+        /// resolving to a stale registered build.
+        /// </summary>
+        private static ISketchHost? ReflectiveSketchHost(string dllPath, ISldWorks sw, out string info)
+        {
+            info = "";
+            try
+            {
+                var asm = System.Reflection.Assembly.LoadFrom(dllPath);
+                var t = asm.GetType("SolidWorksQrAddIn.Host.SolidWorksSketchHost");
+                if (t == null) { info = "SolidWorksSketchHost type not found in " + dllPath; return null; }
+                var obj = Activator.CreateInstance(t, new object[] { sw });
+                if (obj is ISketchHost host)
+                {
+                    info = $"constructed '{t.FullName}' from {asm.Location}";
+                    return host;
+                }
+                info = $"constructed {obj?.GetType().FullName} — not ISketchHost";
+                return null;
+            }
+            catch (Exception ex)
+            {
+                info = $"{ex.GetType().Name}: {ex.Message}";
+                if (ex is System.Reflection.ReflectionTypeLoadException rtl && rtl.LoaderExceptions != null)
+                    info += " loaders: " +
+                        string.Join("; ", rtl.LoaderExceptions.Select(e => e?.Message).Distinct());
+                return null;
+            }
+        }
+
+        /// <summary>WithSpikeDoc but void-bodied — the runner prints its own checks.</summary>
+        private static void WithSpikeDocVoid(
+            ISldWorks sw, Action<ISldWorks, IModelDoc2, BlockQrContext> body, BlockQrContext ctx)
+        {
+            string template = sw.GetUserPreferenceStringValue(
+                (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+            if (string.IsNullOrEmpty(template))
+            {
+                Check(false, "default part template available for the gate doc");
+                return;
+            }
+            var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+            if (doc == null) { Check(false, "gate part document created"); return; }
+            try { body(sw, doc, ctx); }
+            catch (Exception ex) { Check(false, "gate doc body", $"EX {ex.GetType().Name}: {ex.Message}"); }
+            finally { try { sw.CloseDoc(doc.GetTitle()); } catch { } }
+        }
+
+        /// <summary>All enumerable sketch lines (block internals are NOT enumerable — spike).</summary>
+        private static List<SegSpan> SketchLineSpans(ISketch sketch)
+        {
+            var list = new List<SegSpan>();
+            object? raw = null;
+            try { raw = sketch.GetSketchSegments(); } catch { }
+            if (raw is object[] segs)
+                foreach (var so in segs)
+                {
+                    if (!(so is ISketchLine l)) continue;
+                    var p1 = l.GetStartPoint2() as ISketchPoint;
+                    var p2 = l.GetEndPoint2() as ISketchPoint;
+                    if (p1 == null || p2 == null) continue;
+                    bool cons = false;
+                    try { cons = (l as ISketchSegment)?.ConstructionGeometry ?? false; } catch { }
+                    list.Add(new SegSpan { X1 = p1.X, Y1 = p1.Y, X2 = p2.X, Y2 = p2.Y, Construction = cons });
+                }
+            return list;
+        }
+
+        /// <summary>Distinct |coord| extents of the square groups (each square → 4 identical halves).</summary>
+        private static List<double> SquareHalves(List<SegSpan> segs, double tol = 2e-6)
+        {
+            var halves = new List<double>();
+            foreach (var s in segs)
+            {
+                double h = Math.Max(
+                    Math.Max(Math.Abs(s.X1), Math.Abs(s.X2)),
+                    Math.Max(Math.Abs(s.Y1), Math.Abs(s.Y2)));
+                if (!halves.Any(v => Math.Abs(v - h) < tol))
+                    halves.Add(h);
+            }
+            halves.Sort();
+            return halves;
+        }
+
+        /// <summary>Bounding-box centre of the segment set (concentric squares → their common centre).</summary>
+        private static (double x, double y) SegsBboxCentre(List<SegSpan> segs)
+        {
+            if (segs.Count == 0) return (double.NaN, double.NaN);
+            double minX = segs.Min(s => Math.Min(s.X1, s.X2)), maxX = segs.Max(s => Math.Max(s.X1, s.X2));
+            double minY = segs.Min(s => Math.Min(s.Y1, s.Y2)), maxY = segs.Max(s => Math.Max(s.Y1, s.Y2));
+            return ((minX + maxX) / 2.0, (minY + maxY) / 2.0);
+        }
+
+        /// <summary>Overall span of a segment set (width, height) in metres.</summary>
+        private static (double W, double H) SegsBbox(List<SegSpan> segs)
+        {
+            if (segs.Count == 0) return (0, 0);
+            double minX = segs.Min(s => Math.Min(s.X1, s.X2)), maxX = segs.Max(s => Math.Max(s.X1, s.X2));
+            double minY = segs.Min(s => Math.Min(s.Y1, s.Y2)), maxY = segs.Max(s => Math.Max(s.Y1, s.Y2));
+            return (maxX - minX, maxY - minY);
+        }
+
+        /// <summary>Diagnostic dump of every enumerable seg + the block def's own sketch.</summary>
+        private static void DumpSegs(ISketch sketch, string tag)
+        {
+            foreach (var s in SketchLineSpans(sketch))
+                Console.WriteLine($"#   seg[{tag}] ({s.X1 * 1000:F3},{s.Y1 * 1000:F3})->" +
+                    $"({s.X2 * 1000:F3},{s.Y2 * 1000:F3}) {(s.Construction ? "cons" : "real")}");
+        }
+
+        /// <summary>
+        /// Dumps the block DEFINITION's own sketch — the def is unit-sized by
+        /// design (±0.5 def units); if its segs read metres instead we have
+        /// found why squares/dims disagree about scale.
+        /// </summary>
+        private static void DumpBlockDef(ISketchBlockInstance inst)
+        {
+            try
+            {
+                var def = inst.Definition as ISketchBlockDefinition;
+                if (def == null) { Console.WriteLine("#   def: null"); return; }
+                Console.WriteLine($"#   def instances={def.GetInstanceCount()}");
+                try
+                {
+                    var defSketch = def.GetSketch() as ISketch;
+                    if (defSketch != null)
+                    {
+                        var ds = SketchLineSpans(defSketch);
+                        var bb = SegsBbox(ds);
+                        var cc = SegsBboxCentre(ds);
+                        Console.WriteLine($"#   def sketch segs={ds.Count} " +
+                            $"span=({bb.W:F6},{bb.H:F6}) centre=({cc.x:F6},{cc.y:F6})");
+                        foreach (var s in ds.Take(4))
+                            Console.WriteLine($"#     defseg ({s.X1:F6},{s.Y1:F6})->({s.X2:F6},{s.Y2:F6})");
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine($"#   def sketch read: {ex.Message}"); }
+                // The instance transform maps def-space -> host sketch space.
+                try
+                {
+                    var tr = inst.BlockToSketchTransform as IMathTransform;
+                    if (tr != null)
+                    {
+                        var a = tr.ArrayData as double[];
+                        Console.WriteLine("#   inst transform: " +
+                            (a == null ? "?" : string.Join(", ", a.Select(v => v.ToString("F6")))));
+                        // Block's REAL extent in the host sketch: map the def
+                        // bbox corners through def->sketch space.
+                        if (a != null && a.Length >= 13)
+                        {
+                            double s = a[12];
+                            var m = (double x, double y) => (
+                                s * (a[0] * x + a[1] * y) + a[9],
+                                s * (a[3] * x + a[4] * y) + a[10]);
+                            var c1 = m(-0.0005, -0.0005);
+                            var c2 = m(0.0005, 0.0005);
+                            Console.WriteLine($"#   block extent if def=±0.0005m: " +
+                                $"[{c1.Item1 * 1000:F2},{c1.Item2 * 1000:F2}] -> " +
+                                $"[{c2.Item1 * 1000:F2},{c2.Item2 * 1000:F2}] mm");
+                        }
+                    }
+                }
+                catch (Exception ex) { Console.WriteLine($"#   inst transform: {ex.Message}"); }
+            }
+            catch (Exception ex) { Console.WriteLine($"#   def dump: {ex.Message}"); }
+        }
+
+        /// <summary>(name, value-metres, driven-state-int) of every display dim on a feature.</summary>
+        private static List<(string Name, double ValueM, int Driven)> DisplayDimsOf(IFeature? feat)
+        {
+            var list = new List<(string, double, int)>();
+            if (feat == null) return list;
+            try
+            {
+                var dd = feat.GetFirstDisplayDimension() as IDisplayDimension;
+                for (int guard = 0; dd != null && guard < 32; guard++)
+                {
+                    var dim = dd.GetDimension2(0) as IDimension;
+                    int st = -1;
+                    try { st = dim?.DrivenState ?? -1; } catch { }
+                    list.Add((dim?.FullName ?? "?", dim?.SystemValue ?? -1.0, st));
+                    dd = NextDisplayDim(feat, dd);
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        private static IDisplayDimension? NextDisplayDim(IFeature feat, IDisplayDimension cur)
+        {
+            try { return feat.GetNextDisplayDimension(cur) as IDisplayDimension; } catch { }
+            try { return cur.GetNext() as IDisplayDimension; } catch { }
+            return null;
+        }
+
+        /// <summary>Document equation texts, for form + count verification.</summary>
+        private static List<string> EquationTexts(IModelDoc2 doc, out int count)
+        {
+            var eqs = new List<string>();
+            count = -1;
+            try
+            {
+                var eqm = doc.GetEquationMgr();
+                if (eqm == null) return eqs;
+                count = eqm.GetCount();
+                for (var i = 0; i < count; i++)
+                    try { eqs.Add(eqm.Equation[i] ?? ""); } catch { }
+            }
+            catch (Exception ex) { Console.WriteLine($"#   equation manager read threw {ex.GetType().Name}"); }
+            return eqs;
+        }
+
+        /// <summary>Re-read halves + dims — works on the open sketch or its feature.</summary>
+        private static ScaleMeasure MeasureScaleState(IModelDoc2 doc, IFeature? sketchFeat, ISketch? sketch)
+        {
+            var m = new ScaleMeasure();
+            var sk = sketch ?? sketchFeat?.GetSpecificFeature2() as ISketch;
+            if (sk != null)
+                m.Halves = SquareHalves(
+                    SketchLineSpans(sk).Where(s => s.Construction).ToList());
+            m.Dims = DisplayDimsOf(sketchFeat);
+            return m;
+        }
+
+        /// <summary>
+        /// Doc A: marker sketch → create on Front Plane → structure/squares/
+        /// dims/equations → drag + Scale tracking → coincident proof →
+        /// unexploded extrude → named undo → explode control.
+        /// </summary>
+        private static void BlockQrDocA(ISldWorks sw, IModelDoc2 doc, BlockQrContext ctx)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var fm = (IFeatureManager)doc.FeatureManager;
+            double qrSide = ctx.Expected.Info.FinalSizeMm / 1000.0;   // metres
+            double qrHalf = qrSide / 2.0;
+            double keepSide = ctx.KeepOutSideMm / 1000.0;
+            double keepHalf = keepSide / 2.0;
+            double gapSide = (keepSide - qrSide) / 2.0;
+
+            // ---------- prior user work the named undo must not eat ----------
+            doc.ClearSelection2(true);
+            ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            mgr.InsertSketch(true);
+            string markerName = (mgr.ActiveSketch as IFeature)?.Name ?? "";
+            mgr.CreateLine(-0.01, 0.0, 0, 0.01, 0.0, 0);
+            mgr.InsertSketch(false);
+            Check(markerName.Length > 0 && FindSketchFeature(doc, markerName) != null,
+                "prior-work marker sketch exists", markerName);
+
+            // ---------- the create ----------
+            doc.ClearSelection2(true);
+            Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault),
+                "Front Plane selected for the QR create");
+            string cr = ctx.Create();
+            Check(cr.StartsWith("OK"), "QR create succeeds on Front Plane", cr);
+            string sketchName =
+                cr.StartsWith("OK") && cr.Split(' ').Length > 1 ? cr.Split(' ')[1] : "";
+            var sketch = mgr.ActiveSketch as ISketch;
+            Check(sketch != null, "the created sketch is left open in edit mode");
+            if (sketch == null) return;
+            var sketchFeat = sketch as IFeature;
+
+            // ---------- G-structure: ONE block instance at Scale = size ----------
+            int instCount = sketch.GetSketchBlockInstanceCount();
+            Check(instCount == 1, "the sketch contains exactly ONE block instance",
+                $"count={instCount}");
+            var inst = instCount > 0
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            Check(inst != null, "the block instance is readable", inst?.Name ?? "null");
+            if (inst == null) return;
+            Check(Math.Abs(inst.Scale - 25.0) < 1e-3,
+                "instance Scale reads the requested size in document units (25 mm)",
+                $"Scale={inst.Scale:F4} Scale2={inst.Scale2:F4} Angle={inst.Angle:F3}");
+            var ipos = inst.InstancePosition?.ArrayData as double[];
+            Check(ipos != null && Math.Abs(ipos[0]) < 1e-9 && Math.Abs(ipos[1]) < 1e-9,
+                "instance sits at the sketch origin",
+                ipos != null ? $"({ipos[0] * 1000:F3},{ipos[1] * 1000:F3}) mm" : "null");
+            try { Check(inst.Definition != null, "the block definition is reachable"); }
+            catch { Check(false, "the block definition is reachable", "Definition threw"); }
+            Console.WriteLine(
+                $"#   block-bearing sketch region count: {sketch.GetSketchRegionCount()}");
+
+            // ---------- G-squares: the two construction squares landed ----------
+            DumpBlockDef(inst);
+            DumpSegs(sketch, "landed");
+            var segs = SketchLineSpans(sketch);
+            Check(segs.Count == 8 && segs.All(s => s.Construction),
+                "only the two construction squares are enumerable host segments " +
+                "(block internals stay hidden)",
+                $"segs={segs.Count} construction={segs.Count(s => s.Construction)}");
+            var halves = SquareHalves(segs);
+            Check(halves.Count == 2 && Math.Abs(halves[0] - qrHalf) < 2e-5 &&
+                  Math.Abs(halves[1] - keepHalf) < 2e-5,
+                "QR square + keep-out square land at the staged extents",
+                $"halves=[{string.Join(", ", halves.Select(h => (h * 1000).ToString("F4")))}] " +
+                $"expected {qrHalf * 1000:F4}/{keepHalf * 1000:F4} mm");
+
+            // ---------- G-dims/equations: dim plan landed ----------
+            var dims = DisplayDimsOf(sketchFeat);
+            Console.WriteLine("#   dims: " + (dims.Count == 0 ? "none" : string.Join(" | ",
+                dims.Select(d => $"{d.Name}={d.ValueM * 1000:F3}mm st={d.Driven}"))));
+            Check(dims.Count == 4, "four display dims landed (QR side + keep-out side + two gaps)",
+                $"count={dims.Count}");
+            var qrDim = dims.OrderBy(d => Math.Abs(d.ValueM - qrSide)).FirstOrDefault();
+            var keepDim = dims.OrderBy(d => Math.Abs(d.ValueM - keepSide)).FirstOrDefault();
+            var gapDims = dims.Where(d => Math.Abs(d.ValueM - gapSide) < 1e-3).ToList();
+            bool qrDimOk = qrDim.Name != null && Math.Abs(qrDim.ValueM - qrSide) < 2e-3;
+            bool keepDimOk = keepDim.Name != null && Math.Abs(keepDim.ValueM - keepSide) < 2e-3;
+            Check(qrDimOk, "the QR square's dim reads the 25 mm size",
+                $"{qrDim.Name}={qrDim.ValueM * 1000:F3}mm st={qrDim.Driven}");
+            Check(keepDimOk, "the keep-out side dim reads the matrix-boundary size",
+                $"{keepDim.Name}={keepDim.ValueM * 1000:F3}mm st={keepDim.Driven}");
+            Check(gapDims.Count == 2, "two equal gap dims centre the keep-out on the QR square",
+                $"gapDims={gapDims.Count}");
+            string qrDimName = qrDim.Name ?? "";
+            Check(qrDimOk && qrDimName.Contains("@" + sketchName),
+                "dim naming follows D<n>@<sketchName>[@<doc>]", qrDimName);
+
+            var eqs = EquationTexts(doc, out int eqCount);
+            Console.WriteLine("#   equations: " +
+                (eqs.Count == 0 ? "none" : string.Join(" | ", eqs)));
+            Check(eqCount >= 3, "the keep-out equations landed in the equation manager",
+                $"count={eqCount}");
+            Check(qrDimName.Length > 0 &&
+                  eqs.Any(e => e.Contains(qrDimName) && e.Contains("*")),
+                "equations reference the QR dim multiplicatively (keep-out = D1 × ratio)",
+                qrDimName);
+
+            // ---------- coincident proof (pre-scale position) ----------
+            doc.ClearSelection2(true);
+            Check(ext.SelectByID2("", "SKETCHPOINT", qrHalf, -qrHalf, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault),
+                "a sketch point sits at the QR square's corner before the Scale edit",
+                $"pick ({qrHalf * 1000:F3},{-qrHalf * 1000:F3}) mm");
+
+            // Diagnose WHAT boundary picks select — block vertex, square
+            // point, or nothing. A real staged-edge endpoint on the bottom
+            // line doubles as the known block-vertex coordinate.
+            var selMgr = doc.ISelectionManager as ISelectionMgr;
+            foreach (var (px, py, label) in new[]
+                 {
+                     (-qrHalf, -qrHalf, "square+block corner"),
+                     (0.0, -qrHalf, "bottom-line interior"),
+                     (0.0, 0.0, "sketch origin"),
+                 })
+            {
+                doc.ClearSelection2(true);
+                bool ok = ext.SelectByID2("", "SKETCHPOINT", px, py, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                int t = -1;
+                if (ok && selMgr != null)
+                    try { t = selMgr.GetSelectedObjectType3(1, -1); } catch { }
+                Console.WriteLine($"#   pick SKETCHPOINT({px * 1000:F2},{py * 1000:F2}) " +
+                    $"[{label}] -> {ok} seltype={t}");
+            }
+            int sketchPts = -1;
+            try { sketchPts = sketch.GetSketchPointsCount2(); } catch { }
+            Console.WriteLine($"#   sketch point count (incl. block?): {sketchPts}");
+
+            // Probe lines are deleted after the experiments — they are host
+            // geometry in the measured sketch and would pollute the explode
+            // and undo gates below.
+            var probeLines = new List<ISketchSegment>();
+
+            // Segment-pick alternative (the adapter's fix path): SKETCHSEGMENT
+            // at a block boundary edge midpoint — the spike's selBlockSeg=True
+            // says block edges ARE selectable this way; a coincident between
+            // the host line and the block edge must move the line onto the
+            // edge's line (collinear).
+            var edgeMid = FirstBoundaryEdgeMidpoint(ctx.Expected, -qrHalf);
+            if (edgeMid.HasValue)
+            {
+                var hostLine2 = mgr.CreateLine(0.030, 0.035, 0.0, 0.040, 0.035, 0.0)
+                    as ISketchSegment;
+                if (hostLine2 != null) probeLines.Add(hostLine2);
+                doc.ClearSelection2(true);
+                bool segOk = ext.SelectByID2("", "SKETCHSEGMENT",
+                    edgeMid.Value.x, edgeMid.Value.y, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                int st = -1;
+                if (segOk && selMgr != null)
+                    try { st = selMgr.GetSelectedObjectType3(1, -1); } catch { }
+                bool ln2 = false;
+                try { ln2 = hostLine2 != null && hostLine2.Select4(true, null); }
+                catch { }
+                Console.WriteLine($"#   seg bind probe: blockEdge({edgeMid.Value.x * 1000:F2}," +
+                    $"{edgeMid.Value.y * 1000:F2})={segOk} seltype={st} line={ln2}");
+                if (segOk && ln2)
+                {
+                    // Try both relation spellings — segment↔segment needs the
+                    // collinear form, not the point form.
+                    foreach (var rel in new[] { "sgCOLINEAR", "sgCOINCIDENT" })
+                    {
+                        try { doc.SketchAddConstraints(rel); }
+                        catch (Exception ex) { Console.WriteLine($"#   {rel} threw {ex.GetType().Name}"); }
+                        if (hostLine2 is ISketchLine hl2)
+                        {
+                            var p1 = hl2.GetStartPoint2() as ISketchPoint;
+                            var p2 = hl2.GetEndPoint2() as ISketchPoint;
+                            if (p1 != null && p2 != null)
+                                Console.WriteLine($"#   after {rel}: line " +
+                                    $"({p1.X * 1000:F2},{p1.Y * 1000:F2})->" +
+                                    $"({p2.X * 1000:F2},{p2.Y * 1000:F2})");
+                        }
+                    }
+                }
+            }
+
+            // Corner-on-edge primitive (the robust bind shape): a square's
+            // own corner point (Select4 — reliable) coincident to a block
+            // edge (SKETCHSEGMENT pick) pins the corner onto the boundary.
+            if (edgeMid.HasValue)
+            {
+                var cornerLine = mgr.CreateLine(-0.030, 0.045, 0.0, -0.020, 0.045, 0.0)
+                    as ISketchLine;
+                if (cornerLine is ISketchSegment cornerSeg) probeLines.Add(cornerSeg);
+                var cornerPt = cornerLine?.GetStartPoint2() as ISketchPoint;
+                doc.ClearSelection2(true);
+                bool ptSel = false;
+                try { ptSel = cornerPt != null && cornerPt.Select4(false, null); }
+                catch { }
+                bool segSel = ext.SelectByID2("", "SKETCHSEGMENT",
+                    edgeMid.Value.x, edgeMid.Value.y, 0, true, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                Console.WriteLine($"#   corner-on-edge probe: pt={ptSel} seg={segSel}");
+                if (ptSel && segSel)
+                {
+                    try { doc.SketchAddConstraints("sgCOINCIDENT"); }
+                    catch (Exception ex) { Console.WriteLine($"#   corner coincident threw {ex.GetType().Name}"); }
+                    if (cornerPt != null)
+                        Console.WriteLine($"#   corner now ({cornerPt.X * 1000:F2}," +
+                            $"{cornerPt.Y * 1000:F2}) (moved onto y=-12.5 = bound held)");
+                }
+            }
+
+            // Controlled coincident-bind experiment (isolates the adapter's
+            // pick strategy): a fresh host line + one real block-boundary
+            // vertex from the staged edges → sgCOINCIDENT → did the line
+            // move onto the point (bind held) or stay (no relation)?
+            var vtx = FirstBoundaryVertex(ctx.Expected, -qrHalf);
+            if (vtx.HasValue)
+            {
+                var hostLine = mgr.CreateLine(0.030, 0.030, 0.0, 0.040, 0.030, 0.0)
+                    as ISketchSegment;
+                if (hostLine != null) probeLines.Add(hostLine);
+                doc.ClearSelection2(true);
+                bool ptOk = ext.SelectByID2("", "SKETCHPOINT", vtx.Value.x, vtx.Value.y, 0,
+                    false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                if (ptOk && selMgr != null)
+                    try
+                    {
+                        var selObj = selMgr.GetSelectedObject6(1, -1);
+                        if (selObj is ISketchPoint sp)
+                            Console.WriteLine($"#   picked point reads " +
+                                $"({sp.X * 1000:F3},{sp.Y * 1000:F3}) mm");
+                        else
+                            Console.WriteLine($"#   picked object: " +
+                                $"{selObj?.GetType().Name ?? "null"}");
+                    }
+                    catch (Exception ex) { Console.WriteLine($"#   sel read: {ex.Message}"); }
+                bool lnOk = false;
+                try { lnOk = hostLine != null && hostLine.Select4(true, null); }
+                catch { }
+                Console.WriteLine($"#   bind probe: blockPt({vtx.Value.x * 1000:F2}," +
+                    $"{vtx.Value.y * 1000:F2})={ptOk} line={lnOk}");
+                if (ptOk && lnOk)
+                {
+                    try { doc.SketchAddConstraints("sgCOINCIDENT"); }
+                    catch (Exception ex) { Console.WriteLine($"#   bind probe constraint threw {ex.GetType().Name}"); }
+                    if (hostLine is ISketchLine hl)
+                    {
+                        var p1 = hl.GetStartPoint2() as ISketchPoint;
+                        var p2 = hl.GetEndPoint2() as ISketchPoint;
+                        if (p1 != null && p2 != null)
+                            Console.WriteLine($"#   bind probe line now " +
+                                $"({p1.X * 1000:F2},{p1.Y * 1000:F2})->" +
+                                $"({p2.X * 1000:F2},{p2.Y * 1000:F2}) " +
+                                "(moved = coincident actually applied)");
+                    }
+                }
+            }
+
+            // Remove the probe lines — they must not reach the explode or
+            // undo gates below.
+            foreach (var probeLine in probeLines)
+            {
+                doc.ClearSelection2(true);
+                try
+                {
+                    if (probeLine.Select4(false, null))
+                        ext.DeleteSelection2(0);
+                }
+                catch { }
+            }
+            doc.ClearSelection2(true);
+
+            // ---------- drag: keep-out stays centred on the QR ----------
+            bool posOk = false;
+            try { inst.InstancePosition = SpikePt(mu, 0.005, -0.003); posOk = true; }
+            catch (Exception ex) { Console.WriteLine($"#   InstancePosition set threw {ex.GetType().Name}"); }
+            Check(posOk, "the block instance accepts a drag (InstancePosition) edit");
+            if (posOk)
+            {
+                var c = SegsBboxCentre(SketchLineSpans(sketch));
+                Check(Math.Abs(c.x - 0.005) < 5e-4 && Math.Abs(c.y + 0.003) < 5e-4,
+                    "dragging the block carries both squares — keep-out stays centred",
+                    $"centroid=({c.x * 1000:F3},{c.y * 1000:F3}) mm");
+                try { inst.InstancePosition = SpikePt(mu, 0.0, 0.0); } catch { }
+            }
+
+            // ---------- Scale tracking: the spec-10 resize promise ----------
+            try { inst.Scale = 40.0; } catch (Exception ex) { Console.WriteLine($"#   Scale set threw {ex.GetType().Name}"); }
+            Check(Math.Abs(inst.Scale - 40.0) < 1e-4, "instance Scale edit to 40 accepted",
+                $"Scale={inst.Scale:F2}");
+            var m40 = MeasureScaleState(doc, sketchFeat, sketch);
+            double keepHalf40 = keepHalf * 40.0 / 25.0, keepSide40 = keepSide * 40.0 / 25.0;
+            bool tracked = HalvesNear(m40.Halves, 0.020, keepHalf40) &&
+                           DimsNear(m40.Dims, 0.040, keepSide40);
+            if (!tracked)
+            {
+                Console.WriteLine("#   values stale after Scale set — EditRebuild3 " +
+                    "(exits sketch edit) then re-enter + re-measure");
+                try { doc.EditRebuild3(); } catch { }
+                if (mgr.ActiveSketch == null)
+                {
+                    doc.ClearSelection2(true);
+                    ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    mgr.InsertSketch(true);
+                    sketch = mgr.ActiveSketch as ISketch ?? sketch;
+                    sketchFeat = sketch as IFeature ?? sketchFeat;
+                }
+                m40 = MeasureScaleState(doc, sketchFeat, sketch);
+                tracked = HalvesNear(m40.Halves, 0.020, keepHalf40) &&
+                          DimsNear(m40.Dims, 0.040, keepSide40);
+                Console.WriteLine($"#   scale track after rebuild: {tracked} " +
+                    $"halves=[{string.Join(",", m40.Halves.Select(h => (h * 1000).ToString("F3")))}]");
+            }
+            else
+                Console.WriteLine("#   scale tracking resolved inside the sketch edit " +
+                    "(no EditRebuild3 needed)");
+            Check(HalvesNear(m40.Halves, 0.020, keepHalf40),
+                "Scale edit re-sizes the QR square to ±20 mm AND the keep-out to ±27.5 mm",
+                $"halves=[{string.Join(", ", m40.Halves.Select(h => (h * 1000).ToString("F3")))}]");
+            var dimReport = string.Join(" | ",
+                m40.Dims.Select(d => $"{d.Name}={d.ValueM * 1000:F2}"));
+            Check(DimsNear(m40.Dims, 0.040, keepSide40),
+                "driven dim re-measures 40 mm + equation-linked keep-out side tracks (D1×ratio)",
+                dimReport);
+            Check(m40.Dims.Count(d => Math.Abs(d.ValueM - (keepSide40 - 0.040) / 2) < 2e-3) == 2,
+                "the gap dims keep the keep-out centred at the new size", dimReport);
+
+            // ---------- coincident verified: the square corner MOVED ----------
+            doc.ClearSelection2(true);
+            bool oldCorner = ext.SelectByID2("", "SKETCHPOINT", qrHalf, -qrHalf, 0,
+                false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+            doc.ClearSelection2(true);
+            bool newCorner = ext.SelectByID2("", "SKETCHPOINT", 0.020, -0.020, 0,
+                false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+            Check(!oldCorner && newCorner,
+                "host-sketch geometry tracks block geometry (the square corner moved " +
+                "with the block — coincident relations verified)",
+                $"pick@12.5={oldCorner} pick@20={newCorner}");
+
+            // restore 25 for the undo/explode gates (two-way tracking evidence)
+            try { inst.Scale = 25.0; } catch { }
+            var m25 = MeasureScaleState(doc, sketchFeat, sketch);
+            Console.WriteLine("#   back at Scale=25: " +
+                $"halves=[{string.Join(", ", m25.Halves.Select(h => (h * 1000).ToString("F3")))}] " +
+                string.Join(" | ", m25.Dims.Select(d => $"{d.Name}={d.ValueM * 1000:F2}")));
+
+            mgr.InsertSketch(false);
+            Check(mgr.ActiveSketch == null, "QR sketch exits edit mode");
+
+            // ---------- G-extrude: the block-bearing sketch as a feature ----------
+            var boss = TryExtrudeByName(sw, doc, ext, mgr, fm, sketchName, ctx, out string route);
+            Check(boss != null, "the block-instance sketch extrudes (interactive-equivalent " +
+                "sketch-feature route)", $"route={route} boss={boss?.Name ?? "null"}");
+            if (boss != null)
+            {
+                int faces = 0, bodies = -1;
+                try { faces = (boss.GetFaces() as object[])?.Length ?? 0; } catch { }
+                try { bodies = ((IPartDoc)doc).GetBodies2(
+                        (int)swBodyType_e.swSolidBody, false) is object[] bs ? bs.Length : -1; }
+                catch { }
+                Console.WriteLine($"#   extrude consumed block regions: faces={faces} " +
+                    $"docBodies={bodies} expected material regions={ctx.Expected.Regions.Count}");
+            }
+
+            // ---------- G-explode: raw lines for feature use ----------
+            // Runs on THIS creation's sketch (re-entered), BEFORE the undo
+            // gate, so the measurement is not hostage to a second create.
+            doc.ClearSelection2(true);
+            if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                mgr.InsertSketch(true);
+                var bk = mgr.ActiveSketch as ISketch;
+                Check(bk != null && bk.GetSketchBlockInstanceCount() > 0,
+                    "the sketch re-enters edit mode with its block instance");
+                if (bk != null && bk.GetSketchBlockInstanceCount() > 0)
+                {
+                    var bi = bk.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+                    bool exploded = false;
+                    try { mgr.ExplodeSketchBlockInstance((SketchBlockInstance)bi!); exploded = true; }
+                    catch (Exception ex) { Console.WriteLine($"#   explode threw {ex.GetType().Name}"); }
+                    Check(exploded, "ExplodeSketchBlockInstance executes");
+                    Check(bk.GetSketchBlockInstanceCount() == 0,
+                        "explode removes the block instance",
+                        $"remaining={bk.GetSketchBlockInstanceCount()}");
+                    var raw = SketchLineSpans(bk).Where(s => !s.Construction).ToList();
+                    Check(raw.Count >= ctx.Expected.Info.SegmentCount,
+                        "explode yields enumerable raw QR lines",
+                        $"raw={raw.Count} expected≥{ctx.Expected.Info.SegmentCount}");
+                    var bb = SegsBbox(raw);
+                    double mnx = raw.Min(s => Math.Min(s.X1, s.X2)),
+                           mxx = raw.Max(s => Math.Max(s.X1, s.X2));
+                    double mny = raw.Min(s => Math.Min(s.Y1, s.Y2)),
+                           mxy = raw.Max(s => Math.Max(s.Y1, s.Y2));
+                    Console.WriteLine($"#   exploded bbox [{mnx * 1000:F2},{mny * 1000:F2}] -> " +
+                        $"[{mxx * 1000:F2},{mxy * 1000:F2}] mm");
+                    Check(bb.W > 0.020,
+                        "exploded lines carry the real QR extent",
+                        $"span=({bb.W * 1000:F2},{bb.H * 1000:F2}) mm");
+                    mgr.InsertSketch(false);
+                    doc.ClearSelection2(true);
+                    var boss2 = TryExtrudeByName(sw, doc, ext, mgr, fm, sketchName, ctx,
+                        out string route2);
+                    Check(boss2 != null, "an extrude works on the exploded raw lines",
+                        $"route={route2} boss={boss2?.Name ?? "null"}");
+                }
+            }
+            else Check(false, "QR sketch re-selected for the explode gate");
+
+            // ---------- G-undo: the named step removes exactly this creation ----------
+            int presses = 0;
+            bool gone = FindSketchFeature(doc, sketchName) == null;
+            while (!gone && presses < 40)
+            {
+                try { doc.EditUndo2(1); } catch { }
+                presses++;
+                if (mgr.ActiveSketch != null) try { mgr.InsertSketch(false); } catch { }
+                gone = FindSketchFeature(doc, sketchName) == null;
+            }
+            if (gone)
+                Check(true, $"the named \"Create QR Sketch\" undo step removed the sketch " +
+                    $"(presses={presses})");
+            else
+                Check(false, "the named \"Create QR Sketch\" undo step removed the sketch",
+                    $"sketch '{sketchName}' survived {presses} EditUndo2 presses");
+            Check(FindSketchFeature(doc, markerName) != null,
+                "prior user work survived the undo presses");
+            // Do the deleted sketch's equations linger in the manager?
+            var eqsAfter = EquationTexts(doc, out int eqCountAfter);
+            Console.WriteLine($"#   equations after the undo: {eqCountAfter} " +
+                string.Join(" | ", eqsAfter.Take(4)));
+            bool back = false;
+            int represses = 0;
+            while (!back && represses < 3)
+            {
+                try { doc.EditUndo2(1); } catch { }
+                represses++;
+                if (mgr.ActiveSketch != null) try { mgr.InsertSketch(false); } catch { }
+                back = SketchWithBlockExists(doc);
+            }
+            Console.WriteLine($"#   undo-toggle restore: presses={represses} restored={back} " +
+                "(the handler re-registers on delete; a further undo re-fires DoUndo)");
+        }
+
+        /// <summary>Midpoint of a real block-boundary EDGE lying on the given horizontal line.</summary>
+        private static (double x, double y)? FirstBoundaryEdgeMidpoint(
+            QrSketch expected, double lineY)
+        {
+            foreach (var e in expected.Edges)
+                if (Math.Abs(e.Start.Y - lineY) < 1e-9 && Math.Abs(e.End.Y - lineY) < 1e-9 &&
+                    Math.Abs(e.End.X - e.Start.X) > 5e-4)
+                    return ((e.Start.X + e.End.X) / 2.0, lineY);
+            return null;
+        }
+
+        /// <summary>A real block-boundary vertex on the given horizontal line (interior preferred).</summary>
+        private static (double x, double y)? FirstBoundaryVertex(QrSketch expected, double lineY)
+        {
+            var candidates = new List<(double x, double y)>();
+            foreach (var e in expected.Edges)
+                foreach (var p in new[] { (e.Start.X, e.Start.Y), (e.End.X, e.End.Y) })
+                    if (Math.Abs(p.Y - lineY) < 1e-9 && Math.Abs(p.X) < Math.Abs(lineY) - 1e-9)
+                        candidates.Add(p);
+            return candidates.Count == 0 ? null : candidates[candidates.Count / 2];
+        }
+
+        /// <summary>Are the measured square-extent halves near the two expected values?</summary>
+        private static bool HalvesNear(List<double> halves, double h1, double h2, double tol = 2e-5) =>
+            halves.Count == 2 && Math.Abs(halves[0] - h1) < tol && Math.Abs(halves[1] - h2) < tol;
+
+        /// <summary>Are dims measuring near the expected QR side and keep-out side?</summary>
+        private static bool DimsNear(
+            List<(string Name, double ValueM, int Driven)> dims, double side, double keepSide,
+            double tol = 2e-3) =>
+            dims.Any(d => Math.Abs(d.ValueM - side) < tol) &&
+            dims.Any(d => Math.Abs(d.ValueM - keepSide) < tol);
+
+        /// <summary>The shared FeatureExtrusion3 call (the verified feature flags).</summary>
+        private static IFeature? Extrude(IFeatureManager fm)
+        {
+            try
+            {
+                return fm.FeatureExtrusion3(
+                    true, false, false, (int)swEndConditions_e.swEndCondBlind, 0,
+                    0.002, 0.0, false, false, false, false, 0.0, 0.0,
+                    false, false, false, false,
+                    true, true, true, (int)swStartConditions_e.swStartSketchPlane, 0.0, false)
+                    as IFeature;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"#   FeatureExtrusion3 threw {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Tries every API selection route to extrude a block-bearing sketch:
+        /// sketch-feature select (the interactive equivalent), the block
+        /// instance object, then contour-selection at expected material
+        /// centres. Returns the boss feature or null; `route` says which won.
+        /// </summary>
+        private static IFeature? TryExtrudeByName(
+            ISldWorks sw, IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr,
+            IFeatureManager fm, string sketchName, BlockQrContext ctx, out string route)
+        {
+            // Route 1: the committed sketch FEATURE selected by name — what
+            // the engineer's successful interactive extrude selected.
+            doc.ClearSelection2(true);
+            if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                var f = Extrude(fm);
+                if (f != null) { route = "sketch-feature select"; return f; }
+            }
+
+            // Route 2: the block instance object itself.
+            var skFeat = FindSketchFeature(doc, sketchName);
+            var sketch = skFeat?.GetSpecificFeature2() as ISketch;
+            var inst = sketch != null && sketch.GetSketchBlockInstanceCount() > 0
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            if (inst != null)
+            {
+                doc.ClearSelection2(true);
+                if (inst.Select(true, null))
+                {
+                    var f = Extrude(fm);
+                    if (f != null) { route = "block-instance select"; return f; }
+                }
+            }
+
+            // Route 3: contour selection at expected material-region centres.
+            doc.ClearSelection2(true);
+            var sm = doc.ISelectionManager as ISelectionMgr;
+            if (sm != null) sm.EnableContourSelection = true;
+            bool picked = false;
+            int regionPicks = 0;
+            foreach (var pt in MaterialPoints(ctx.Expected, 4))
+                try
+                {
+                    if (ext.SelectByID2("", "SKETCHREGION", pt.x, pt.y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionDefault))
+                    {
+                        picked = true;
+                        regionPicks++;
+                    }
+                }
+                catch { }
+            if (sm != null) sm.EnableContourSelection = false;
+            if (picked)
+            {
+                var f = Extrude(fm);
+                if (f != null) { route = "SKETCHREGION picks"; return f; }
+            }
+            route = $"all-routes-failed(regions={regionPicks})";
+            return null;
+        }
+
+        /// <summary>Bbox centres of the largest expected material regions (interior points).</summary>
+        private static List<(double x, double y)> MaterialPoints(QrSketch expected, int n)
+        {
+            return expected.Regions
+                .Select(r => ModuleBBox(r.Boundary))
+                .OrderByDescending(b => (b.maxX - b.minX) * (b.maxY - b.minY))
+                .Take(n)
+                .Select(b => ((b.minX + b.maxX) / 2.0, (b.minY + b.maxY) / 2.0))
+                .ToList();
+        }
+
+        /// <summary>Does the tree still hold a sketch containing a block instance?</summary>
+        private static bool SketchWithBlockExists(IModelDoc2 doc)
+        {
+            for (var f = doc.FirstFeature() as IFeature; f != null;
+                 f = f.GetNextFeature() as IFeature)
+                if (string.Equals(f.GetTypeName2(), "ProfileFeature",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    (f.GetSpecificFeature2() as ISketch)?.GetSketchBlockInstanceCount() > 0)
+                    return true;
+            return false;
+        }
+
+        /// <summary>Re-opens the first block-bearing sketch in the tree for editing.</summary>
+        private static ISketch? ReopenBlockSketch(
+            IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr)
+        {
+            for (var f = doc.FirstFeature() as IFeature; f != null;
+                 f = f.GetNextFeature() as IFeature)
+            {
+                if (!string.Equals(f.GetTypeName2(), "ProfileFeature",
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                if ((f.GetSpecificFeature2() as ISketch)?.GetSketchBlockInstanceCount() != 1)
+                    continue;
+                doc.ClearSelection2(true);
+                if (ext.SelectByID2(f.Name, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault))
+                {
+                    mgr.InsertSketch(true);
+                    return mgr.ActiveSketch as ISketch;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Doc B: insertion centring on supports — a plate's planar face,
+        /// the 90° Top Plane datum, and (when creatable) a 30° ref plane.
+        /// </summary>
+        private static void BlockQrDocB(ISldWorks sw, IModelDoc2 doc, BlockQrContext ctx)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var fm = (IFeatureManager)doc.FeatureManager;
+
+            // ---------- planar face ----------
+            var plate = CreateBackingPlate(doc, ext, mgr, fm);
+            Check(plate != null, "backing plate created for the face support", plate?.Name ?? "null");
+            var plateFaces = plate == null
+                ? new List<(IFace2 face, double[] root, double[] n)>() : PlanarFaces(plate);
+            var topFace = plateFaces.OrderByDescending(f => f.root[2]).FirstOrDefault();
+            if (topFace.face != null)
+            {
+                doc.ClearSelection2(true);
+                Check(((IEntity)topFace.face).Select4(false, null),
+                    "plate top planar face selected");
+                string cr = ctx.Create();
+                Check(cr.StartsWith("OK"), "QR create succeeds on the planar face", cr);
+                SupportVerify(sw, mgr.ActiveSketch as ISketch, "plate top face",
+                    topFace.root, topFace.n, ctx);
+                mgr.InsertSketch(false);
+            }
+
+            // ---------- rotated datum: Top Plane (90° off Front) ----------
+            var topPlane = FindRefPlaneFeature(doc, "Top Plane");
+            Check(topPlane != null, "Top Plane datum plane available as the rotated support");
+            if (topPlane != null)
+            {
+                doc.ClearSelection2(true);
+                Check(ext.SelectByID2("Top Plane", "PLANE", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault),
+                    "Top Plane selected");
+                string cr = ctx.Create();
+                Check(cr.StartsWith("OK"), "QR create succeeds on the rotated datum", cr);
+                SupportVerify(sw, mgr.ActiveSketch as ISketch,
+                    "Top Plane (90° datum)", null, null, ctx);
+                mgr.InsertSketch(false);
+            }
+
+            // ---------- bonus: a 30° ref plane through a plate edge ----------
+            string? angled = plate == null ? null
+                : CreateAngledRefPlane(sw, doc, ext, mgr, fm, plateFaces, 30.0);
+            if (angled != null)
+            {
+                doc.ClearSelection2(true);
+                if (ext.SelectByID2(angled, "PLANE", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault))
+                {
+                    string cr = ctx.Create();
+                    Check(cr.StartsWith("OK"), "QR create succeeds on the 30° plane", cr);
+                    SupportVerify(sw, mgr.ActiveSketch as ISketch,
+                        $"rotated ref plane '{angled}'", null, null, ctx);
+                    mgr.InsertSketch(false);
+                }
+            }
+            else Console.WriteLine("#   30° ref plane not creatable this run — Top Plane covered the rotated-datum gate");
+        }
+
+        /// <summary>
+        /// Per-support centring checks on the open QR sketch: one block
+        /// instance at the sketch origin, construction squares centred on it,
+        /// every square endpoint ON the support plane in model space, and the
+        /// sketch's reference entity present.
+        /// </summary>
+        private static void SupportVerify(
+            ISldWorks sw, ISketch? sketch, string tag,
+            double[]? root, double[]? normal, BlockQrContext ctx)
+        {
+            Check(sketch != null, $"QR sketch on {tag} left open in edit mode");
+            if (sketch == null) return;
+            int ic = sketch.GetSketchBlockInstanceCount();
+            Check(ic == 1, $"one block instance on {tag}", $"count={ic}");
+            var inst = ic > 0
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            var pos = inst?.InstancePosition?.ArrayData as double[];
+            Check(pos != null && Math.Abs(pos[0]) < 1e-9 && Math.Abs(pos[1]) < 1e-9,
+                $"instance centred at the sketch origin on {tag}",
+                pos != null ? $"({pos[0] * 1000:F3},{pos[1] * 1000:F3}) mm" : "null");
+
+            var c = SegsBboxCentre(SketchLineSpans(sketch));
+            if (!(Math.Abs(c.x) < 1e-9 && Math.Abs(c.y) < 1e-9))
+                DumpSegs(sketch, tag);
+            Check(Math.Abs(c.x) < 1e-9 && Math.Abs(c.y) < 1e-9,
+                $"construction squares centred at the sketch origin on {tag}",
+                $"centroid=({c.x * 1000:F4},{c.y * 1000:F4}) mm");
+
+            var mu = sw.IGetMathUtility();
+            var s2m = sketch.ModelToSketchTransform?.IInverse();
+            if (mu != null && s2m != null)
+            {
+                // Support frame from the sketch's own transform when the
+                // caller passed none — reliable live (GetRefPlaneParams is not).
+                if (root == null || normal == null)
+                {
+                    var o = MapPoint(mu, s2m, 0, 0, 0);
+                    root = o;
+                    normal = Sub(MapPoint(mu, s2m, 0, 0, 1), o);
+                }
+                double maxOff = 0;
+                foreach (var s in SketchLineSpans(sketch))
+                    foreach (var (x, y) in new[] { (s.X1, s.Y1), (s.X2, s.Y2) })
+                    {
+                        var m = MapPoint(mu, s2m, x, y, 0.0);
+                        maxOff = Math.Max(maxOff, Math.Abs(Dot(Sub(m, root), normal)));
+                    }
+                Check(maxOff < 1e-7,
+                    $"every square endpoint lands ON the {tag} plane (no double transform)",
+                    $"max |perp|={maxOff * 1000:F6} mm");
+            }
+            else Check(false, $"sketch→model transform available on {tag}");
+
+            int t = 0;
+            try
+            {
+                var re = sketch.GetReferenceEntity(ref t);
+                Check(re != null, $"sketch's reference entity resolves on {tag} (seltype={t})",
+                    re == null ? "null"
+                    : re is IFeature f ? $"feature '{f.Name}' ({f.GetTypeName2()})"
+                    : re is IFace2 ? "a face" : re.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                Check(false, $"sketch's reference entity resolves on {tag}", ex.Message);
+            }
         }
 
         // ================= ticket 5: support + coordinate convention =================
