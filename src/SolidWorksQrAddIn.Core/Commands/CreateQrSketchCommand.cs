@@ -9,10 +9,12 @@ namespace SolidWorksQrAddIn.Core.Commands
     /// "Create QR Sketch" — encodes the given <paramref name="content"/>
     /// exactly (no trim/resolve/rewrite) at the requested
     /// <paramref name="sizeMm"/> final grown outline width with the requested
-    /// <paramref name="growthFractionPerSide"/> outline growth, then inserts
-    /// every validated contour as native sketch lines on the currently
-    /// selected support — one reference plane or one planar face — and leaves
-    /// the new sketch open for editing.
+    /// <paramref name="growthFractionPerSide"/> outline growth, then stages
+    /// every validated contour edge through the insertion seam on the
+    /// currently selected support — one reference plane or one planar face.
+    /// The host realizes the staged set at commit as ONE sketch block
+    /// instance whose Scale reads the requested size in document units
+    /// (spec #10) and leaves the new sketch open for editing.
     ///
     /// Host state is captured fresh at call time — the active part, the
     /// selected support, and the no-sketch-being-edited rule are always

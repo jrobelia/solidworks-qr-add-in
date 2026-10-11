@@ -56,16 +56,17 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
-            Assert.Equal(Expected.Info.SegmentCount, sketch.Segments.Count);
-            // The fake records exactly what the host was asked to insert — the
-            // recorded segments must be the command's QR contour edges, in order.
+            // The QR lands inside the block instance — the effective (drawn)
+            // geometry the sketch shows is the contour set, in order.
+            var effective = sketch.EffectiveSegments.ToList();
+            Assert.Equal(Expected.Info.SegmentCount, effective.Count);
             var expected = Expected.Edges.ToList();
             for (var i = 0; i < expected.Count; i++)
             {
-                Assert.Equal(expected[i].Start.X, sketch.Segments[i].X1, 12);
-                Assert.Equal(expected[i].Start.Y, sketch.Segments[i].Y1, 12);
-                Assert.Equal(expected[i].End.X, sketch.Segments[i].X2, 12);
-                Assert.Equal(expected[i].End.Y, sketch.Segments[i].Y2, 12);
+                Assert.Equal(expected[i].Start.X, effective[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y, effective[i].Y1, 12);
+                Assert.Equal(expected[i].End.X, effective[i].X2, 12);
+                Assert.Equal(expected[i].End.Y, effective[i].Y2, 12);
             }
         }
 
@@ -77,7 +78,7 @@ namespace SolidWorksQrAddIn.Tests
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.True(result.Succeeded, result.Message);
-            var segs = host.Document!.Sketches.Single().Segments;
+            var segs = host.Document!.Sketches.Single().EffectiveSegments.ToList();
             double half = SizeMm / 2.0 / 1000.0;
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);

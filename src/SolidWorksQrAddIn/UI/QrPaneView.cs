@@ -51,6 +51,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBox _sizeBox;
         private readonly TextBox _growthBox;
         private readonly Image _picture;
+        private readonly TextBox _cellSize;
         private readonly TextBlock _status;
         private readonly DispatcherTimer _editDebounce;
         private bool _contentDirty;
@@ -133,6 +134,31 @@ namespace SolidWorksQrAddIn.UI
             };
             create.Click += OnCreateClicked;
             panel.Children.Add(create);
+
+            // Spec #10: the QR lands as ONE block instance whose PropertyManager
+            // Scale is the size — the static note names that control; the
+            // read-only readout shows the module pitch in document units.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Cell size (document units):",
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _cellSize = new TextBox
+            {
+                IsReadOnly = true,
+                ToolTip = "The QR module (cell) pitch in the document's length " +
+                          "unit — size ÷ matrix width. Read-only; it follows " +
+                          "the fields above.",
+            };
+            panel.Children.Add(_cellSize);
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = QrSketchSession.ResizeNote,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 8, 0, 0),
+            });
 
             _status = new TextBlock
             {
@@ -250,6 +276,7 @@ namespace SolidWorksQrAddIn.UI
         private void RefreshView()
         {
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
+            _cellSize.Text = _session.CellSizeReadout;
             ShowStatus(_session.StatusText, isError: !_session.HasValidRequest);
         }
 

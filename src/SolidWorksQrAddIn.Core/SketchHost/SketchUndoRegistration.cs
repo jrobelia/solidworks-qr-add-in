@@ -6,9 +6,11 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// <summary>
     /// Everything a host needs to register a custom undo step for the sketch
     /// a committed insertion just produced — the step's display name, the
-    /// created sketch feature's name, and the inserted edges in sketch-space
-    /// metres (the geometry a redo would re-insert). Contains no SolidWorks
-    /// objects; the host binds it to its own document/feature references.
+    /// created sketch feature's name, and the STAGED edges in sketch-space
+    /// metres at the final size (the geometry a redo would re-stage through
+    /// the same buffered insertion session — block instance included).
+    /// Contains no SolidWorks objects; the host binds it to its own
+    /// document/feature references.
     /// </summary>
     public sealed class SketchUndoRegistration
     {

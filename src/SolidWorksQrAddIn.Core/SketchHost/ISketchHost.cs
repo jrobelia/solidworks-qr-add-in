@@ -45,19 +45,57 @@ namespace SolidWorksQrAddIn.Core.Hosting
         Other,
     }
 
+    /// <summary>
+    /// The document's length unit as the host reports it — a host fact, never
+    /// something the core may invent. <see cref="MetresPerUnit"/> converts
+    /// between document units and sketch-space metres (0.001 for mm docs,
+    /// 0.0254 for inch docs); <see cref="Symbol"/> is the display label.
+    /// The block-instance Scale reads as a size in these units, and the
+    /// pane's cell-size readout is expressed in them.
+    /// </summary>
+    public sealed class HostLengthUnit
+    {
+        public HostLengthUnit(double metresPerUnit, string symbol)
+        {
+            MetresPerUnit = metresPerUnit;
+            Symbol = symbol;
+        }
+
+        /// <summary>Sketch-space metres per document length unit.</summary>
+        public double MetresPerUnit { get; }
+
+        /// <summary>The unit's display label ("mm", "in", …).</summary>
+        public string Symbol { get; }
+
+        /// <summary>
+        /// Millimetres — the add-in's baseline unit, used when the host
+        /// cannot report a real unit (no document, unreadable property).
+        /// </summary>
+        public static readonly HostLengthUnit Millimetres = new HostLengthUnit(0.001, "mm");
+    }
+
     /// <summary>Point-in-time host state used for command eligibility decisions.</summary>
     public sealed class SketchHostState
     {
-        public SketchHostState(HostDocumentKind document, SupportSelection selection, bool isEditingSketch)
+        public SketchHostState(
+            HostDocumentKind document, SupportSelection selection, bool isEditingSketch,
+            HostLengthUnit? lengthUnit = null)
         {
             Document = document;
             Selection = selection;
             IsEditingSketch = isEditingSketch;
+            LengthUnit = lengthUnit ?? HostLengthUnit.Millimetres;
         }
 
         public HostDocumentKind Document { get; }
         public SupportSelection Selection { get; }
         public bool IsEditingSketch { get; }
+
+        /// <summary>
+        /// The document's length unit at capture time — mm when the host
+        /// could not report one.
+        /// </summary>
+        public HostLengthUnit LengthUnit { get; }
     }
 
     /// <summary>
@@ -94,9 +132,15 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// <summary>
     /// One sketch-insertion session bound to a single newly created sketch.
     /// Contract:
-    ///  - <see cref="AddLine"/> appends a native line segment in sketch space.
-    ///  - <see cref="KeepOpen"/> commits success: the new sketch stays open in
-    ///    edit mode and is never cleaned up.
+    ///  - <see cref="AddLine"/> STAGES one contour edge at its final size in
+    ///    sketch space; the host may buffer edges and realize them at commit
+    ///    (the adapters draw them unit-proportioned inside one sketch block
+    ///    instance whose Scale reads the staged span in document units —
+    ///    spec #10 — so nothing lands as raw segments until
+    ///    <see cref="KeepOpen"/>).
+    ///  - <see cref="KeepOpen"/> commits success: the staged geometry is
+    ///    realized, the new sketch stays open in edit mode and is never
+    ///    cleaned up.
     ///  - <see cref="Abort"/> exits edit mode and deletes only the sketch this
     ///    session created, reporting the cleanup result honestly. It is a
     ///    no-op on a committed session and reports the same REAL outcome on
@@ -112,9 +156,13 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// <summary>Name of the tracked sketch feature ("Sketch1", ...).</summary>
         string SketchName { get; }
 
+        /// <summary>Staged contour edges so far.</summary>
         int LineCount { get; }
 
-        /// <summary>Coordinates are sketch-space metres. Throws <see cref="SketchInsertionException"/> on failure.</summary>
+        /// <summary>
+        /// Stages one contour edge; coordinates are sketch-space metres at the
+        /// final size. Throws <see cref="SketchInsertionException"/> on failure.
+        /// </summary>
         void AddLine(double x1, double y1, double x2, double y2);
 
         void KeepOpen();

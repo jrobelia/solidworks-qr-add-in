@@ -36,7 +36,100 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     {
         public FakeSketch(string name) { Name = name; }
         public string Name { get; }
+
+        /// <summary>
+        /// Raw line segments drawn directly in this sketch. The QR contours
+        /// no longer land here — they are wrapped in a block instance at
+        /// commit — so a created QR sketch leaves this empty. User sketches
+        /// and failure paths still use it.
+        /// </summary>
         public List<FakeLine> Segments { get; } = new List<FakeLine>();
+
+        /// <summary>Block instances placed in this sketch (the QR is exactly one).</summary>
+        public List<FakeBlockInstance> BlockInstances { get; } = new List<FakeBlockInstance>();
+
+        /// <summary>
+        /// The geometry the sketch actually shows: raw drawn segments plus
+        /// every block instance's effective (scale/angle/position-resolved)
+        /// edges — the world-state a test should assert on when it asks
+        /// "what did the create leave in the sketch".
+        /// </summary>
+        public IEnumerable<FakeLine> EffectiveSegments =>
+            Segments.Concat(BlockInstances.SelectMany(i => i.EffectiveEdges));
+    }
+
+    /// <summary>
+    /// A sketch block definition: the QR contours drawn unit-proportioned —
+    /// one document length unit across — in sketch-space metres. In the real
+    /// host the definition lives in the document, shared by its instances.
+    /// </summary>
+    public sealed class FakeBlockDefinition
+    {
+        public FakeBlockDefinition(string name) { Name = name; }
+
+        public string Name { get; }
+
+        /// <summary>The definition's contours in sketch-space metres (one document unit across).</summary>
+        public List<FakeLine> Contours { get; } = new List<FakeLine>();
+
+        /// <summary>Instances of this definition placed in sketches.</summary>
+        public List<FakeBlockInstance> Instances { get; } = new List<FakeBlockInstance>();
+    }
+
+    /// <summary>
+    /// A block instance placed in a sketch: a definition handle plus the
+    /// placement — insertion point, uniform <see cref="Scale"/> (the resize
+    /// handle — it reads as the QR size in document units) and rotation.
+    /// </summary>
+    public sealed class FakeBlockInstance
+    {
+        public FakeBlockInstance(FakeBlockDefinition definition, double x, double y)
+        {
+            Definition = definition;
+            X = x;
+            Y = y;
+        }
+
+        public string Name { get; set; } = "";
+
+        public FakeBlockDefinition Definition { get; }
+
+        /// <summary>Insertion point, sketch-space metres.</summary>
+        public double X { get; set; }
+        public double Y { get; set; }
+
+        /// <summary>
+        /// Uniform scale — what the PropertyManager Scale field shows. Editing
+        /// it rescales the effective geometry uniformly, exactly like the
+        /// real instance property.
+        /// </summary>
+        public double Scale { get; set; } = 1.0;
+
+        /// <summary>Rotation, radians.</summary>
+        public double Angle { get; set; }
+
+        /// <summary>
+        /// The geometry the instance currently contributes to the sketch, in
+        /// sketch-space metres: definition contours × Scale, rotated by
+        /// <see cref="Angle"/>, offset to the insertion point. Recomputed on
+        /// every read — a Scale edit rescales it immediately.
+        /// </summary>
+        public IEnumerable<FakeLine> EffectiveEdges
+        {
+            get
+            {
+                double cos = Math.Cos(Angle);
+                double sin = Math.Sin(Angle);
+                foreach (var e in Definition.Contours)
+                {
+                    yield return new FakeLine(
+                        X + Scale * (e.X1 * cos - e.Y1 * sin),
+                        Y + Scale * (e.X1 * sin + e.Y1 * cos),
+                        X + Scale * (e.X2 * cos - e.Y2 * sin),
+                        Y + Scale * (e.X2 * sin + e.Y2 * cos));
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -85,6 +178,24 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>Committed sketch features in the tree.</summary>
         public List<FakeSketch> Sketches { get; } = new List<FakeSketch>();
+
+        /// <summary>Block definitions created in this document (doc-level registry).</summary>
+        public List<FakeBlockDefinition> BlockDefinitions { get; } = new List<FakeBlockDefinition>();
+
+        /// <summary>Sequence number for generated block names ("Block1", "Block1-1").</summary>
+        public int NextBlockNumber { get; set; } = 1;
+
+        /// <summary>
+        /// The document's length unit in metres — the in-memory stand-in for
+        /// the native adapter's ModelDoc2.LengthUnit read (swLengthUnit_e).
+        /// 0.001 = millimetres, 0.0254 = inches. The block definition spans
+        /// exactly one of these units and the instance Scale reads as the
+        /// size in them.
+        /// </summary>
+        public double MetresPerLengthUnit { get; set; } = 0.001;
+
+        /// <summary>Display symbol for the document's length unit ("mm", "in", …).</summary>
+        public string LengthUnitSymbol { get; set; } = "mm";
 
         /// <summary>Mutable sketch-manager flags, as the real ISketchManager exposes.</summary>
         public Dictionary<string, bool> SketchManagerFlags { get; } = new Dictionary<string, bool>
@@ -253,6 +364,27 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>When true, KeepOpen throws a non-seam exception before committing.</summary>
         public bool KeepOpenThrows { get; set; }
 
+        /// <summary>
+        /// When true, the first definition draw inside the commit's block
+        /// step fails (the CreateLine stage) — the sketch may hold
+        /// partially-drawn definition lines, then abort cleans it up.
+        /// </summary>
+        public bool FailBlockDraw { get; set; }
+
+        /// <summary>
+        /// When true, the commit's MakeSketchBlockFromSelected stage fails —
+        /// the drawn definition lines were already in the sketch but no block
+        /// formed. Abort still removes the whole sketch.
+        /// </summary>
+        public bool FailBlockMake { get; set; }
+
+        /// <summary>
+        /// When true, the commit's instance step fails — the block definition
+        /// and its instance exist but the Scale could not be applied. Abort
+        /// removes the whole sketch (block inside it).
+        /// </summary>
+        public bool FailBlockInstance { get; set; }
+
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
@@ -363,7 +495,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             else
                 selection = SupportSelection.Other;
 
-            return new SketchHostState(kind, selection, doc?.ActiveSketch != null);
+            return new SketchHostState(
+                kind, selection, doc?.ActiveSketch != null,
+                doc == null
+                    ? null
+                    : new HostLengthUnit(doc.MetresPerLengthUnit, doc.LengthUnitSymbol));
         }
 
         public ISketchInsertion BeginSketchInsertion()
@@ -438,6 +574,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         private readonly FakeDocument _doc;
         private readonly FakeSketch _sketch;
         private readonly Dictionary<string, bool> _flagSnapshot;
+        private readonly List<FakeLine> _buffered = new List<FakeLine>();
         private bool _committed;
         private bool _aborted;
         private CleanupOutcome? _abortOutcome;
@@ -456,32 +593,107 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         }
 
         public string SketchName => _sketch.Name;
-        public int LineCount => _sketch.Segments.Count;
+        public int LineCount => _buffered.Count;
 
+        /// <summary>
+        /// Stages one contour edge of the QR pattern at its final size in
+        /// sketch-space metres. Nothing is drawn yet — the session buffers
+        /// the staged edges and realizes them at commit: a block-capable
+        /// host draws them unit-proportioned, wraps them in a block
+        /// definition and places the one instance whose Scale reads the
+        /// staged span in document units.
+        /// </summary>
         public void AddLine(double x1, double y1, double x2, double y2)
         {
             if (_aborted || _committed)
                 throw new SketchInsertionException("The insertion session is already finished.");
-            var next = _sketch.Segments.Count + 1;
+            var next = _buffered.Count + 1;
             if (_host.ThrowUnhandledOnLineNumber == next)
                 throw new InvalidOperationException(
                     $"Injected: the host exploded inserting line {next}.");
             if (_host.FailOnLineNumber == next)
                 throw new SketchInsertionException(
                     $"CreateLine returned no segment for line {next}.");
-            _sketch.Segments.Add(new FakeLine(x1, y1, x2, y2));
+            _buffered.Add(new FakeLine(x1, y1, x2, y2));
         }
 
         public void KeepOpen()
         {
             if (_host.KeepOpenThrows)
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
+            if (_buffered.Count > 0)
+                RealizeAsBlockInstance();
             _committed = true;
             // Live-verified on SW 2023 SP5: the AddToDB recording is refused
             // (FinishRecordingUndoObject2 returns false), so a committed
             // creation produces NO step from the recording — the named undo
             // step arrives separately via RegisterSketchUndo.
             _doc.DiscardUndoRecording();
+        }
+
+        /// <summary>
+        /// The buffered-edge → block-instance realization the native adapter
+        /// performs inside the open sketch edit:
+        ///   1. the staged span IS the requested size — the instance Scale is
+        ///      that span expressed in document units;
+        ///   2. the definition is drawn unit-proportioned (every edge divided
+        ///      by the scale, so the def spans exactly one document unit);
+        ///   3. select-all converts the drawn lines into the definition and
+        ///      its first instance (scale 1 at the origin);
+        ///   4. the instance's Scale is set to the document-unit size — the
+        ///      PropertyManager field then reads as the size.
+        /// </summary>
+        private void RealizeAsBlockInstance()
+        {
+            double scaleDocUnits = BufferedSpan() / _doc.MetresPerLengthUnit;
+
+            // Definition draw stage — rescaled edges land as ordinary sketch
+            // lines first (the conversion step below swallows them).
+            for (var i = 0; i < _buffered.Count; i++)
+            {
+                if (_host.FailBlockDraw && i == 0)
+                    throw new SketchInsertionException(
+                        "CreateLine returned no segment while drawing the block definition.");
+                var e = _buffered[i];
+                _sketch.Segments.Add(new FakeLine(
+                    e.X1 / scaleDocUnits, e.Y1 / scaleDocUnits,
+                    e.X2 / scaleDocUnits, e.Y2 / scaleDocUnits));
+            }
+
+            if (_host.FailBlockMake)
+                throw new SketchInsertionException(
+                    "MakeSketchBlockFromSelected failed to form a block definition.");
+
+            // The select-all → MakeSketchBlockFromSelected step: the drawn
+            // lines leave the sketch's raw segment list and become the
+            // definition's content; the first instance lands at the origin.
+            var def = new FakeBlockDefinition("Block" + _doc.NextBlockNumber++);
+            def.Contours.AddRange(_sketch.Segments);
+            _sketch.Segments.Clear();
+            _doc.BlockDefinitions.Add(def);
+            var instance = new FakeBlockInstance(def, 0.0, 0.0) { Name = def.Name + "-1" };
+            def.Instances.Add(instance);
+            _sketch.BlockInstances.Add(instance);
+
+            if (_host.FailBlockInstance)
+                throw new SketchInsertionException(
+                    "The block instance's Scale could not be applied.");
+            instance.Scale = scaleDocUnits;
+        }
+
+        /// <summary>The staged outline span (max of the x/y extents), metres.</summary>
+        private double BufferedSpan()
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            foreach (var e in _buffered)
+            {
+                minX = Math.Min(minX, Math.Min(e.X1, e.X2));
+                maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
+                minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
+                maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
+            }
+            return Math.Max(maxX - minX, maxY - minY);
         }
 
         public CleanupOutcome Abort()

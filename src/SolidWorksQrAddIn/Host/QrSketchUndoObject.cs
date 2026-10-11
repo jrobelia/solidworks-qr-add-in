@@ -80,17 +80,19 @@ namespace SolidWorksQrAddIn.Host
         private string _undoName = "";
         private object? _support;         // IFeature (datum plane) or IEntity (face)
         private double[]? _edges;         // flat x1,y1,x2,y2, sketch-space metres
+        private IMathUtility? _math;      // block insertion points for the redo
         private bool _undone;
         private bool _released;
 
         /// <summary>Native-only initialisation; never called across COM.</summary>
         internal void Initialize(
             IModelDoc2 doc, IFeature sketch, object? support,
-            string undoName, IReadOnlyList<SketchEdge> edges)
+            string undoName, IReadOnlyList<SketchEdge> edges, IMathUtility? math)
         {
             _doc = doc;
             _sketch = sketch;
             _undoName = undoName;
+            _math = math;
             try { _sketchFeatureId = sketch.GetID(); }
             catch { _sketchFeatureId = 0; }
             _support = support;
@@ -133,6 +135,7 @@ namespace SolidWorksQrAddIn.Host
                 _sketch = null;
                 _support = null;
                 _edges = null;
+                _math = null;
                 QrSketchUndoRegistry.Drop(this);
             }
             catch { /* a reset callback must never throw back into SolidWorks */ }
@@ -245,7 +248,7 @@ namespace SolidWorksQrAddIn.Host
             try
             {
                 insertion = SolidWorksSketchHost.BeginOnSelectedSupport(
-                    doc, recordUndo: false, out _);
+                    doc, recordUndo: false, _math, capturedSupport: out _);
             }
             catch (Exception ex)
             {
