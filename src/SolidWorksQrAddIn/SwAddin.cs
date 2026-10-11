@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -36,10 +35,12 @@ namespace SolidWorksQrAddIn
     {
         private ISldWorks? _sw;
         private ICommandManager? _cmdMgr;
+        private ITaskpaneView? _taskPaneView;
+        private QrTaskPaneControl? _pane;
+        private PaneKeyboardFilter? _keyboardFilter;
         private int _cookie;
         private bool _connected;
         private QrSketchSession? _session;
-        private AddInWpfThread? _wpf;
 
         static SwAddin()
         {
@@ -98,36 +99,92 @@ namespace SolidWorksQrAddIn
                     0,
                     (int)swCommandItemType_e.swMenuItem | (int)swCommandItemType_e.swToolbarItem);
 
-                // Toolbar/menu icons: IconList is a string[] of PNG paths —
-                // one strip file per resolution (20..128), one icon wide for
-                // our single command (ImageIndex 0). MainIconList dresses the
-                // group's own toolbar button the same way. Extraction is
-                // idempotent into <deployed add-in folder>\icons and must
-                // never fail ConnectToSW — a read-only folder leaves the
-                // command reachable by name, just unadorned.
+                // Menu icons: IconList is a string[] of PNG paths — one strip
+                // file per resolution (20..128), one icon wide for our single
+                // command (ImageIndex 0). MainIconList dresses the group's own
+                // button the same way. The task-pane tab reuses one of these
+                // PNGs as its icon. Extraction must never fail ConnectToSW.
+                // Icon extraction target is per-user first: an Inno-installed
+                // DLL lives in Program Files (read-only), so beside-the-DLL
+                // extraction fails there. QrIconLocations orders candidates;
+                // the first that writes wins. Best-effort — a failure leaves
+                // the command reachable by name and the tab unadorned.
+                string paneIcon = string.Empty;
+                string[]? icons = null;
+                string? iconDir = null;
+                string addinDir = Path.GetDirectoryName(
+                    Assembly.GetExecutingAssembly().Location) ?? ".";
+                foreach (var dir in QrIconLocations.ExtractionDirectories(addinDir))
+                {
+                    try
+                    {
+                        icons = QrToolbarIcons.EnsureExtracted(dir);
+                        iconDir = dir;
+                        Diag.Log($"icons extracted to {dir}");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Diag.Log($"icon extraction to {dir} failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                if (icons != null)
+                {
+                    try
+                    {
+                        group.IconList = icons;
+                        group.MainIconList = icons;
+                        // The task-pane tab renders ~16-18px and silently
+                        // ignores the 32px strip — dedicated small render.
+                        paneIcon = QrToolbarIcons.EnsurePaneIcon(iconDir!);
+                        Diag.Log($"command group icons set ({icons.Length} sizes); pane icon {paneIcon}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Diag.Log($"icon setup skipped: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
+                // Menu-only command surface: no custom toolbar — the QR UI is a
+                // docked task-pane tab (user direction). The swToolbarItem flag
+                // stays so an engineer can still pin the command themselves via
+                // Tools → Customize.
+                group.HasMenu = true;
+                group.Activate();
+
+                // The interaction state behind the pane lives here for the
+                // connection's lifetime; the view factory returns the pane
+                // adapter — the task-pane tab is the single surface.
+                _session = new QrSketchSession(CreateQrWindow);
+
+                _pane = new QrTaskPaneControl(
+                    _session, CreateSketchHost,
+                    () => { try { _taskPaneView?.ShowView(); } catch { } },
+                    () => { try { _taskPaneView?.HideView(); } catch { } });
+
+                _taskPaneView = (ITaskpaneView)_sw.CreateTaskpaneView2(
+                    paneIcon, "QR Sketch");
+                if (_taskPaneView == null)
+                    return Fail("CreateTaskpaneView2 returned null");
+                _taskPaneView.DisplayWindowFromHandlex64(_pane.Handle.ToInt64());
+                Diag.Log("task pane created");
+
+                // SolidWorks' pump eats WM_CHAR before the hosted WPF
+                // HwndSource sees it ("can delete but not type"). A thread
+                // message filter re-raising through ComponentDispatcher feeds
+                // it back to WPF. Installed once per connect, forward-only,
+                // best-effort: no filter must never break the pane.
                 try
                 {
-                    string addinDir = Path.GetDirectoryName(
-                        Assembly.GetExecutingAssembly().Location) ?? ".";
-                    var icons = QrToolbarIcons.EnsureExtracted(
-                        Path.Combine(addinDir, "icons"));
-                    group.IconList = icons;
-                    group.MainIconList = icons;
-                    Diag.Log($"command group icons set ({icons.Length} sizes)");
+                    _keyboardFilter = new PaneKeyboardFilter();
+                    System.Windows.Forms.Application.AddMessageFilter(_keyboardFilter);
+                    Diag.Log($"pane keyboard filter installed on thread {System.Threading.Thread.CurrentThread.ManagedThreadId}");
                 }
                 catch (Exception ex)
                 {
-                    Diag.Log($"icon setup skipped: {ex.GetType().Name}: {ex.Message}");
+                    _keyboardFilter = null;
+                    Diag.Log($"pane keyboard filter skipped: {ex.GetType().Name}: {ex.Message}");
                 }
-
-                group.HasMenu = true;
-                group.HasToolbar = true;
-                group.Activate();
-
-                // The interaction state behind the one modeless window lives
-                // here for the connection's lifetime; the view factory builds
-                // a fresh WPF window only when the command opens one.
-                _session = new QrSketchSession(CreateQrWindow);
 
                 _connected = true;
                 Diag.Log("connected");
@@ -152,12 +209,31 @@ namespace SolidWorksQrAddIn
             // in flight sees "not connected" and reports instead of touching a
             // released _sw — nothing can create geometry after unload.
             _connected = false;
-            // Release the modeless window first — it must not outlive the
-            // add-in — then stop the STA pump that owned it.
+            // Uninstall the keyboard message filter FIRST — it must never
+            // outlive the hosted WPF surface it forwards messages to.
+            try
+            {
+                if (_keyboardFilter != null)
+                    System.Windows.Forms.Application.RemoveMessageFilter(_keyboardFilter);
+                Diag.Log("pane keyboard filter removed");
+            }
+            catch { /* unloading must never throw back into SolidWorks */ }
+            _keyboardFilter = null;
+            // Release the pane surface first — it must not outlive the
+            // add-in — then remove the task-pane view itself. Registered
+            // undo handlers release their document references too, so an
+            // unloaded add-in can never be called back into dead state.
+            try { QrSketchUndoRegistry.ReleaseAll(); } catch { }
             try { _session?.Release(); } catch { }
             _session = null;
-            try { _wpf?.Shutdown(); } catch { }
-            _wpf = null;
+            try { _taskPaneView?.DeleteView(); } catch { }
+            if (_taskPaneView != null)
+            {
+                try { Marshal.ReleaseComObject(_taskPaneView); } catch { }
+                _taskPaneView = null;
+            }
+            try { _pane?.Dispose(); } catch { }
+            _pane = null;
             try
             {
                 if (_cmdMgr != null)
@@ -188,8 +264,8 @@ namespace SolidWorksQrAddIn
             "The QR add-in is not connected to SolidWorks.";
 
         /// <summary>
-        /// SolidWorks invokes this by name when the command runs: open the one
-        /// modeless QR window, or focus it if it is already open.
+        /// SolidWorks invokes this by name when the command runs: show the QR
+        /// task-pane tab, or bring it forward if it is already shown.
         /// </summary>
         public void CreateQrSketch()
         {
@@ -204,7 +280,7 @@ namespace SolidWorksQrAddIn
             }
             catch (Exception ex)
             {
-                Report($"The QR window could not be opened: {ex.Message}");
+                Report($"The QR pane could not be shown: {ex.Message}");
             }
         }
 
@@ -217,50 +293,29 @@ namespace SolidWorksQrAddIn
                 (int)swMessageBoxBtn_e.swMbOk);
 
         /// <summary>
-        /// View factory for the session: a fresh WPF window owned by the
-        /// SolidWorks main window, created on the add-in's dedicated STA pump
-        /// (callers — menu callback or COM probe — may be on any thread; the
-        /// window marshals itself for every later call). The window pulls its
-        /// state from the session and asks for a fresh host adapter per
-        /// Create — no cached support.
+        /// View factory for the session: the task-pane adapter. The pane is
+        /// created once in ConnectToSW on SolidWorks' STA UI thread and lives
+        /// for the connection — the factory returns that same control so a
+        /// "reopened" pane keeps its hosted view, and the adapter marshals
+        /// every call onto the UI thread for arbitrary callers (menu callback,
+        /// COM probe).
         /// </summary>
         private IQrSketchWindow CreateQrWindow()
         {
-            var owner = OwnerHandle();
-            _wpf ??= new AddInWpfThread();
-            var window = _wpf.Invoke(() => new QrSketchWindow(_session!, () =>
-            {
-                if (_sw == null || !_connected)
-                    throw new SketchHostException(NotConnectedMessage);
-                return new SolidWorksSketchHost(_sw);
-            }, owner));
-            Diag.Log("QR window created");
-            return window;
+            if (_pane == null)
+                throw new InvalidOperationException(NotConnectedMessage);
+            return _pane;
         }
 
         /// <summary>
-        /// The SolidWorks main-window handle for WPF ownership. IFrame is the
-        /// documented route; the process main-window handle is the fallback.
-        /// Zero means "unowned" — degraded, never fatal.
+        /// Fresh host adapter per Create — never cached support. Called from
+        /// the pane's Create button (already on the UI thread) and from probes.
         /// </summary>
-        private IntPtr OwnerHandle()
+        private ISketchHost CreateSketchHost()
         {
-            try
-            {
-                var frame = _sw?.Frame() as IFrame;
-                long hwnd = frame?.GetHWndx64() ?? 0;
-                if (hwnd != 0)
-                    return new IntPtr(hwnd);
-            }
-            catch (Exception ex) { Diag.Log($"IFrame.GetHWndx64 failed: {ex.Message}"); }
-            try
-            {
-                var hwnd = Process.GetCurrentProcess().MainWindowHandle;
-                if (hwnd != IntPtr.Zero)
-                    return hwnd;
-            }
-            catch { }
-            return IntPtr.Zero;
+            if (_sw == null || !_connected)
+                throw new SketchHostException(NotConnectedMessage);
+            return new SolidWorksSketchHost(_sw);
         }
 
         // ---------------- COM registration ----------------

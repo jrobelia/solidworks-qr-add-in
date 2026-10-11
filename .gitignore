@@ -20,6 +20,9 @@ x86/
 # Packed deployment staging (scripts/pack-deploy.ps1)
 deploy/
 
+# Inno Setup compiler output (Installer/Package.ps1)
+Installer/*-Setup.exe
+
 # NuGet
 packages/
 *.nupkg

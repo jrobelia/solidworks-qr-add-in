@@ -3,9 +3,11 @@ using System;
 namespace SolidWorksQrAddIn.Core.Interaction
 {
     /// <summary>
-    /// The view seam between the session and the real WPF window. The add-in
-    /// implements this over <c>System.Windows.Window</c>; headless tests use a
-    /// fake. Only interaction state crosses — never WPF or SolidWorks objects.
+    /// The view seam between the session and the add-in's visible surface —
+    /// the task-pane tab (implemented by the add-in's WinForms task-pane
+    /// control; historically a modeless WPF window, hence the name).
+    /// Headless tests use a fake. Only interaction state crosses — never
+    /// WPF or SolidWorks objects.
     /// </summary>
     public interface IQrSketchWindow
     {

@@ -42,11 +42,19 @@ unregister-addin-hkcu.ps1    per-user removal
 licenses\                    full license texts for the shipped dependencies
 ```
 
-At first load the add-in also writes `icons\qr-cmd-{20,32,40,64,96,128}.png`
-next to the DLL — the QR command group carries icons
-(`ICommandGroup.IconList`/`MainIconList`, one PNG strip per SolidWorks
-resolution; the single command is `ImageIndex` 0). The write is idempotent
-and best-effort: a read-only folder leaves the command reachable by name.
+At first load the add-in also writes `qr-cmd-{20,32,40,64,96,128}.png` and a
+dedicated `qr-tab-18.png` into
+`%LOCALAPPDATA%\SolidWorksQrAddIn\icons` (falling back to `icons\` beside the
+DLL when the per-user folder is unavailable — the unpacked dev case) — the QR
+command group carries icons (`ICommandGroup.IconList`/`MainIconList`, one PNG
+strip per SolidWorks resolution; the single command is `ImageIndex` 0). The
+task-pane tab does NOT reuse a menu strip: SolidWorks draws tab icons at
+~16-18px and silently ignores a 32px image (the API spec historically calls
+for 16x18), so `qr-tab-18.png` is rendered at 18x18 solely for
+`CreateTaskpaneView2`. Per-user-first matters
+under the Inno installer: the deployed DLL lives in Program Files, which is
+read-only. The write is idempotent and best-effort: a failed extraction
+leaves the command reachable by name and the tab unadorned.
 
 **Not shipped, on purpose:** `SolidWorks.Interop.*.dll` — interop types are
 embedded (`EmbedInteropTypes`), so the installed SDK's assemblies are not
@@ -55,7 +63,40 @@ needed beside the add-in and are not redistributed (RESEARCH.md §2;
 **Not shipped:** `SolidWorksQrAddIn.LiveProbe.exe`, test assemblies — dev
 tooling stays in the repo.
 
-## Install (per-user, no admin) — dev/quick-start route
+## Install (recommended for all users) — the Inno Setup installer
+
+`Installer\Package.ps1` packs the deployment folder and compiles
+`Installer\Setup.iss` into `Installer\SolidWorksQrAddIn-<version>-Setup.exe`
+— a normal Windows installer built with Inno Setup 6 (a scripted setup EXE,
+not an MSI).
+
+1. Close SolidWorks if it is running (the installer can prompt to close it
+   for you — `CloseApplications=yes`).
+2. Run the `-Setup.exe`. The wizard requires admin (one UAC prompt) because
+   the **Tools → Add-Ins** dialog enumerates
+   `HKLM\SOFTWARE\SolidWorks\AddIns` and COM registration lands under
+   `HKLM\SOFTWARE\Classes`.
+3. Files land in `%ProgramFiles%\SolidWorks QR Add-In\` — exactly the
+   verified pack-deploy contents (the four runtime DLLs, notices, docs, the
+   HKCU fallback scripts, `licenses\`). The wizard then runs
+   `Framework64\v4.0.30319\RegAsm.exe /codebase /s` on the installed DLL;
+   elevated RegAsm takes the `MachineWide` registration plan —
+   `HKLM\SOFTWARE\SolidWorks\AddIns\{clsid}` (default=1, Title,
+   Description) plus the per-user `AddInsStartup` flag — so the add-in
+   appears in **Tools → Add-Ins** and auto-loads at startup.
+4. A failed RegAsm aborts the "success" ending with an error box that
+   quotes the exact manual-repair command — the exit code is checked, never
+   silently swallowed.
+5. **Uninstall** via Settings → Apps / Add or Remove Programs: the
+   uninstaller runs `RegAsm /u /s` *before* file removal so
+   `[ComUnregisterFunction]` can clean this add-in's SolidWorks keys, then
+   deletes the install folder and the Apps entry.
+
+Prerequisite gate: the wizard refuses to start on machines without .NET
+Framework 4.8 (NDP `Release` ≥ 528040) — RegAsm itself ships with 4.x, so
+a bare file check would let 4.6/4.7 hosts through and fail mid-install.
+
+## Install (per-user, no admin) — dev/fallback route
 
 > Note (verified 2026-10-09): this route registers the add-in so COM
 > automation and File→Open can load it, but it does **not** list the add-in
@@ -111,8 +152,29 @@ tooling stays in the repo.
    without admin, use **File → Open** on `SolidWorksQrAddIn.dll` (the Open
    dialog has an "Add-Ins (*.dll)" filter). To appear in Tools → Add-Ins
    durably, use the machine-wide (elevated) route below. Once loaded, the
-   command appears as **QR Sketch → Create QR Sketch** on the menu/command
-   toolbar.
+   command appears as **QR Sketch → Create QR Sketch** on the menu, and the
+   QR UI lives in a docked **QR Sketch task-pane tab** (created via
+   `CreateTaskpaneView2`, hosting the WPF view through a WinForms
+   `ElementHost`). There is no custom toolbar; engineers who want a button
+   can add the command via Tools → Customize.
+
+   *Keyboard note:* without mitigation the pane's text boxes accept
+   Backspace/Delete/paste but no typed characters. The root cause is
+   `WM_GETDLGCODE`: the native task-pane container asks each child window
+   which keys it wants before dispatching, and the default `ElementHost`/
+   `HwndSource` answer lacks `DLGC_WANTCHARS`, so `WM_CHAR` is never
+   produced for the WPF window. The pane therefore hosts its WPF view in a
+   `PaneElementHost` that answers `WM_GETDLGCODE` with the full wanted set
+   (`WANTCHARS|WANTALLKEYS|WANTARROWS|WANTTAB`) at both HWND levels — the
+   ElementHost `WndProc` and a hook on the nested `HwndSource`. A
+   forward-only WinForms `IMessageFilter` that re-raises every thread
+   message through `System.Windows.Interop.ComponentDispatcher` stays
+   installed for the pane's lifetime (ConnectToSW → DisconnectFromSW) as a
+   belt-and-braces second path; it never eats messages, so SolidWorks and
+   other add-ins are unaffected. Everything is logged to the debug log
+   (`pane keyboard filter installed on thread N`, `…saw first message`,
+   `pane host HwndSource hook installed`, `pane host answered
+   WM_GETDLGCODE`, `pane host saw WM_CHAR`) and is best-effort, never fatal.
 
 ## Loading and unloading inside SolidWorks
 
@@ -120,7 +182,7 @@ tooling stays in the repo.
   session; the right checkbox controls startup. Toggling unloads and reloads
   the add-in cleanly — `DisconnectFromSW` removes the command group
   permanently (never runtime-only), so reload never duplicates the command or
-  orphans the QR window (the add-in closes it during unload).
+  orphans the QR pane (the add-in deletes the task-pane view during unload).
 - While loaded, the DLL is file-mapped into `SLDWORKS.exe`.
 
 ## Replacing binaries — always close SolidWorks first
@@ -164,9 +226,10 @@ fingerprints, and the add-in's COM CLSID (must be
    keys under HKCU.
 3. Delete the installed folder.
 
-## Machine-wide alternative (elevated — documented, not run by this repo)
+## Machine-wide alternative (elevated — what the installer runs)
 
-The same registration can be done machine-wide with the 64-bit RegAsm (use
+The installer above performs this registration automatically; done by hand,
+the same registration can be applied machine-wide with the 64-bit RegAsm (use
 `Framework64` — SolidWorks is x64):
 
 ```powershell
@@ -183,14 +246,19 @@ machine-wide changes are always an explicit user action.
 
 ## Diagnostics
 
-- The add-in appends `SolidWorksQrAddIn.debug.log` beside the deployed DLL
-  (connection, window, failures).
+- The add-in appends `debug.log` under
+  `%LOCALAPPDATA%\SolidWorksQrAddIn\` (connection, `task pane created`,
+  `pane keyboard filter installed`, `pane host …` keyboard-interop events,
+  icon-extraction target, failures). LocalAppData is always writable — the
+  previous beside-the-DLL location silently produced no log under a Program
+  Files install; that location remains only as the dev/unpacked fallback
+  (`SolidWorksQrAddIn.debug.log`). All logging is best-effort — never fatal.
 - Dependencies (`Core`, `QRCoder`, `Clipper2Lib`) resolve from the deployed
   folder via an `AssemblyResolve` handler — all four DLLs must stay together.
 - The `IAddInProbe` COM methods (`RunQrSketchProbe`, `RunFailingQrSketchProbe`,
   `RunCleanupFailQrSketchProbe`, the session/window probes) exist for the
   LiveProbe diagnostics harness. They are **not** commands: nothing in the
-  menu, toolbar, or window exposes them — the only user-facing action is
+  menu or task pane exposes them — the only user-facing action is
   **Create QR Sketch**. Failure injection is reachable only through
   `GetAddInObject` + `IDispatch` from a live-verification harness.
 - LiveProbe is never installed: run it from its own build output
@@ -198,7 +266,8 @@ machine-wide changes are always an explicit user action.
   <deployDir>`). It refuses to touch a visible or document-holding
   SolidWorks session — run it only when no interactive session is open, then
   `taskkill /IM SLDWORKS.exe /F` reaps the invisible instance it spawned.
-- **Toolbar renders as a tiny empty sliver?** SolidWorks persists
+- **(Historical — the add-in no longer ships a toolbar)** A persisted
+  command-group toolbar could render as a tiny empty sliver: SolidWorks keeps
   command-group toolbar geometry per user under
   `HKCU\Software\SolidWorks\SOLIDWORKS <year>\User Interface` — a toolbar
   first shown without icons can be cached collapsed (observed 2026-10-09:

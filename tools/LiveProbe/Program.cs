@@ -28,8 +28,9 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// Drives SolidWorks via SldWorks.Application.31 + Activator.CreateInstance
     /// (the verified route — PowerShell late binding does NOT work here) and the
     /// add-in through its IAddInProbe COM hook, which exercises the SAME session
-    /// + window code paths the WPF window uses. Prints PASS/FAIL lines; exit
-    /// code 0 when every check passes.
+    /// + view code paths the QR task-pane tab uses (the *Window* probe names are
+    /// historical — the surface is now the docked pane). Prints PASS/FAIL lines;
+    /// exit code 0 when every check passes.
     ///
     /// Ticket-4 checks: fresh-window 25 mm/3% fields; native outline measured
     /// at the default 25 mm and at a custom 40 mm; a growth change preserving
@@ -87,6 +88,15 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "perf", StringComparison.OrdinalIgnoreCase))
                 return PerfMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "undo", StringComparison.OrdinalIgnoreCase))
+                return UndoMatrixMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "undoapi", StringComparison.OrdinalIgnoreCase))
+                return UndoApiMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "block", StringComparison.OrdinalIgnoreCase))
+                return BlockSpikeMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -627,6 +637,947 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             Console.WriteLine(_failures == 0 ? "# PERF DONE" : $"# {_failures} perf check(s) failed");
             return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe undo [deployDir] [progId]` — runs the
+        /// FinishRecordingUndoObject(2) arrangement matrix through
+        /// <see cref="IAddInProbe.UndoArrangementProbe"/> on a session-free
+        /// instance. Each arrangement prints one line: the finish call's
+        /// verdict and whether one EditUndo2 removed the sketch. If an older
+        /// registered build auto-loaded, it is unloaded and replaced with the
+        /// requested DLL so the matrix always runs against this build.
+        /// </summary>
+        private static int UndoMatrixMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            Console.WriteLine("# FinishRecordingUndoObject arrangement matrix");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                var probe = TryGetProbe(sw);
+                // A previously REGISTERED build may have auto-loaded — it has
+                // no UndoArrangementProbe. Ping it; if the method is absent,
+                // unload the registered copy and load the requested DLL.
+                bool pingOk = false;
+                if (probe != null)
+                {
+                    try
+                    {
+                        string ping = probe.UndoArrangementProbe(-1);
+                        Console.WriteLine("# " + ping);
+                        pingOk = ping.StartsWith("PING");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"# probe ping failed ({ex.GetType().Name}) — reloading add-in");
+                    }
+                }
+                if (!pingOk)
+                {
+                    try { sw.UnloadAddIn(dllPath); } catch { }
+                    // The registered copy may sit in a different folder —
+                    // unload by its known deployed path too.
+                    string registered = Path.Combine(
+                        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    if (!string.Equals(registered, dllPath, StringComparison.OrdinalIgnoreCase))
+                        try { sw.UnloadAddIn(registered); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                }
+                if (probe == null) { Console.WriteLine("# FATAL: no probe object"); return 1; }
+                Console.WriteLine("# " + probe.AddinStateProbe());
+                Console.WriteLine("# ping: " + probe.UndoArrangementProbe(-1));
+
+                foreach (var arr in new[] { 9, 0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 14, 13, 12, 7 })
+                    Console.WriteLine(probe.UndoArrangementProbe(arr));
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe undoapi [deployDir] [progId]` — the custom undo
+        /// object (SetApiUndoObject) verification through
+        /// <see cref="IAddInProbe.UndoRedoQrProbe"/> on a session-free
+        /// instance: a user sketch is drawn first, then the real create
+        /// path, then EditUndo2 → EditRedo2 → EditUndo2. PASS requires the
+        /// undo removing the QR sketch and leaving the user sketch intact;
+        /// redo behaviour is reported (and checked) separately.
+        /// </summary>
+        private static int UndoApiMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+
+            Console.WriteLine("# Custom undo object (SetApiUndoObject) verification");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                var probe = TryGetProbe(sw);
+                // A previously registered build may have auto-loaded — ping
+                // for the new probe; if absent, replace with this build.
+                string? line = null;
+                if (probe != null)
+                {
+                    try
+                    {
+                        line = probe.UndoRedoQrProbe();
+                        Console.WriteLine("# auto-loaded build already has the probe — warm-up ran it");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"# probe missing on loaded build " +
+                            $"({ex.GetType().Name}) — loading requested DLL");
+                    }
+                }
+                if (line == null)
+                {
+                    string registered = Path.Combine(
+                        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    try { sw.UnloadAddIn(registered); } catch { }
+                    if (!string.Equals(registered, dllPath, StringComparison.OrdinalIgnoreCase))
+                        try { sw.UnloadAddIn(dllPath); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                    if (probe == null) { Console.WriteLine("# FATAL: no probe object"); return 1; }
+                    line = probe.UndoRedoQrProbe();
+                }
+                Console.WriteLine(line);
+                // Stage report: undo presses walk the stack (the open sketch's
+                // edit-session steps sit above our API step) until the QR
+                // sketch is gone; redo presses restore it. "user" = the
+                // pre-existing user sketch that must always survive.
+                Check(line.Contains("removed=True"), "undo removed exactly the QR sketch", line);
+                Check(line.Contains("userIntact=True"), "pre-existing user sketch survived everything", line);
+                Check(line.Contains("restored=True"), "redo restored the QR sketch", line);
+                Console.WriteLine(_failures == 0 ? "# UNDO-API ALL PASSED" : $"# {_failures} check(s) failed");
+                return _failures == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// `LiveProbe.exe block [deployDir] [progId]` — the sketch-block-instance
+        /// spike: runs every <see cref="IAddInProbe.BlockSpikeProbe"/> sub-test
+        /// on a session-free invisible instance and prints each one-line result.
+        /// Kill-risk order: test 1 (extrude/cut from a block instance) first —
+        /// if block regions can't feed features the design is dead. An optional
+        /// third arg runs only that test number.
+        /// </summary>
+        private static int BlockSpikeMain(string[] args)
+        {
+            // The spike runs out-of-process in this harness: on this box the
+            // add-in's CLSID is ALSO machine-registered (installer copy under
+            // %ProgramFiles%\SolidWorks QR Add-In, HKLM — read-only), so
+            // LoadAddIn/GetAddInObject resolves to that stale build and the
+            // new probe methods can never be reached. LiveProbe already
+            // drives the whole ISldWorks/ISketchManager surface out-of-proc
+            // (perf mode inserts entire sketches), so the block experiments
+            // execute here directly. An optional arg selects one test.
+            string progId = args.Length > 0 ? args[0] : "SldWorks.Application.31";
+            int? only = args.Length > 1 && int.TryParse(args[1], out var n) ? n : (int?)null;
+
+            Console.WriteLine("# Sketch-block-instance spike (docs/BLOCK-SPIKE.md evidence)");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                foreach (var t in new[] { 1, 2, 3, 4, 5 })
+                {
+                    if (only.HasValue && t != only.Value) continue;
+                    Console.WriteLine($"BLK{t} " + WithSpikeDoc(sw,
+                        t == 1 ? BlockSpike_ExtrudeFromBlock :
+                        t == 2 ? BlockSpike_DimRescale :
+                        t == 3 ? BlockSpike_RelationsToBlock :
+                        t == 4 ? (Func<ISldWorks, IModelDoc2, string>)BlockSpike_BlockCreation :
+                                 BlockSpike_DimInsideBlock));
+                }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>Fresh throwaway part per test; closed in a finally.</summary>
+        private static string WithSpikeDoc(ISldWorks sw, Func<ISldWorks, IModelDoc2, string> body)
+        {
+            string template = sw.GetUserPreferenceStringValue(
+                (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+            if (string.IsNullOrEmpty(template))
+                return "no-template";
+            // No dimension dialogs on an invisible session — verified live:
+            // IAddDimension2 hangs SolidWorks when swInputDimValOnCreate is on.
+            try { sw.SetUserPreferenceToggle(
+                (int)swUserPreferenceToggle_e.swInputDimValOnCreate, false); } catch { }
+            try { sw.SetUserPreferenceToggle(
+                (int)swUserPreferenceToggle_e.swSketchOverdefiningDimsPromptToSetState, false); } catch { }
+            var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+            if (doc == null) return "no-doc";
+            try { return body(sw, doc); }
+            catch (Exception ex) { return $"EX {ex.GetType().Name}: {ex.Message}"; }
+            finally { try { sw.CloseDoc(doc.GetTitle()); } catch { } }
+        }
+
+        private static bool OpenFrontSketch(IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr)
+        {
+            doc.ClearSelection2(true);
+            if (!ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+                return false;
+            mgr.InsertSketch(true);
+            return mgr.ActiveSketch != null;
+        }
+
+        /// <summary>Draws an s×s axis-aligned square with a corner at the origin.</summary>
+        private static void DrawSquare(ISketchManager mgr, double s)
+        {
+            bool prevInf = mgr.AutoInference;
+            try
+            {
+                mgr.AutoInference = false;
+                mgr.CreateLine(0, 0, 0, s, 0, 0);
+                mgr.CreateLine(s, 0, 0, s, s, 0);
+                mgr.CreateLine(s, s, 0, 0, s, 0);
+                mgr.CreateLine(0, s, 0, 0, 0, 0);
+            }
+            finally { mgr.AutoInference = prevInf; }
+        }
+
+        private static MathPoint SpikePt(IMathUtility mu, double x, double y)
+        {
+            object raw = mu.CreatePoint(new[] { x, y, 0.0 });
+            return (MathPoint)raw;
+        }
+
+        /// <summary>
+        /// Adds a driving dimension to the square's bottom edge while the
+        /// sketch is active: IAddDimension2 (aligned) first, then
+        /// IAddHorizontalDimension2. Appends the attempt to the log.
+        /// </summary>
+        private static IDisplayDimension? TryDimBottomEdge(
+            IModelDoc2 doc, IModelDocExtension ext, double s, System.Text.StringBuilder sb)
+        {
+            doc.ClearSelection2(true);
+            bool selLine = ext.SelectByID2("", "SKETCHSEGMENT", s / 2, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            sb.Append($"selLine={selLine} ");
+            IDisplayDimension? dd = null;
+            try { dd = doc.IAddDimension2(s / 2, -0.004, 0) as IDisplayDimension; }
+            catch (Exception ex) { sb.Append($"addDim2EX:{ex.GetType().Name} "); }
+            if (dd == null)
+            {
+                try { dd = doc.IAddHorizontalDimension2(s / 2, -0.004, 0); }
+                catch (Exception ex) { sb.Append($"addHDimEX:{ex.GetType().Name} "); }
+            }
+            sb.Append($"dim={(dd == null ? "null" : "ok")} ");
+            return dd;
+        }
+
+        /// <summary>
+        /// Selects everything in the active sketch (plus the dimension object
+        /// when one was created — a block only carries dims it is handed) and
+        /// calls MakeSketchBlockFromSelected.
+        /// </summary>
+        private static SketchBlockDefinition? MakeBlockDef(
+            IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr, IMathUtility mu,
+            IDisplayDimension? dd, System.Text.StringBuilder sb)
+        {
+            doc.ClearSelection2(true);
+            ext.SelectAll();
+            var selMgr = doc.ISelectionManager as ISelectionMgr;
+            int sel = selMgr?.GetSelectedObjectCount() ?? -1;
+            if (dd != null)
+            {
+                var dim = dd.GetDimension2(0) as IDimension;
+                if (dim != null)
+                {
+                    bool selDim = ext.SelectByID2(dim.FullName, "DIMENSION", 0, 0, 0,
+                        true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                    sb.Append($"selDim={selDim}({dim.FullName}) ");
+                }
+            }
+            var def = mgr.MakeSketchBlockFromSelected(SpikePt(mu, 0, 0));
+            sb.Append($"selCount={sel} def={(def == null ? "null" : "ok")} ");
+            return def;
+        }
+
+        /// <summary>
+        /// Host-sketch feature bbox (model space, mm) via IFeature.GetBox —
+        /// reflects the effective geometry including instance scale.
+        /// </summary>
+        private static string SketchBBox(IModelDoc2 doc)
+        {
+            for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+            {
+                if (!string.Equals(f.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                object? box = null;
+                try { f.GetBox(box); } catch { }
+                if (box is double[] b && b.Length >= 6)
+                    return $"w={(b[3] - b[0]) * 1000:F3} h={(b[4] - b[1]) * 1000:F3}";
+                return "box=null";
+            }
+            return "noSketchFeat";
+        }
+
+        /// <summary>
+        /// Point counts visible through the sketch while a block edit is open
+        /// (GetSketchPointsCount vs Count2) plus the bbox of whatever points
+        /// are exposed — evidence for which space block-edit coordinates use.
+        /// </summary>
+        private static string MeasureBlock(ISketchManager mgr, ISketchBlockInstance inst)
+        {
+            bool sel;
+            try { sel = inst.Select(true, null); }
+            catch (Exception ex) { return "selEX:" + ex.GetType().Name; }
+            if (!sel) return "sel=false";
+            try { mgr.EditSketchBlock(); }
+            catch (Exception ex) { return "editEX:" + ex.GetType().Name; }
+            var sk = mgr.ActiveSketch as ISketch;
+            string result;
+            if (sk == null)
+            {
+                result = "noActiveSketch";
+            }
+            else
+            {
+                int n1 = -1, n2 = -1;
+                try { n1 = sk.GetSketchPointsCount(); } catch { }
+                try { n2 = sk.GetSketchPointsCount2(); } catch { }
+                double minX = double.MaxValue, maxX = double.MinValue;
+                double minY = double.MaxValue, maxY = double.MinValue;
+                int used = 0;
+                // Block-edit exposes the definition's points through the v1
+                // API only (verified live: Count=8 vs Count2=0).
+                object? pts = null;
+                string ptsInfo = "threw";
+                try
+                {
+                    pts = sk.GetSketchPoints();
+                    ptsInfo = pts == null ? "null" : pts.GetType().Name;
+                    if (pts is System.Array a) ptsInfo += $"[{a.Length}]";
+                }
+                catch (Exception ex) { ptsInfo = "ex:" + ex.GetType().Name; }
+                if (pts is object[] arr)
+                    foreach (var po in arr)
+                    {
+                        if (!(po is ISketchPoint p)) continue;
+                        used++;
+                        minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                        minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+                    }
+                result = $"pts1={n1} pts2={n2} pts={ptsInfo} used={used}" +
+                    (used == 0 ? "" : $" w={(maxX - minX) * 1000:F3} h={(maxY - minY) * 1000:F3} " +
+                      $"x0={minX * 1000:F3} y0={minY * 1000:F3}");
+            }
+            try { mgr.EndEditSketchBlock(true); } catch { }
+            return result;
+        }
+
+        /// <summary>Q1 — can a region inside a block instance feed FeatureExtrusion3 / FeatureCut4?</summary>
+        private static string BlockSpike_ExtrudeFromBlock(ISldWorks sw, IModelDoc2 doc)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var fm = (IFeatureManager)doc.FeatureManager;
+            var sb = new System.Text.StringBuilder();
+
+            if (!OpenFrontSketch(doc, ext, mgr)) return "openSketch=fail";
+            DrawSquare(mgr, 0.01);
+            var def = MakeBlockDef(doc, ext, mgr, mu, null, sb);
+            if (def == null) return "dead: " + sb;
+            var hostSketch = mgr.ActiveSketch as ISketch;
+            sb.Append($"instInSketch={hostSketch?.GetSketchBlockInstanceCount() ?? -1} ");
+            mgr.InsertSketch(false);   // exit sketch edit
+
+            doc.ClearSelection2(true);
+            string sketchName = "";
+            ISketchBlockInstance? inst = null;
+            for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+            {
+                if (!string.Equals(f.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                sketchName = f.Name;
+                hostSketch = f.GetSpecificFeature2() as ISketch;
+                if (hostSketch != null && hostSketch.GetSketchBlockInstanceCount() > 0)
+                    inst = hostSketch.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+                break;
+            }
+            sb.Append($"host='{sketchName}' instName='{inst?.Name}' ");
+
+            IFeature? boss = null;
+            if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                try
+                {
+                    boss = fm.FeatureExtrusion3(true, false, false, 0, 0, 0.002, 0.002,
+                        false, false, false, false, 0, 0, false, false, false, false,
+                        true, true, true, 0, 0, false) as IFeature;
+                }
+                catch (Exception ex) { sb.Append($"extrudeA_EX:{ex.GetType().Name} "); }
+            }
+            sb.Append($"extrudeSketchSel={(boss == null ? "null" : "'" + boss.Name + "'")} ");
+
+            // Route B: the block instance object itself selected.
+            if (boss == null && inst != null)
+            {
+                doc.ClearSelection2(true);
+                bool selB = inst.Select(true, null);
+                var sm = doc.ISelectionManager as ISelectionMgr;
+                int selType = sm != null && sm.GetSelectedObjectCount() > 0
+                    ? sm.GetSelectedObjectType2(1) : -999;
+                sb.Append($"selInst={selB} selType={selType} ");
+                try
+                {
+                    boss = fm.FeatureExtrusion3(true, false, false, 0, 0, 0.002, 0.002,
+                        false, false, false, false, 0, 0, false, false, false, false,
+                        true, true, true, 0, 0, false) as IFeature;
+                }
+                catch (Exception ex) { sb.Append($"extrudeB_EX:{ex.GetType().Name} "); }
+                sb.Append($"extrudeInstSel={(boss == null ? "null" : "'" + boss.Name + "'")} ");
+            }
+
+            // Route C: a region inside the block, contour-selection style.
+            if (boss == null)
+            {
+                doc.ClearSelection2(true);
+                var sm = doc.ISelectionManager as ISelectionMgr;
+                if (sm != null) sm.EnableContourSelection = true;
+                bool selC = ext.SelectByID2("", "SKETCHREGION", 0.005, 0.005, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                int selTypeC = sm != null && sm.GetSelectedObjectCount() > 0
+                    ? sm.GetSelectedObjectType2(1) : -999;
+                sb.Append($"selRegion={selC} type={selTypeC} ");
+                try
+                {
+                    boss = fm.FeatureExtrusion3(true, false, false, 0, 0, 0.002, 0.002,
+                        false, false, false, false, 0, 0, false, false, false, false,
+                        true, true, true, 0, 0, false) as IFeature;
+                }
+                catch (Exception ex) { sb.Append($"extrudeC_EX:{ex.GetType().Name} "); }
+                sb.Append($"extrudeRegionSel={(boss == null ? "null" : "'" + boss.Name + "'")} ");
+                if (sm != null) sm.EnableContourSelection = false;
+            }
+
+            // Control: explode the instance into normal segments, then the
+            // same selection+extrude MUST work — isolates "block instance"
+            // from "geometry is somehow broken".
+            if (boss == null && inst != null)
+            {
+                doc.ClearSelection2(true);
+                if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault))
+                {
+                    mgr.InsertSketch(true);
+                    try { mgr.ExplodeSketchBlockInstance((SketchBlockInstance)inst); }
+                    catch (Exception ex) { sb.Append($"explodeEX:{ex.GetType().Name} "); }
+                    mgr.InsertSketch(false);
+                    doc.ClearSelection2(true);
+                    ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    try
+                    {
+                        boss = fm.FeatureExtrusion3(true, false, false, 0, 0, 0.002, 0.002,
+                            false, false, false, false, 0, 0, false, false, false, false,
+                            true, true, true, 0, 0, false) as IFeature;
+                    }
+                    catch (Exception ex) { sb.Append($"extrudeD_EX:{ex.GetType().Name} "); }
+                    sb.Append($"extrudeExploded={(boss == null ? "null" : "'" + boss.Name + "'")} ");
+                }
+            }
+
+            // Cut route: only if the boss produced a body — same region, through it.
+            if (boss != null)
+            {
+                doc.ClearSelection2(true);
+                ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+                IFeature? cut = null;
+                try
+                {
+                    doc.FeatureCut4(true, false, false, 0, 0, 0.005, 0.005,
+                        false, false, false, false, 0, 0, false, false, 0, true);
+                    for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+                        if (f.GetTypeName2().IndexOf("cut", StringComparison.OrdinalIgnoreCase) >= 0)
+                        { cut = f; break; }
+                }
+                catch (Exception ex) { sb.Append($"cut_EX:{ex.GetType().Name} "); }
+                sb.Append($"cut={(cut == null ? "none" : "'" + cut.Name + "'")} ");
+            }
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// Measures effective block geometry by inserting a throwaway
+        /// instance at (x,y), exploding it into normal sketch entities and
+        /// reading the segment bbox — the only reliable live observable of
+        /// block contents found (GetSketchPoints is null in block edit).
+        /// </summary>
+        private static string ExplodeMeasure(
+            IModelDoc2 doc, ISketchManager mgr, IMathUtility mu,
+            SketchBlockDefinition def, double x, double y)
+        {
+            try
+            {
+                var inst = mgr.InsertSketchBlockInstance(def, SpikePt(mu, x, y), 1.0, 1.0)
+                    as ISketchBlockInstance;
+                if (inst == null) return "insert=null";
+                mgr.ExplodeSketchBlockInstance((SketchBlockInstance)inst);
+                var sketch = mgr.ActiveSketch as ISketch;
+                if (sketch == null) return "noSketch";
+                double minX = double.MaxValue, maxX = double.MinValue;
+                double minY = double.MaxValue, maxY = double.MinValue;
+                int n = 0;
+                if (sketch.GetSketchSegments() is object[] segs)
+                    foreach (var so in segs)
+                    {
+                        if (!(so is ISketchLine l)) continue;
+                        foreach (var p in new[] { l.GetStartPoint2() as ISketchPoint,
+                                                  l.GetEndPoint2() as ISketchPoint })
+                        {
+                            if (p == null) continue;
+                            n++;
+                            minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                            minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+                        }
+                    }
+                if (n == 0) return "segs=0";
+                // bbox includes every exploded instance so far — report the
+                // window around the insertion point instead.
+                double w = 0;
+                foreach (var so in (object[])sketch.GetSketchSegments())
+                {
+                    if (!(so is ISketchLine l)) continue;
+                    var p1 = l.GetStartPoint2() as ISketchPoint;
+                    var p2 = l.GetEndPoint2() as ISketchPoint;
+                    if (p1 == null || p2 == null) continue;
+                    double len = Math.Sqrt((p2.X - p1.X) * (p2.X - p1.X) + (p2.Y - p1.Y) * (p2.Y - p1.Y));
+                    if (Math.Abs(p1.X - x) < 0.1 && Math.Abs(p1.Y - y) < 0.1 ||
+                        Math.Abs(p2.X - x) < 0.1 && Math.Abs(p2.Y - y) < 0.1)
+                        w = Math.Max(w, len);
+                }
+                return $"segs={n} edgeNearIns={w * 1000:F2}mm";
+            }
+            catch (Exception ex) { return "EX:" + ex.GetType().Name; }
+        }
+
+        /// <summary>ExplodeMeasure variant honouring the (scaleX, scaleY) insert args.</summary>
+        private static string ExplodeMeasureArgs(
+            IModelDoc2 doc, ISketchManager mgr, IMathUtility mu,
+            SketchBlockDefinition def, double x, double y, double sx, double sy)
+        {
+            try
+            {
+                var inst = mgr.InsertSketchBlockInstance(def, SpikePt(mu, x, y), sx, sy)
+                    as ISketchBlockInstance;
+                if (inst == null) return "insert=null";
+                mgr.ExplodeSketchBlockInstance((SketchBlockInstance)inst);
+                var sketch = mgr.ActiveSketch as ISketch;
+                if (sketch == null) return "noSketch";
+                double maxX = 0, maxY = 0; int n = 0;
+                if (sketch.GetSketchSegments() is object[] segs)
+                    foreach (var so in segs)
+                    {
+                        if (!(so is ISketchLine l)) continue;
+                        var p1 = l.GetStartPoint2() as ISketchPoint;
+                        var p2 = l.GetEndPoint2() as ISketchPoint;
+                        if (p1 == null || p2 == null) continue;
+                        n++;
+                        double dx = Math.Abs(p2.X - p1.X), dy = Math.Abs(p2.Y - p1.Y);
+                        // only edges near this insertion point count
+                        if ((Math.Abs(p1.X - x) < 0.15 && Math.Abs(p1.Y - y) < 0.15) ||
+                            (Math.Abs(p2.X - x) < 0.15 && Math.Abs(p2.Y - y) < 0.15))
+                        {
+                            maxX = Math.Max(maxX, dx); maxY = Math.Max(maxY, dy);
+                        }
+                    }
+                return $"segs={n} edgeX={maxX * 1000:F2} edgeY={maxY * 1000:F2}";
+            }
+            catch (Exception ex) { return "EX:" + ex.GetType().Name; }
+        }
+
+        /// <summary>
+        /// Q2 — two clean phases; every measurement is "insert instance →
+        /// explode → longest segment", the only live observable that worked.
+        /// Phase A (scale): def without a dim; explode an instance at scale 1
+        /// (baseline 10 mm), set instance Scale=2 / Angle, then explode a
+        /// FRESH instance to see the effect, and one inserted at (2,3) scale
+        /// args to disambiguate the (scaleX, scaleY) parameter order.
+        /// Phase B (driving dim): def with a driving dim; set
+        /// SetSystemValue3(30 mm) FIRST, then insert+explode — a 30 mm edge
+        /// proves the def's dim drives geometry; 10 mm proves it does not.
+        /// </summary>
+        private static string BlockSpike_DimRescale(ISldWorks sw, IModelDoc2 doc)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var sb = new System.Text.StringBuilder();
+
+            // ---------- Phase A: instance Scale/Angle ----------
+            sb.Append("A[");
+            if (!OpenFrontSketch(doc, ext, mgr)) return "openSketch=fail";
+            DrawSquare(mgr, 0.01);
+            var defA = MakeBlockDef(doc, ext, mgr, mu, null, sb);
+            if (defA == null) return "deadA: " + sb;
+            var sketch = mgr.ActiveSketch as ISketch;
+            var instA = sketch?.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+            sb.Append($"e1[{ExplodeMeasure(doc, mgr, mu, defA, 0.05, 0)}] ");
+            if (instA != null)
+            {
+                try
+                {
+                    instA.Scale = 2.0;
+                    sb.Append($"scale→{instA.Scale:F2}/{instA.Scale2:F2} ");
+                    instA.Angle = 0.5;
+                    sb.Append($"angle→{instA.Angle:F2} ");
+                }
+                catch (Exception ex) { sb.Append($"propEX:{ex.GetType().Name} "); }
+            }
+            // scale-2 fresh instance via the (scaleX, scaleY) args — if the
+            // 2nd/3rd doubles are X and Y scale, exploding gives 20 mm edges.
+            sb.Append($"e2arg[{ExplodeMeasureArgs(doc, mgr, mu, defA, 0.10, 0, 2.0, 3.0)}] ");
+            try { instA!.DimensionDisplay = true; sb.Append($"dimDisp→{instA.DimensionDisplay} "); }
+            catch (Exception ex) { sb.Append($"dimDispEX:{ex.GetType().Name} "); }
+            sb.Append("] ");
+
+            // ---------- Phase B: driving dim inside the def ----------
+            sb.Append("B[");
+            // Fresh sketch on the same doc keeps phases independent.
+            mgr.InsertSketch(false);
+            doc.ClearSelection2(true);
+            if (!ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+                return sb.ToString() + " plane2=fail";
+            mgr.InsertSketch(true);
+            DrawSquare(mgr, 0.01);
+            var dd = TryDimBottomEdge(doc, ext, 0.01, sb);
+            var def = MakeBlockDef(doc, ext, mgr, mu, dd, sb);
+            if (def == null) return sb.ToString() + " deadB";
+            var defI = (ISketchBlockDefinition)def;
+            sb.Append($"defDims={defI.GetDisplayDimensionCount()} ");
+
+            // Drive the dim BEFORE any measurement: 10 mm → 30 mm.
+            IDisplayDimension? ddi = null;
+            object? ddarr = null;
+            try { ddarr = defI.GetDisplayDimensions(); } catch { }
+            if (ddarr is object[] ddobjs)
+                foreach (var d in ddobjs)
+                    if (d is IDisplayDimension x) { ddi = x; break; }
+            IDimension? dim = null;
+            object? dobj = null;
+            try { if (ddi != null) dobj = ddi.GetDimension(); } catch { }
+            dim = (dobj as IDimension) ?? (ddi?.GetDimension2(0) as IDimension);
+            if (dim == null)
+            {
+                for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+                    if (dim == null && f.EnumDisplayDimensions() != null)
+                        if (f.GetFirstDisplayDimension() is IDisplayDimension dd2i)
+                            dim = dd2i.GetDimension2(0) as IDimension;
+            }
+            sb.Append($"eBefore[{ExplodeMeasure(doc, mgr, mu, def, 0.15, 0)}] ");
+            if (dim != null)
+            {
+                sb.Append($"dim='{dim.FullName}' v0={dim.SystemValue * 1000:F2} ");
+                int r = -99;
+                try { r = dim.SetSystemValue3(0.03, 2, null); }
+                catch (Exception ex) { sb.Append($"setEX:{ex.GetType().Name} "); }
+                sb.Append($"set={r} v={(dim.SystemValue * 1000):F2} ");
+                try { doc.EditRebuild3(); } catch { }
+            }
+            else sb.Append("dim=unreachable ");
+            // The decisive observation: fresh instance + explode AFTER the
+            // dim drive — 30 mm proves the dim drives the def's geometry.
+            // EditRebuild3 exits sketch edit mode (verified live: the first
+            // post-dim insert returned null) — re-enter first.
+            if (mgr.ActiveSketch == null)
+            {
+                doc.ClearSelection2(true);
+                for (var f = doc.FirstFeature() as IFeature; f != null; f = f.GetNextFeature() as IFeature)
+                    if (string.Equals(f.GetTypeName2(), "ProfileFeature", StringComparison.OrdinalIgnoreCase) &&
+                        (f.GetSpecificFeature2() as ISketch)?.GetSketchBlockInstanceCount() > 0)
+                    {
+                        ext.SelectByID2(f.Name, "SKETCH", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault);
+                        break;
+                    }
+                mgr.InsertSketch(true);
+                sb.Append($"reenter={(mgr.ActiveSketch != null)} ");
+            }
+            sb.Append($"eAfter[{ExplodeMeasure(doc, mgr, mu, def, 0.05, 0)}] ");
+            sb.Append("]");
+            return sb.ToString().Trim();
+        }
+        /// <summary>Q3 — SketchAddConstraints from host entities to block geometry.</summary>
+        private static string BlockSpike_RelationsToBlock(ISldWorks sw, IModelDoc2 doc)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var sb = new System.Text.StringBuilder();
+
+            if (!OpenFrontSketch(doc, ext, mgr)) return "openSketch=fail";
+            DrawSquare(mgr, 0.01);
+            var def = MakeBlockDef(doc, ext, mgr, mu, null, sb);
+            if (def == null) return "dead: " + sb;
+            var sketch = mgr.ActiveSketch as ISketch;
+            if (sketch == null) return "no-sketch " + sb;
+
+            bool prevInf = mgr.AutoInference;
+            try { mgr.AutoInference = false; mgr.CreateLine(0.05, 0.05, 0, 0.06, 0.05, 0); }
+            finally { mgr.AutoInference = prevInf; }
+
+            int relBefore = -1;
+            try { relBefore = sketch.RelationManager.GetRelationsCount(-1); }
+            catch (Exception ex) { sb.Append($"relCntEX:{ex.GetType().Name} "); }
+
+            // A: host endpoint ↔ block corner point (origin).
+            doc.ClearSelection2(true);
+            bool s1 = ext.SelectByID2("", "SKETCHPOINT", 0.05, 0.05, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            bool s2 = ext.SelectByID2("", "SKETCHPOINT", 0.0, 0.0, 0, true, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            sb.Append($"selHostPt={s1} selBlockPt={s2} ");
+            if (s1 && s2)
+            {
+                try { doc.SketchAddConstraints("sgCOINCIDENT"); }
+                catch (Exception ex) { sb.Append($"coincidentEX:{ex.GetType().Name} "); }
+            }
+            bool hostAtOrigin = false;
+            var ptList = new System.Text.StringBuilder();
+            {
+                int n = sketch.GetSketchPointsCount2();
+                ptList.Append($"n={n}:");
+                for (var i = 0; i < n && i < 12; i++)
+                {
+                    var p = sketch.IGetSketchPoints2(i);
+                    if (p == null) continue;
+                    ptList.Append($"({p.X * 1000:F1},{p.Y * 1000:F1})");
+                    if (Math.Abs(p.X) < 1e-9 && Math.Abs(p.Y) < 1e-9) hostAtOrigin = true;
+                }
+            }
+            // Point-selection probe: if the coincident actually applied, the
+            // host endpoint left (0.05,0.05) and sits at the block corner.
+            doc.ClearSelection2(true);
+            bool stillThere = ext.SelectByID2("", "SKETCHPOINT", 0.05, 0.05, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            doc.ClearSelection2(true);
+            bool cornerHasPt = ext.SelectByID2("", "SKETCHPOINT", 0.0, 0.0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            sb.Append($"hostPtAtOrigin={hostAtOrigin} pts[{ptList}] " +
+                $"ptStill050={stillThere} ptAtCorner={cornerHasPt} ");
+            // Rigorous check: the host line's own endpoint must sit at the
+            // block corner — a block point existing at (0,0) is not proof.
+            bool hostLineMoved = false; string lineInfo = "noHostLine";
+            try
+            {
+                if (sketch.GetSketchSegments() is object[] segs)
+                    foreach (var so in segs)
+                    {
+                        if (!(so is ISketchLine l)) continue;
+                        var a = l.GetStartPoint2() as ISketchPoint;
+                        var b = l.GetEndPoint2() as ISketchPoint;
+                        if (a == null || b == null) continue;
+                        // the host line is the non-axis-aligned one (was
+                        // horizontal at y=0.05; if it moved it went diagonal)
+                        bool isHost = (Math.Abs(a.Y - b.Y) > 1e-9) ||
+                            (Math.Abs(a.X - 0.05) < 1e-6 && Math.Abs(a.Y - 0.05) < 1e-6) ||
+                            (Math.Abs(b.X - 0.05) < 1e-6 && Math.Abs(b.Y - 0.05) < 1e-6) ||
+                            (Math.Abs(a.X - 0.06) < 1e-6) || (Math.Abs(b.X - 0.06) < 1e-6);
+                        if (!isHost) continue;
+                        lineInfo = $"({a.X * 1000:F1},{a.Y * 1000:F1})->({b.X * 1000:F1},{b.Y * 1000:F1})";
+                        if (Math.Abs(a.X) < 1e-9 && Math.Abs(a.Y) < 1e-9) hostLineMoved = true;
+                        if (Math.Abs(b.X) < 1e-9 && Math.Abs(b.Y) < 1e-9) hostLineMoved = true;
+                    }
+            }
+            catch (Exception ex) { lineInfo = "ex:" + ex.GetType().Name; }
+            sb.Append($"hostLine={lineInfo} movedToCorner={hostLineMoved} ");
+
+            // B: host line ↔ block bottom edge, coincident/colinear.
+            doc.ClearSelection2(true);
+            // The coincident moved the host line (start now at origin) —
+            // pick a point on its new span; fall back to the original.
+            bool s3 = ext.SelectByID2("", "SKETCHSEGMENT", 0.03, 0.025, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault)
+                || ext.SelectByID2("", "SKETCHSEGMENT", 0.055, 0.05, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+            bool s4 = ext.SelectByID2("", "SKETCHSEGMENT", 0.005, 0.0, 0, true, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            sb.Append($"selHostSeg={s3} selBlockSeg={s4} ");
+            if (s3 && s4)
+            {
+                try { doc.SketchAddConstraints("sgCOLINEAR"); }
+                catch (Exception ex) { sb.Append($"colinearEX:{ex.GetType().Name} "); }
+            }
+            int relAfter = -1;
+            try { relAfter = sketch.RelationManager.GetRelationsCount(-1); }
+            catch { }
+            sb.Append($"rels {relBefore}→{relAfter} ");
+
+            // C: dimension between a host entity and block geometry.
+            doc.ClearSelection2(true);
+            bool s5 = ext.SelectByID2("", "SKETCHSEGMENT", 0.03, 0.025, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault)
+                || ext.SelectByID2("", "SKETCHSEGMENT", 0.055, 0.05, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+            bool s6 = ext.SelectByID2("", "SKETCHSEGMENT", 0.005, 0.0, 0, true, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            IDisplayDimension? dd = null;
+            if (s5 && s6)
+            {
+                try { dd = doc.IAddDimension2(0.03, 0.02, 0) as IDisplayDimension; }
+                catch (Exception ex) { sb.Append($"dimEX:{ex.GetType().Name} "); }
+            }
+            sb.Append($"hostBlockDim={(dd == null ? "null" : "ok")} ");
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>Q4 — the creation API sequence itself.</summary>
+        private static string BlockSpike_BlockCreation(ISldWorks sw, IModelDoc2 doc)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var sb = new System.Text.StringBuilder();
+
+            if (!OpenFrontSketch(doc, ext, mgr)) return "openSketch=fail";
+            DrawSquare(mgr, 0.01);
+            int defsBefore = mgr.GetSketchBlockDefinitionCount();
+            var def = MakeBlockDef(doc, ext, mgr, mu, null, sb);
+            if (def == null) return "dead: " + sb;
+            sb.Append($"defs {defsBefore}→{mgr.GetSketchBlockDefinitionCount()} ");
+
+            var sketch = mgr.ActiveSketch as ISketch;
+            sb.Append($"instInSketch={sketch?.GetSketchBlockInstanceCount() ?? -1} ");
+
+            var inst2 = mgr.InsertSketchBlockInstance(
+                def, SpikePt(mu, 0.03, 0.03), 1.0, 1.0) as ISketchBlockInstance;
+            sb.Append($"insert2={(inst2 == null ? "null" : "ok")} ");
+            if (inst2 != null)
+            {
+                var pos = inst2.InstancePosition?.ArrayData as double[];
+                sb.Append($"inst2 name='{inst2.Name}' pos=({(pos != null ? $"{pos[0] * 1000:F1},{pos[1] * 1000:F1}" : "?")}) " +
+                    $"scale={inst2.Scale:F2} scale2={inst2.Scale2:F2} angle={inst2.Angle:F2} ");
+                sb.Append($"instInSketch={sketch?.GetSketchBlockInstanceCount() ?? -1} ");
+                var xform = inst2.BlockToSketchTransform;
+                sb.Append($"xform={(xform == null ? "null" : "ok")} ");
+            }
+            try { sb.Append($"defInstCount={((ISketchBlockDefinition)def).GetInstanceCount()} "); }
+            catch (Exception ex) { sb.Append($"defInstEX:{ex.GetType().Name} "); }
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>Q5 — does an AddDimension2 inside the selection travel into the block?</summary>
+        private static string BlockSpike_DimInsideBlock(ISldWorks sw, IModelDoc2 doc)
+        {
+            var ext = (IModelDocExtension)doc.Extension;
+            var mgr = (ISketchManager)doc.SketchManager;
+            var mu = (IMathUtility)sw.IGetMathUtility();
+            var sb = new System.Text.StringBuilder();
+
+            if (!OpenFrontSketch(doc, ext, mgr)) return "openSketch=fail";
+            DrawSquare(mgr, 0.01);
+            var dd = TryDimBottomEdge(doc, ext, 0.01, sb);
+            if (dd != null)
+            {
+                var dim = dd.GetDimension2(0) as IDimension;
+                if (dim != null)
+                    sb.Append($"dimName='{dim.FullName}' selName='{dd.GetNameForSelection()}' v={dim.SystemValue * 1000:F2}mm ");
+            }
+            var def = MakeBlockDef(doc, ext, mgr, mu, dd, sb);
+            if (def == null) return "dead: " + sb;
+            var defI5 = (ISketchBlockDefinition)def;
+            sb.Append($"defDims={defI5.GetDisplayDimensionCount()} ");
+            if (defI5.GetDisplayDimensionCount() > 0)
+            {
+                var d0 = defI5.IGetDisplayDimensions(0) as IDisplayDimension;
+                var d0dim = d0?.GetDimension2(0) as IDimension;
+                sb.Append($"defDim0='{d0dim?.FullName}' v={d0dim?.SystemValue * 1000:F2}mm ");
+            }
+            return sb.ToString().Trim();
         }
 
         // ================= ticket 5: support + coordinate convention =================
@@ -1896,8 +2847,15 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         private static ISldWorks? AttachOrLaunch(string progId)
         {
-            var t = Type.GetTypeFromProgID(progId);
-            if (t == null) { Console.WriteLine($"FAIL  ProgID {progId} not registered"); return null; }
+            // Accepts a ProgID ("SldWorks.Application.31") or a "{clsid}" —
+            // some installed versions register a versioned ProgID whose
+            // CLSID lookup fails; the raw CLSID still activates.
+            Type? t = null;
+            if (progId.StartsWith("{") && Guid.TryParse(progId, out var clsid))
+                t = Type.GetTypeFromCLSID(clsid);
+            else
+                t = Type.GetTypeFromProgID(progId);
+            if (t == null) { Console.WriteLine($"FAIL  ProgID/CLSID {progId} not registered"); return null; }
             return Activator.CreateInstance(t) as ISldWorks;
         }
 
@@ -1981,6 +2939,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrSizeProbe(string sizeText) => Invoke("SetQrSizeProbe", sizeText);
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
+            public string UndoArrangementProbe(int arrangement) => Invoke("UndoArrangementProbe", arrangement);
+            public string UndoRedoQrProbe() => Invoke("UndoRedoQrProbe");
+            public string BlockSpikeProbe(int test) => Invoke("BlockSpikeProbe", test);
             public string PreviewSignatureProbe() => Invoke("PreviewSignatureProbe");
         }
     }

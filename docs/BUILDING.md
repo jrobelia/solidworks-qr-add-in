@@ -8,11 +8,12 @@ Build tools: .NET SDK (tested with 10.0.103); no Visual Studio required.
 | Path | What it is |
 |---|---|
 | `src/SolidWorksQrAddIn.Core` | Host-independent logic: the `ISketchHost`/`ISketchInsertion` seam, commands, geometry plans, registration plan, the `IAddInProbe` test hook. **Never references SolidWorks assemblies.** |
-| `src/SolidWorksQrAddIn` | The COM-visible add-in (`SwAddin`), the native adapter (`Host/`), the WPF window (`UI/` — modeless, on a dedicated STA thread) and COM registration functions. CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` — unique to this project (NOT the InvenTree GUID). |
+| `src/SolidWorksQrAddIn` | The COM-visible add-in (`SwAddin`), the native adapter (`Host/`), the task-pane UI (`UI/` — a WPF view hosted in a WinForms control via `ElementHost` on SolidWorks' UI thread) and COM registration functions. CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` — unique to this project (NOT the InvenTree GUID). |
 | `tests/SolidWorksQrAddIn.Tests` | Headless xunit suite + the in-memory test adapter. References Core only. |
 | `tools/LiveProbe` | Live-verification console harness (drives a headless SolidWorks via COM). |
 | `scripts/` | `pack-deploy.ps1`/`verify-deploy.ps1` (deployment folder) + per-user HKCU registration/unregistration. |
 | `deploy/` | Pack staging output — gitignored; never the registered location. |
+| `Installer/` | Inno Setup installer: `Setup.iss`, `Package.ps1`, ISCC resolvers. Compiled `*-Setup.exe` is gitignored. |
 
 ## Build
 
@@ -104,8 +105,9 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   useful errors and verbatim-kept rejected text, a plain Ready status with no
   version/cell/size readouts, current-request insertion, fresh host
   revalidation (no stale cross-document support), create blocked while
-  editing, single-window lifecycle (focus-or-recreate, close, release) and
-  session→window sync of probe-driven edits via the `IQrSketchWindow` seam.
+  editing, single-surface lifecycle (focus-or-recreate, close, release — the
+  task-pane tab) and session→view sync of probe-driven edits via the
+  `IQrSketchWindow` seam.
 - **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
   payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
   two-direction scaling, preserved ring→hole→island nesting, finite overlap
@@ -133,6 +135,21 @@ The deployment manifest lives in `SolidWorksQrAddIn.Core`'s `DeploymentPlan`
 (headless-tested); `pack-deploy.ps1` reads it by reflection and
 `verify-deploy.ps1 -DeployDir <folder>` re-checks any folder read-only —
 safe on the registered folder, never writes into it.
+
+### Packaging the installer (end-user route)
+
+```powershell
+.\Installer\Package.ps1        # pack-deploy + ISCC -> Installer\SolidWorksQrAddIn-<version>-Setup.exe
+```
+
+Requires **Inno Setup 6** — `Resolve-ISCC.ps1` checks `$env:INNO_SETUP`,
+`%LOCALAPPDATA%\Programs\Inno Setup 6`, and both Program Files locations;
+`Ensure-ISCC.ps1` winget-installs it (used by CI, not local builds). With no
+compiler the pack still runs and the script prints the manual
+`iscc /DAppVersion=<version> Installer\Setup.iss` command. Version comes
+from `git describe` (nearest tag, else commit hash). The installer EXE and
+its behaviour are documented in `docs/DEPLOYMENT.md` — the install itself
+needs admin and a real machine, so only the compile is verified here.
 
 Only this add-in's CLSID `{DA932451-66B9-4092-9534-292AD913DEAC}` is ever
 touched — never the InvenTree add-in ({A1B2C3D4-…}) or any other key. The
@@ -212,10 +229,12 @@ create is exited then undone once (`EditUndo2(1)`): the named
 removing the marker — a second undo is tried only as diagnosis → finally all
 documents close and Create must fail cleanly with "no active document".
 
-WPF threading note (verified): probe calls arrive on MTA COM worker threads,
-so the add-in creates its window on a dedicated STA thread
-(`AddInWpfThread`) with its own dispatcher; the window marshals every call.
-A menu-command invocation takes the same path.
+WPF threading note: the QR surface is a task-pane tab — task-pane controls
+live on SolidWorks' own STA UI thread, so the WPF view (inside `ElementHost`)
+runs on that dispatcher and no dedicated WPF pump exists anymore. Probe calls
+still arrive on MTA COM worker threads; the `QrTaskPaneControl` adapter
+marshals every session-facing view call (`ShowModeless`/`FocusWindow`/`Close`/
+`SyncFromSession`) onto the UI thread via WinForms `Invoke`.
 
 SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
 terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
@@ -227,8 +246,9 @@ invisible one. The probe therefore refuses to run when the attached instance
 is visible or already holds documents, and only calls `ExitApp` on an
 instance it spawned fresh. A second ProgID argument selects the version
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
-useful when another SolidWorks release is already running (this box has
-both SW 2022 and 2023; the unqualified ProgID belongs to the last installed).
+useful when another SolidWorks release is already running. This box has
+only SW 2023 installed — `SldWorks.Application.30`/`.31` both resolve to
+the same server (the unqualified ProgID belongs to the last installed).
 
 `NewDocument` requires an explicit template path — an empty one pops a
 template dialog that hangs a headless run. The probe passes the configured

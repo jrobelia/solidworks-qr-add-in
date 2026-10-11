@@ -78,6 +78,17 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// rather than steer insertion onto a wrong entity.
         /// </summary>
         ISketchInsertion BeginSketchInsertion();
+
+        /// <summary>
+        /// Post-commit hook: the command calls this once a creation has
+        /// fully succeeded, so the host can register a custom undo step for
+        /// the sketch it just made (the native adapter hands SolidWorks a
+        /// SetApiUndoObject handler — AddToDB insertion bypasses native undo
+        /// recording, so this IS the named step). Best-effort plumbing on
+        /// top of a completed creation: a host that cannot register must
+        /// simply return — never throw, never mutate the sketch.
+        /// </summary>
+        void RegisterSketchUndo(SketchUndoRegistration registration);
     }
 
     /// <summary>

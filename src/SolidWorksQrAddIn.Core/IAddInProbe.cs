@@ -94,6 +94,44 @@ namespace SolidWorksQrAddIn.Core
         string CreateQrFromWindowProbe();
 
         /// <summary>
+        /// Undo-recording diagnostic (verification-only): creates a fresh
+        /// throwaway part document, creates one small sketch under the
+        /// requested arrangement of StartRecordingUndoObject /
+        /// FinishRecordingUndoObject(2) / InsertSketch / AddToDB, then
+        /// presses EditUndo2 and reports whether the sketch was removed.
+        /// Returns a single-line "ARR …" result string. -1 is a ping that
+        /// reports the executing thread — no document is touched.
+        /// </summary>
+        string UndoArrangementProbe(int arrangement);
+
+        /// <summary>
+        /// Custom-undo verification (SetApiUndoObject): creates a throwaway
+        /// part document, draws a small USER sketch first (prior work that
+        /// must survive), runs the real session create for the QR sketch,
+        /// then EditUndo2(1) → EditRedo2(1) → EditUndo2(1) and reports what
+        /// each step did. Returns one line:
+        /// "APIUNDO undoRemoved=&lt;bool&gt; userIntact=&lt;bool&gt;
+        ///  redoRestored=&lt;bool&gt; undoneAgain=&lt;bool&gt; ..." plus the
+        /// sketch names involved. The document is closed afterwards.
+        /// </summary>
+        string UndoRedoQrProbe();
+
+        /// <summary>
+        /// Sketch-block-instance spike (verification-only): each test number
+        /// creates a fresh throwaway part document on the SolidWorks UI
+        /// thread, runs one block-API experiment, closes the document, and
+        /// returns a one-line "BLK&lt;n&gt; ..." result. -1 is a ping (no
+        /// document touched).
+        ///   1 block-instance geometry as an extrude/cut profile
+        ///   2 driving-dimension rescale + direct instance Scale/Angle
+        ///   3 relations from host-sketch entities to block-instance geometry
+        ///   4 the MakeSketchBlockFromSelected / InsertSketchBlockInstance
+        ///     creation sequence
+        ///   5 AddDimension2 inside the definition travelling into the block
+        /// </summary>
+        string BlockSpikeProbe(int test);
+
+        /// <summary>
         /// Fingerprint of the session's current picture:
         /// "PIC &lt;w&gt;x&lt;h&gt; dark=&lt;n&gt; sha=&lt;hash&gt;" or "NO-PICTURE"
         /// when the current content is invalid. Lets the harness prove the

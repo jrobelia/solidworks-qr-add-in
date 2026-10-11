@@ -35,13 +35,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      changes the pending request and the picture — existing sketches
     ///      are never resized or regenerated.
     ///
-    ///   3. The single window. The command entry is <see cref="OpenOrFocusWindow"/>:
-    ///      focus the live window or create a fresh one through the injected
-    ///      view factory. <see cref="Release"/> (add-in disconnect) closes and
-    ///      drops it. The window itself is a thin view; all behaviour lives here.
-    ///      Because session state can also change WITHOUT the window driving —
-    ///      a probe-driven edit or create — every mutation notifies the open
-    ///      window (<see cref="IQrSketchWindow.SyncFromSession"/>) so the shown
+    ///   3. The single surface — the task-pane tab. The command entry is
+    ///      <see cref="OpenOrFocusWindow"/>: bring the live pane forward or
+    ///      attach one through the injected view factory. <see cref="Release"/>
+    ///      (add-in disconnect) hides and drops it. The view itself is thin;
+    ///      all behaviour lives here. Because session state can also change
+    ///      WITHOUT the view driving — a probe-driven edit or create — every
+    ///      mutation notifies the open view
+    ///      (<see cref="IQrSketchWindow.SyncFromSession"/>) so the shown
     ///      fields, picture and status can never diverge from the session.
     /// </summary>
     public sealed class QrSketchSession

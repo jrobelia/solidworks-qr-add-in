@@ -46,33 +46,52 @@ Run with SolidWorks **closed**.
       `HKCU\SOFTWARE\Classes\CLSID\{…}\InprocServer32\CodeBase` points at the
       installed DLL. **No other add-in's keys changed** — InvenTree
       `{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}` entries untouched.
-- [ ] Start SolidWorks → Tools → Add-Ins… — "SolidWorks QR Add-In" listed,
-      both boxes ticked → loads at startup. *(In the invisible COM-launched
-      instance the add-in did NOT auto-load despite AddInsStartup=1 —
-      consistent with earlier observations; interactive enumeration is
-      awaiting human verification. Runtime load/unload/reload via
-      `LoadAddIn`/`UnloadAddIn` is proven — see E.)*
-- [ ] Command present once: QR Sketch → **Create QR Sketch** (menu and/or
-      toolbar). *(Command group created live — `CONNECTED group=20906` —
-      but the visual menu entry needs human verification.)*
-- [ ] Untick the session box → add-in unloads; retick → reloads.
-      *(Proven programmatically instead: UnloadAddIn→LoadAddIn round-trip
+- [x] Start SolidWorks → Tools → Add-Ins… — "SolidWorks QR Add-In" listed,
+      both boxes ticked → loads at startup. *(Verified 2026-10-10 — the
+      Inno installer registered HKLM `AddIns`, the add-in appears in the
+      list and loads, and the task-pane surface works. Runtime
+      load/unload/reload via `LoadAddIn`/`UnloadAddIn` also proven — see E.)*
+- [x] Command present once: QR Sketch → **Create QR Sketch** (menu — no
+      custom toolbar; the QR UI is a docked **QR Sketch task-pane tab**).
+      *(Verified 2026-10-10 — engineer used the command and the pane.)*
+- [x] Untick the session box → add-in unloads; retick → reloads.
+      *(Proven programmatically: UnloadAddIn→LoadAddIn round-trip
       reconnects cleanly, single command group, no orphaned window.)*
-- [ ] Restart SolidWorks → add-in loads at startup again.
-      *(Awaiting human verification — startup auto-load never fired in the
-      COM-launched invisible instance.)*
+- [x] Restart SolidWorks → add-in loads at startup again.
+      *(Verified 2026-10-10 — engineer closed and reopened SolidWorks on the
+      installed build; the add-in remained loaded in place.)*
 - [x] Binary replacement: with the add-in loaded the DLL is locked —
       observed live: `robocopy` into the registered folder stalled while a
       spawned SolidWorks instance held the DLL mapped, completing after the
       process exited. Documented requirement confirmed.
 
-## D. Interactive workflow (user drives SolidWorks; window stays modeless)
+## D. Interactive workflow (user drives SolidWorks)
+
+> **Surface change:** the QR UI is now a docked **task-pane tab** ("QR
+> Sketch"), not a floating modeless window — the menu command brings the tab
+> forward (`ITaskpaneView.ShowView`) and the pane stays alive for the
+> session. References to "the window" below mean this pane; the probe
+> semantics (open/focus/close) are unchanged.
 
 Setup: open a fresh part document.
 
 Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 `(E)`; items that need eyes on an interactive session stay unchecked.
 
+- [x] **D0a** Pane text entry: click into the **Text or URL** field and type —
+      characters appear (`PaneElementHost` answers `WM_GETDLGCODE` with
+      `DLGC_WANTCHARS|WANTALLKEYS|WANTARROWS|WANTTAB` at both the host and
+      nested `HwndSource`; a forward-only `IMessageFilter` stays installed
+      for the pane's lifetime as a second path). Debug log
+      (`%LOCALAPPDATA%\SolidWorksQrAddIn\debug.log`) should show `pane
+      keyboard filter installed`, `pane host answered WM_GETDLGCODE`, and
+      `pane host saw WM_CHAR` after typing. *(Inherently interactive —
+      verified 2026-10-10 — engineer confirmed typing works.)*
+- [x] **D0b** Pane tab icon: the **QR Sketch** task-pane tab shows the QR
+      glyph icon — a dedicated `qr-tab-18.png` extracted under
+      `%LOCALAPPDATA%\SolidWorksQrAddIn\icons` (tab icons render ~16-18px;
+      the 32px menu strip was silently ignored). *(Awaiting human
+      verified 2026-10-10 — engineer confirmed.)*
 - [x] **D1** Select **Front Plane** → run the command → the modeless window
       opens: fields read **25** (mm) and **3** (%), no size presets. (E)
 - [ ] **D2** Enter content `SW-QR-MVP` → a black-on-white QR picture appears;
@@ -116,14 +135,19 @@ Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 - [x] **D15** Cancel: valid inputs then close the window → part unchanged. (E)
 - [x] **D16** Document switch: Create landed in the second document; the
       first's sketch count unchanged. (E)
-- [ ] **D17** Undo: **LIMITATION — verified live.** The named "Create QR
-      Sketch" undo step never registers on SW 2023 SP5:
-      `FinishRecordingUndoObject2` returns false in every arrangement tried
-      (recording opened before/after `InsertSketch`, finished inside/outside
-      sketch edit mode) — the AddToDB bulk insertion the contour set needs
-      bypasses the undo system. `EditUndo2` presses instead act on older
-      history; prior user work was never removed (asserted live). One-press
-      removal of the generated sketch does **not** hold.
+- [x] **D17** Undo: **partial pass — verified live (2026-10-10, SW 31.5.0).**
+      `FinishRecordingUndoObject2` stays refused for AddToDB insertion
+      (docs/UNDO-INVESTIGATION.md), so a custom undo object is registered on
+      the document instead: `IModelDocExtension.SetApiUndoObject` adds a
+      "Create QR Sketch" step whose handler deletes exactly the created
+      sketch — verified by feature ID, so a user sketch reusing the name
+      survives and an already-deleted sketch is a no-op; prior user work
+      never removed (asserted live). Caveats: the created sketch is left
+      open in edit mode, so the first Ctrl+Z re-enters the edit session
+      (same as any sketch) and the SECOND removes it; SolidWorks' EditRedo
+      never invokes API undo objects — a further undo press restores the
+      sketch instead (the handler re-registers itself and reinserts the
+      captured geometry on the captured support).
 - [x] **D18** Different content → different picture signature and different
       sketch; earlier sketches unchanged. (E)
 - [x] **D19** Close/reopen the window → fresh window keeps session inputs. (E)
@@ -197,7 +221,7 @@ invent a hidden QR-capacity limit.
 | Interactive workflow (D1–D20) | 17/20 proven via (E); D2/D11 visual checks + D20 dialog path awaiting human | §E run |
 | LiveProbe suite (E) | **PASS — ALL CHECKS PASSED, 185 checks, exit 0** | 2026-10-09, SW 31.5.0 invisible instance |
 | Performance (F) | PASS | create_ms 951 / 1930 / 8905 (short/medium/dense), exact outlines |
-| Named undo live | **LIMITATION** | `FinishRecordingUndoObject2` refused in every arrangement — AddToDB insertion bypasses undo; one-press removal does not hold; prior work never removed (asserted) |
+| Named undo live | **PASS w/ caveats** | `SetApiUndoObject` custom undo object verified: named "Create QR Sketch" step deletes exactly the created sketch (feature-ID checked), user work intact; second undo press removes (first re-enters edit mode), SW EditRedo unsupported — another undo reinserts instead |
 | Rotated plane / planar face | PASS | 4.8°-tilted datum (Plane5), Top Plane (90° datum), plate top face, vertical side face — convention verbatim, on-plane, no mirroring |
 | Boss/cut without corner-contact failure | PASS | Boss-Extrude + Cut-Extrude on plate QR and top-face QR succeeded |
 
