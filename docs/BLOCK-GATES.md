@@ -124,6 +124,77 @@ feature wins:
 Unit tests at the time of the run: **307 passed**
 (`dotnet test tests\SolidWorksQrAddIn.Tests`).
 
+### Experiment: def-internal dims + last binding probes (round 3)
+
+Harness: `tools/LiveProbe` mode `dimexp` (session-free invisible
+SolidWorks 2023 SP5, rev 31.5.0, fresh mm part — `doc.GetUnits()=[0,1,0,2,0]`).
+Fixture: inner square ±0.0005 m (the 1×1-doc-unit convention) + outer square
+±0.002 m, each corner-merged, H/V, equal-sided, BL corner `sgFIXED`; dims via
+`IAddDimension2` (both prompt toggles off). The first dim per square lands
+**driving** (`st=2`); every subsequent over-defining dim lands **driven**
+automatically (`st=1`) — the prompt-off path works inside a future block def
+exactly as in a host sketch. `ext.SelectAll()` → `MakeSketchBlockFromSelected`
+carried all five dims into `Block1` (`GetDisplayDimensionCount()=5`).
+
+**E1 — does a def-internal dim display the SCALED value on the instance? NO.**
+With `inst.DimensionDisplay = true`, every read-back of every def dim is
+identical at Scale 1, 25 and 40:
+
+| Dim (def-space) | S1 | S25 | S40 |
+|---|---|---|---|
+| D1 driving, inner side | 1.00 mm | 1.00 mm | 1.00 mm |
+| D2 driven, inner side | 1.00 mm | 1.00 mm | 1.00 mm |
+| D3 driving, outer side | 4.00 mm | 4.00 mm | 4.00 mm |
+| D4 driven, outer side | 4.00 mm | 4.00 mm | 4.00 mm |
+| D5 driven, inner-top↔outer-top gap | 1.50 mm | 1.50 mm | 1.50 mm |
+
+`IDimension.SystemValue`, `GetUserValueIn`, `GetSystemValue3`,
+`IDisplayDimension.GetText(0/3/4)`, `Scale2`, `GetOverrideValue` — all
+def-space, all unchanged. Decisive: `IDisplayData.GetTextAtIndex` (the
+rendered text) returns `"1.00mm"`/`"4.00mm"`/`"1.50mm"` (+ dual ".039in" etc.)
+at every scale — the dim's value string is baked in def space; the instance
+transform scales the glyph GEOMETRY, not the number. Neither the host sketch
+feature nor the def sketch feature enumerates the block's dims
+(`GetFirstDisplayDimension` chain) — the only reachable dim object is the
+def's own. Writing `dd.Scale2 = 25` is silently refused (read-back `1.0000`).
+
+**E2 — a def-internal dim driven by the def's own geometry: same answer.**
+The gap dim (def-internal, driven by two def entities' distance) is `1.50 mm`
+at Scale 1, 25, 40 — def-space, driven, never scaled.
+
+**E3 — `SketchUseEdge2`: the converted edge is a FROZEN def-space copy.**
+(a) coordinate pick on the instance-projected edge (y=4 mm at Scale 2)
+selects a block edge (`seltype=10`, reads def coords `(±2,2) mm`) and
+`SketchUseEdge2(false)` returns `True` but enumerates **zero** new host
+segments (`segs 0→0`). (b) `Select4` on the def-sketch's line object
+(`def.GetSketch().GetSketchSegments()` — `def.GetLines()`/`sketch.GetLines()`
+return `Double[]` coordinates, not objects) + `SketchUseEdge2` **does** create
+a host segment — at raw def coords `(2,2)→(−2,2) mm` — and it stays at those
+coords through `Scale=2→4→1`. A host line `sgCOLINEAR` onto it rides at
+y=2 mm, equally frozen. The copy is static geometry, not a live projection.
+
+**E4 — base-point anchors bind position, do not track.** With the instance
+displaced to (10,10) mm, `SKETCHPOINT` pick @(10,10) returns the base point
+(`seltype=11`, reports `(0,0)` def coords); pick @(0,0) returns **nothing** —
+the earlier (0,0) hits were the base point all along. `sgCONCENTRIC` on a
+host circle ↔ base point snaps the circle onto (10,10); a coincident on a
+square-centre midpoint ↔ base point slides the whole square onto it
+(BL 20,20 → 0,0). Re-dragging the instance to (20,10) leaves both at (10,10)
+even after `EditRebuild3` + sketch re-entry — **no live drag tracking** — but
+a `Scale` write re-solves and re-snaps them to the base point's current
+position (centre/BL jump to (0,0)/(-10,-10) at `Scale=3` after restoring the
+position). Position-only re-anchoring on solve, never scale tracking.
+
+**Verdict for the fallback design:** there is no spec-compatible "live
+readout of Scale on the sketch". Def-internal dims render def-space values
+(the user sees `1.00mm` on a 25 mm instance); converted edges are frozen
+def-space copies; base-point anchors re-snap on solve but carry no scale
+information. The only surfaces that reflect Scale remain the block instance's
+own `Scale` PropertyManager field and the add-in pane's cell-size readout.
+The round-2 fallback stands: squares + dims drawn at the staged extents are a
+create-time footprint; tracking `Scale`/drag edits is not achievable through
+the current API surface.
+
 ---
 
 # Round 1 — earlier run (kept for history)
