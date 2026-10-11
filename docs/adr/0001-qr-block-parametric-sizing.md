@@ -1,6 +1,6 @@
 # ADR 0001 — QR pattern as a sketch block instance with unit-scale sizing
 
-**Status:** proposed (design converged with engineer, 2026-10-10;
+**Status:** accepted (design converged with engineer, 2026-10-10;
 live evidence in `docs/BLOCK-SPIKE.md`)
 
 ## Context
