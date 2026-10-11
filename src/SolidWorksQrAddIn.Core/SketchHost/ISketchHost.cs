@@ -178,10 +178,10 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// content is realized, so host-sketch geometry that constrains to it
         /// (the squares coincident to the realized content's outer edges) is
         /// always drawn last. The session emits the squares the spec names,
-        /// in the spec's order — today the driven square's construction edges
-        /// plus its driven dimension; the equation-linked keep-out square is
-        /// a later spec step. A null spec stages nothing. Throws
-        /// <see cref="SketchInsertionException"/> on failure.
+        /// in the spec's order — the driven square's construction edges plus
+        /// its driven dimension first, then the equation-linked keep-out
+        /// square (its dims reference the driven one). A null spec stages
+        /// nothing. Throws <see cref="SketchInsertionException"/> on failure.
         /// </summary>
         void AddConstructionLayout(
             IReadOnlyList<QrConstructionSquare> squares, QrDimensionSpec? dimensionSpec);

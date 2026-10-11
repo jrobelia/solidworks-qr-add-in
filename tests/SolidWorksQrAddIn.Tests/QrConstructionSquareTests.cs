@@ -56,8 +56,8 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
-            var square = Assert.Single(sketch.ConstructionSquares);
-            Assert.Equal(QrSquareRole.QrSquare, square.Role);
+            var square = Assert.Single(sketch.ConstructionSquares,
+                s => s.Role == QrSquareRole.QrSquare);
             Assert.True(square.IsConstruction);
             // Four edges at the grown QR extent — ±S/2 sketch-space metres.
             var edges = square.EffectiveEdges.ToList();
@@ -70,7 +70,7 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void The_keep_out_square_is_not_emitted_yet_only_the_driven_square_lands()
+        public void A_create_emits_both_construction_squares_the_spec_names()
         {
             var host = HostWithSelectedPlane();
 
@@ -78,12 +78,13 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             // The model carries both squares (generator-tested); the spec
-            // names the QR square as the driven one, and only it lands —
-            // the equation-linked keep-out square is the next ticket.
+            // names the QR square as the driven one and the keep-out as the
+            // equation-linked one — both land in the host sketch now.
             Assert.Equal(2, Expected.ConstructionSquares.Count);
             var sketch = host.Document!.Sketches.Single();
-            Assert.DoesNotContain(sketch.ConstructionSquares,
-                s => s.Role == QrSquareRole.KeepOutSquare);
+            Assert.Equal(2, sketch.ConstructionSquares.Count);
+            Assert.Equal(new[] { QrSquareRole.QrSquare, QrSquareRole.KeepOutSquare },
+                sketch.ConstructionSquares.Select(s => s.Role).OrderBy(r => r).ToArray());
         }
 
         [Fact]
@@ -93,7 +94,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
             var sketch = host.Document!.Sketches.Single();
             var instance = sketch.BlockInstances.Single();
-            var square = sketch.ConstructionSquares.Single();
+            var square = sketch.ConstructionSquares.Single(s => s.Role == QrSquareRole.QrSquare);
 
             // The coincident bindings hold the square's edges on the block's
             // outer edges — the bound target IS the created instance.
@@ -119,11 +120,10 @@ namespace SolidWorksQrAddIn.Tests
             var host = HostWithSelectedPlane();
             Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
             var sketch = host.Document!.Sketches.Single();
-            var square = sketch.ConstructionSquares.Single();
+            var square = sketch.ConstructionSquares.Single(s => s.Role == QrSquareRole.QrSquare);
             var instance = sketch.BlockInstances.Single();
 
-            var dim = Assert.Single(sketch.Dimensions);
-            Assert.True(dim.IsDriven);                  // a readout, never a driver
+            var dim = sketch.Dimensions.Single(d => d.IsDriven);
             Assert.Same(square, dim.Target);            // it measures the QR square
             Assert.Equal(SizeMm, dim.ValueDocUnits, 9); // live readout in doc units
 
@@ -142,7 +142,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(host.OverdefiningDimsPromptToSetState);
 
             Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
-            var dim = host.Document!.Sketches.Single().Dimensions.Single();
+            var dim = host.Document!.Sketches.Single().Dimensions.Single(d => d.IsDriven);
 
             // The dim was created while both prompts were suppressed …
             Assert.True(dim.PromptsSuppressedAtCreation);
@@ -253,10 +253,9 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(doc.RedoLastStep());
             Assert.Contains(qrSketch, doc.Sketches);
-            var square = Assert.Single(qrSketch.ConstructionSquares);
-            Assert.Equal(QrSquareRole.QrSquare, square.Role);
-            var dim = Assert.Single(qrSketch.Dimensions);
-            Assert.True(dim.IsDriven);
+            var square = Assert.Single(qrSketch.ConstructionSquares,
+                s => s.Role == QrSquareRole.QrSquare);
+            var dim = Assert.Single(qrSketch.Dimensions, d => d.IsDriven);
             Assert.Equal(SizeMm, dim.ValueDocUnits, 9);
         }
     }
