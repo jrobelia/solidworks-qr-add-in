@@ -125,6 +125,11 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 foreach (var edge in sketch.Edges)
                     insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
+                // The construction layout stages like the edges and commits
+                // with them — the session emits it after the realized
+                // contours so the squares can constrain to them.
+                insertion.AddConstructionLayout(
+                    sketch.ConstructionSquares, sketch.DimensionSpec);
                 insertion.KeepOpen();
                 // A committed creation earns its named undo step — custom
                 // undo objects (AddToDB bypasses native recording, so this
@@ -179,7 +184,9 @@ namespace SolidWorksQrAddIn.Core.Commands
                 host.RegisterSketchUndo(new SketchUndoRegistration(
                     SketchHostContract.CreationUndoName,
                     SafeSketchName(insertion),
-                    sketch.Edges.ToList()));
+                    sketch.Edges.ToList(),
+                    sketch.ConstructionSquares,
+                    sketch.DimensionSpec));
             }
             catch { /* the undo step is a nicety; the created sketch stands */ }
         }

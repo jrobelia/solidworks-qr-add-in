@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swpublished;
 
@@ -75,11 +76,14 @@ namespace SolidWorksQrAddIn.Host
     public sealed class QrSketchUndoObject : ISwUndoAPIHandler, SwUndoAPIHandler
     {
         private IModelDoc2? _doc;
+        private ISldWorks? _sw;           // the app — the redo's dim emission needs it
         private IFeature? _sketch;        // the live sketch feature; null while undone
         private int _sketchFeatureId;
         private string _undoName = "";
         private object? _support;         // IFeature (datum plane) or IEntity (face)
         private double[]? _edges;         // flat x1,y1,x2,y2, sketch-space metres
+        private IReadOnlyList<QrConstructionSquare>? _constructionSquares;
+        private QrDimensionSpec? _dimensionSpec;
         private IMathUtility? _math;      // block insertion points for the redo
         private bool _undone;
         private bool _released;
@@ -87,15 +91,19 @@ namespace SolidWorksQrAddIn.Host
         /// <summary>Native-only initialisation; never called across COM.</summary>
         internal void Initialize(
             IModelDoc2 doc, IFeature sketch, object? support,
-            string undoName, IReadOnlyList<SketchEdge> edges, IMathUtility? math)
+            SketchUndoRegistration registration, IMathUtility? math, ISldWorks? sw)
         {
             _doc = doc;
+            _sw = sw;
             _sketch = sketch;
-            _undoName = undoName;
+            _undoName = registration.UndoName;
             _math = math;
+            _constructionSquares = registration.ConstructionSquares;
+            _dimensionSpec = registration.DimensionSpec;
             try { _sketchFeatureId = sketch.GetID(); }
             catch { _sketchFeatureId = 0; }
             _support = support;
+            var edges = registration.Edges;
             var flat = new double[edges.Count * 4];
             for (var i = 0; i < edges.Count; i++)
             {
@@ -132,9 +140,12 @@ namespace SolidWorksQrAddIn.Host
             {
                 _released = true;
                 _doc = null;
+                _sw = null;
                 _sketch = null;
                 _support = null;
                 _edges = null;
+                _constructionSquares = null;
+                _dimensionSpec = null;
                 _math = null;
                 QrSketchUndoRegistry.Drop(this);
             }
@@ -248,7 +259,7 @@ namespace SolidWorksQrAddIn.Host
             try
             {
                 insertion = SolidWorksSketchHost.BeginOnSelectedSupport(
-                    doc, recordUndo: false, _math, capturedSupport: out _);
+                    doc, _sw, recordUndo: false, _math, capturedSupport: out _);
             }
             catch (Exception ex)
             {
@@ -260,6 +271,10 @@ namespace SolidWorksQrAddIn.Host
             {
                 for (var i = 0; i + 3 < edges.Length; i += 4)
                     insertion.AddLine(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+                // Re-stage the construction layout too — the redo rebuilds
+                // the whole sketch: square and dimension included.
+                if (_constructionSquares != null && _dimensionSpec != null)
+                    insertion.AddConstructionLayout(_constructionSquares, _dimensionSpec);
                 insertion.KeepOpen();
                 _sketch = insertion.Feature;
                 try { _sketchFeatureId = _sketch.GetID(); }

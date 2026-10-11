@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 
 namespace SolidWorksQrAddIn.Tests.Fakes
@@ -49,13 +50,152 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public List<FakeBlockInstance> BlockInstances { get; } = new List<FakeBlockInstance>();
 
         /// <summary>
+        /// Construction squares drawn in this sketch — the QR square lives
+        /// here, bound to the block instance by coincident relations. Never
+        /// part of <see cref="Segments"/> and never inside a block.
+        /// </summary>
+        public List<FakeConstructionSquare> ConstructionSquares { get; } =
+            new List<FakeConstructionSquare>();
+
+        /// <summary>Display dimensions placed in this sketch (the QR square's driven readout).</summary>
+        public List<FakeDisplayDimension> Dimensions { get; } = new List<FakeDisplayDimension>();
+
+        /// <summary>
         /// The geometry the sketch actually shows: raw drawn segments plus
         /// every block instance's effective (scale/angle/position-resolved)
         /// edges — the world-state a test should assert on when it asks
-        /// "what did the create leave in the sketch".
+        /// "what did the create leave in the sketch". Construction geometry
+        /// (squares) is deliberately NOT part of this enumeration — it is
+        /// reference geometry, asserted separately.
         /// </summary>
         public IEnumerable<FakeLine> EffectiveSegments =>
             Segments.Concat(BlockInstances.SelectMany(i => i.EffectiveEdges));
+    }
+
+    /// <summary>
+    /// A construction square in a sketch — the in-memory stand-in for the
+    /// host-sketch construction geometry the QR square emits as. Its edges
+    /// are coincident-bound to a block instance's outer edges
+    /// (<see cref="CoincidentBindings"/> relations), so a Scale edit on the
+    /// instance drags the square: <see cref="EffectiveEdges"/> is derived
+    /// from the bound instance's CURRENT effective extent, recomputed on
+    /// every read exactly like <see cref="FakeBlockInstance.EffectiveEdges"/>.
+    /// </summary>
+    public sealed class FakeConstructionSquare
+    {
+        public FakeConstructionSquare(QrSquareRole role, List<FakeLine> drawnEdges, FakeBlockInstance? bound)
+        {
+            Role = role;
+            DrawnEdges = drawnEdges;
+            BoundInstance = bound;
+        }
+
+        /// <summary>Which square of the QR layout this is (QR square, keep-out).</summary>
+        public QrSquareRole Role { get; }
+
+        /// <summary>The edges as drawn, in sketch-space metres.</summary>
+        public List<FakeLine> DrawnEdges { get; }
+
+        /// <summary>
+        /// The block instance the square's edges are coincident-bound to —
+        /// null when no instance exists to constrain to (degraded: the square
+        /// then stands at its drawn position and does not track).
+        /// </summary>
+        public FakeBlockInstance? BoundInstance { get; }
+
+        /// <summary>
+        /// How many coincident relations the emission applied between the
+        /// square's edges and the block's outer-edge points — the world-state
+        /// stand-in for the sketch's relation set.
+        /// </summary>
+        public int CoincidentBindings { get; set; }
+
+        /// <summary>Always true — squares emit as construction geometry.</summary>
+        public bool IsConstruction => true;
+
+        /// <summary>
+        /// The square's four edges as the sketch currently shows them: the
+        /// bound block instance's effective bounding box (recomputed live —
+        /// a Scale edit moves them) or, unbound, the drawn edges.
+        /// </summary>
+        public IEnumerable<FakeLine> EffectiveEdges
+        {
+            get
+            {
+                var bound = BoundInstance;
+                if (bound == null)
+                {
+                    foreach (var e in DrawnEdges) yield return e;
+                    yield break;
+                }
+                double minX = double.MaxValue, maxX = double.MinValue;
+                double minY = double.MaxValue, maxY = double.MinValue;
+                foreach (var e in bound.EffectiveEdges)
+                {
+                    minX = Math.Min(minX, Math.Min(e.X1, e.X2));
+                    maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
+                    minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
+                    maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
+                }
+                yield return new FakeLine(minX, minY, maxX, minY);
+                yield return new FakeLine(maxX, minY, maxX, maxY);
+                yield return new FakeLine(maxX, maxY, minX, maxY);
+                yield return new FakeLine(minX, maxY, minX, minY);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A DisplayDimension in a sketch — the in-memory stand-in for the
+    /// IDisplayDimension the driven readout lands as. Its value is MEASURED
+    /// from the square it targets, recomputed on every read: a Scale edit
+    /// drags the bound square and the driven dim reads the new size.
+    /// </summary>
+    public sealed class FakeDisplayDimension
+    {
+        private readonly FakeDocument _doc;
+
+        public FakeDisplayDimension(FakeConstructionSquare target, FakeDocument doc)
+        {
+            Target = target;
+            _doc = doc;
+        }
+
+        /// <summary>The construction square the dimension measures.</summary>
+        public FakeConstructionSquare Target { get; }
+
+        /// <summary>True for a driven (reference readout) dimension — it never drives.</summary>
+        public bool IsDriven { get; set; }
+
+        /// <summary>
+        /// Whether the two dimension-prompt user toggles were suppressed at
+        /// the moment the dimension was created — the world-state stand-in
+        /// for the guards the real adapter applies around IAddDimension2
+        /// (which hangs an invisible session when they are on).
+        /// </summary>
+        public bool PromptsSuppressedAtCreation { get; set; }
+
+        /// <summary>
+        /// The live readout in document units — the target square's side.
+        /// Recomputed on every read, so a bound square that tracks a Scale
+        /// edit shows the new size.
+        /// </summary>
+        public double ValueDocUnits
+        {
+            get
+            {
+                double minX = double.MaxValue, maxX = double.MinValue;
+                double minY = double.MaxValue, maxY = double.MinValue;
+                foreach (var e in Target.EffectiveEdges)
+                {
+                    minX = Math.Min(minX, Math.Min(e.X1, e.X2));
+                    maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
+                    minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
+                    maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
+                }
+                return Math.Max(maxX - minX, maxY - minY) / _doc.MetresPerLengthUnit;
+            }
+        }
     }
 
     /// <summary>
@@ -385,6 +525,42 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// </summary>
         public bool FailBlockInstance { get; set; }
 
+        /// <summary>
+        /// When true, the commit's construction-square draw stage fails —
+        /// the block instance is already in the sketch but the square could
+        /// not be drawn. Abort removes the whole sketch.
+        /// </summary>
+        public bool FailSquareDraw { get; set; }
+
+        /// <summary>
+        /// When true, the square's coincident-binding stage fails — the
+        /// square was drawn but could not be constrained to the block's
+        /// outer edges. Abort removes the whole sketch.
+        /// </summary>
+        public bool FailSquareConstraint { get; set; }
+
+        /// <summary>
+        /// When true, the dimension emission fails — IAddDimension2 returned
+        /// no dimension. Abort removes the whole sketch; the prompt toggles
+        /// must still be restored.
+        /// </summary>
+        public bool FailDimension { get; set; }
+
+        /// <summary>
+        /// Application-level user-preference toggle — the in-memory stand-in
+        /// for ISldWorks.SetUserPreferenceToggle(swInputDimValOnCreate). On by
+        /// default: the dangerous state the spike documented (IAddDimension2
+        /// hangs an invisible session when it is on).
+        /// </summary>
+        public bool InputDimValOnCreate { get; set; } = true;
+
+        /// <summary>
+        /// Application-level user-preference toggle — the stand-in for
+        /// swSketchOverdefiningDimsPromptToSetState. On by default; while on,
+        /// an over-defining dimension prompts instead of landing driven.
+        /// </summary>
+        public bool OverdefiningDimsPromptToSetState { get; set; } = true;
+
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
@@ -575,6 +751,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         private readonly FakeSketch _sketch;
         private readonly Dictionary<string, bool> _flagSnapshot;
         private readonly List<FakeLine> _buffered = new List<FakeLine>();
+        private readonly List<QrConstructionSquare> _stagedSquares =
+            new List<QrConstructionSquare>();
+        private QrDimensionSpec? _dimensionSpec;
         private bool _committed;
         private bool _aborted;
         private CleanupOutcome? _abortOutcome;
@@ -617,12 +796,32 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             _buffered.Add(new FakeLine(x1, y1, x2, y2));
         }
 
+        /// <summary>
+        /// Stages the model's construction layout — construction squares plus
+        /// the dimension plan — for commit-time emission. Like the buffered
+        /// contour edges nothing lands yet; <see cref="KeepOpen"/> emits the
+        /// staged layout AFTER the block instance exists, so the squares can
+        /// constrain to its outer edges (a select-all inside the block step
+        /// would swallow anything drawn earlier into the definition).
+        /// </summary>
+        public void AddConstructionLayout(
+            IReadOnlyList<QrConstructionSquare> squares, QrDimensionSpec? dimensionSpec)
+        {
+            if (_aborted || _committed)
+                throw new SketchInsertionException("The insertion session is already finished.");
+            if (squares != null)
+                _stagedSquares.AddRange(squares);
+            _dimensionSpec = dimensionSpec;
+        }
+
         public void KeepOpen()
         {
             if (_host.KeepOpenThrows)
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
             if (_buffered.Count > 0)
                 RealizeAsBlockInstance();
+            if (_dimensionSpec != null)
+                EmitConstructionLayout();
             _committed = true;
             // Live-verified on SW 2023 SP5: the AddToDB recording is refused
             // (FinishRecordingUndoObject2 returns false), so a committed
@@ -679,6 +878,73 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                 throw new SketchInsertionException(
                     "The block instance's Scale could not be applied.");
             instance.Scale = scaleDocUnits;
+        }
+
+        /// <summary>
+        /// The construction-layout emission the native adapter performs
+        /// inside the open sketch edit AFTER the block instance exists —
+        /// the model's staged squares + dimension spec become host-sketch
+        /// world state:
+        ///   1. draw the spec's driven square as construction geometry;
+        ///   2. coincident-bind each of its edges to the block instance's
+        ///      outer edges, so a Scale edit drags the square;
+        ///   3. add the driven DisplayDimension — created only while the two
+        ///      dimension-prompt toggles are suppressed (spike: the call
+        ///      hangs an invisible session otherwise), restored after.
+        /// The emission walks the spec's roles in order — today only the
+        /// driven square; the equation-linked keep-out square is the next
+        /// spec step.
+        /// </summary>
+        private void EmitConstructionLayout()
+        {
+            var spec = _dimensionSpec!;
+            var staged = _stagedSquares.FirstOrDefault(s => s.Role == spec.DrivenSquare);
+            if (staged == null)
+                throw new SketchInsertionException(
+                    "The dimension spec names a construction square that was never staged.");
+            var instance = _sketch.BlockInstances.LastOrDefault();
+
+            // 1. Draw — the square's edges land as construction geometry.
+            if (_host.FailSquareDraw)
+                throw new SketchInsertionException(
+                    "CreateLine returned no segment while drawing the construction square.");
+            var drawn = staged.Edges
+                .Select(e => new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y))
+                .ToList();
+            var square = new FakeConstructionSquare(staged.Role, drawn, instance);
+
+            // 2. Coincident bindings — each edge gets two relations to block
+            //    boundary points (a line pinned at two points tracks rigidly).
+            if (_host.FailSquareConstraint)
+                throw new SketchInsertionException(
+                    "The construction square's edge could not be constrained coincident " +
+                    "to the block's outer edges.");
+            square.CoincidentBindings = drawn.Count * 2;
+            _sketch.ConstructionSquares.Add(square);
+
+            // 3. The driven dimension — prompt toggles forced off around the
+            //    creation, restored exactly after (even on failure).
+            var prevInput = _host.InputDimValOnCreate;
+            var prevOverdef = _host.OverdefiningDimsPromptToSetState;
+            try
+            {
+                _host.InputDimValOnCreate = false;
+                _host.OverdefiningDimsPromptToSetState = false;
+                if (_host.FailDimension)
+                    throw new SketchInsertionException(
+                        "IAddDimension2 returned no dimension for the construction square.");
+                _sketch.Dimensions.Add(new FakeDisplayDimension(square, _doc)
+                {
+                    IsDriven = true,
+                    PromptsSuppressedAtCreation =
+                        !_host.InputDimValOnCreate && !_host.OverdefiningDimsPromptToSetState,
+                });
+            }
+            finally
+            {
+                _host.InputDimValOnCreate = prevInput;
+                _host.OverdefiningDimsPromptToSetState = prevOverdef;
+            }
         }
 
         /// <summary>The staged outline span (max of the x/y extents), metres.</summary>
