@@ -266,8 +266,34 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount);
 
-            return QrSketchResult.Ok(new QrSketch(regions, contours, info));
+            // ---------- construction squares + dimension spec ----------
+            // The squares live in the HOST sketch (ADR 0001) at real sketch
+            // size: the QR square bounds the grown QR-cell extent (S per
+            // side); the keep-out square IS the working-matrix boundary
+            // (M·p per side — ADR 0002, not "4 cells outside the QR square").
+            double qrHalf = sizeMm / 2000.0;
+            double keepOutHalf = m * u * mPerUnit / 2.0;
+            var squares = new List<QrConstructionSquare>(2)
+            {
+                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(qrHalf)),
+                new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(keepOutHalf)),
+            };
+            // keep-out side − QR-square side = M·p − (N + 2r′)·p = (8 − 2r′)·p.
+            double keepOutOffsetCells =
+                2.0 * (QrSketchInfo.QuietZoneCellsPerSide - (double)g / u);
+            var dimensionSpec = new QrDimensionSpec(keepOutOffsetCells);
+
+            return QrSketchResult.Ok(new QrSketch(
+                regions, contours, squares, dimensionSpec, info));
         }
+
+        private static SketchPoint2[] SquareVertices(double half) =>
+            // Centred on the origin like the contours; CCW from bottom-left.
+            new[]
+            {
+                new SketchPoint2(-half, -half), new SketchPoint2(+half, -half),
+                new SketchPoint2(+half, +half), new SketchPoint2(-half, +half),
+            };
 
         // ----- grid-space tree -----
 

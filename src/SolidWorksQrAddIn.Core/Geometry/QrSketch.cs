@@ -132,10 +132,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// </summary>
     public sealed class QrSketch
     {
-        public QrSketch(IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours, QrSketchInfo info)
+        public QrSketch(
+            IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
+            IReadOnlyList<QrConstructionSquare> constructionSquares,
+            QrDimensionSpec dimensionSpec, QrSketchInfo info)
         {
             Regions = regions;
             Contours = contours;
+            ConstructionSquares = constructionSquares;
+            DimensionSpec = dimensionSpec;
             Info = info;
         }
 
@@ -144,6 +149,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Every contour — region outlines, hole loops, island outlines — flat.</summary>
         public IReadOnlyList<QrContour> Contours { get; }
+
+        /// <summary>
+        /// The QR square and keep-out square, flagged construction geometry for
+        /// the host sketch (ADR 0001/0002) — bounds/clearance markers, never
+        /// cuttable profile and never part of <see cref="Contours"/>.
+        /// </summary>
+        public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
+
+        /// <summary>Which square carries the driven dim, which the equation-linked one, and the relation.</summary>
+        public QrDimensionSpec DimensionSpec { get; }
 
         public QrSketchInfo Info { get; }
 
