@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using SolidWorksQrAddIn.Core.Geometry;
 
 namespace SolidWorksQrAddIn.Core.Hosting
 {
@@ -138,6 +140,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
     ///    instance whose Scale reads the staged span in document units —
     ///    spec #10 — so nothing lands as raw segments until
     ///    <see cref="KeepOpen"/>).
+    ///  - <see cref="AddConstructionLayout"/> STAGES the construction squares
+    ///    + dimension plan the same way — realized at commit after the
+    ///    contour content so the squares can constrain to it.
     ///  - <see cref="KeepOpen"/> commits success: the staged geometry is
     ///    realized, the new sketch stays open in edit mode and is never
     ///    cleaned up.
@@ -164,6 +169,22 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// final size. Throws <see cref="SketchInsertionException"/> on failure.
         /// </summary>
         void AddLine(double x1, double y1, double x2, double y2);
+
+        /// <summary>
+        /// Stages the model's construction layout — the construction squares
+        /// plus the dimension plan that links them — for commit-time emission
+        /// into the host sketch. Like <see cref="AddLine"/> this only stages:
+        /// <see cref="KeepOpen"/> emits the layout AFTER the staged contour
+        /// content is realized, so host-sketch geometry that constrains to it
+        /// (the squares coincident to the realized content's outer edges) is
+        /// always drawn last. The session emits the squares the spec names,
+        /// in the spec's order — today the driven square's construction edges
+        /// plus its driven dimension; the equation-linked keep-out square is
+        /// a later spec step. A null spec stages nothing. Throws
+        /// <see cref="SketchInsertionException"/> on failure.
+        /// </summary>
+        void AddConstructionLayout(
+            IReadOnlyList<QrConstructionSquare> squares, QrDimensionSpec? dimensionSpec);
 
         void KeepOpen();
 
