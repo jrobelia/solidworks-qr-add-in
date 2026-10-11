@@ -52,7 +52,23 @@ namespace SolidWorksQrAddIn.Host
                 if (!selected)
                     return $"could not select sketch feature '{name}' for deletion";
                 if (!ext.DeleteSelection2(0))
-                    return $"DeleteSelection2 failed for '{name}'";
+                {
+                    // A sketch consumed by later features (e.g. an extrude
+                    // built from it) refuses the plain delete — the children
+                    // cannot outlive their profile, so the undo path deletes
+                    // them with it (the same subtree removal an interactive
+                    // "delete children? yes" performs).
+                    Diag.Log($"plain delete of '{name}' refused — retrying with children");
+                    doc.ClearSelection2(true);
+                    selected = ext.SelectByID2(
+                        name, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!selected ||
+                        !ext.DeleteSelection2(
+                            (int)(swDeleteSelectionOptions_e.swDelete_Children |
+                                  swDeleteSelectionOptions_e.swDelete_Absorbed)))
+                        return $"DeleteSelection2 failed for '{name}'";
+                }
                 return null;
             }
             catch (Exception ex)

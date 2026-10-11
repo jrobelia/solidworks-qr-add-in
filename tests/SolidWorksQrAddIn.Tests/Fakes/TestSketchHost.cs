@@ -794,14 +794,48 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     doc.Sketches.Remove(target);
                     if (ReferenceEquals(doc.ActiveSketch, target))
                         doc.ActiveSketch = null;
+                    // The native undo object's delete also removes the sketch's
+                    // equations — they dangle in the equation manager otherwise
+                    // and the next create's Add2(solve:true) is refused (live
+                    // gate evidence). An equation references the sketch when a
+                    // "@<sketchName>" dimension token appears in it.
+                    doc.Equations.RemoveAll(e => EquationMentionsSketch(e, registration.SketchName));
                 }
             });
             step.DoRedo = () =>
             {
                 if (target != null && !doc.Sketches.Contains(target))
+                {
                     doc.Sketches.Add(target);
+                    // The redo reinsertion re-emits the construction layout —
+                    // the equation-linked dims' equations land in the manager
+                    // again (native RecreateSketch re-runs the emission).
+                    foreach (var dim in target.Dimensions)
+                        if (dim.Equation != null && !doc.Equations.Contains(dim.Equation))
+                            doc.Equations.Add(dim.Equation);
+                }
             };
             doc.UndoSteps.Add(step);
+        }
+
+        /// <summary>
+        /// The fake stand-in for the native equation-name matcher: an
+        /// equation references a sketch when it contains a
+        /// "@&lt;sketchName&gt;@" or "@&lt;sketchName&gt;"" dimension token
+        /// (SolidWorks dim names are "D2@Sketch2@Part1.Part").
+        /// </summary>
+        private static bool EquationMentionsSketch(string equation, string sketchName)
+        {
+            var at = "@" + sketchName;
+            int idx = 0;
+            while ((idx = equation.IndexOf(at, idx, System.StringComparison.Ordinal)) >= 0)
+            {
+                int end = idx + at.Length;
+                if (end >= equation.Length || equation[end] == '@' || equation[end] == '"')
+                    return true;
+                idx = end;
+            }
+            return false;
         }
 
         public SketchHostState CaptureState()
