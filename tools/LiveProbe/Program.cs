@@ -101,6 +101,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "blockqr", StringComparison.OrdinalIgnoreCase))
                 return BlockQrMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "bindexp", StringComparison.OrdinalIgnoreCase))
+                return BindExpMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -2300,11 +2303,34 @@ namespace SolidWorksQrAddIn.LiveProbe
             Check(posOk, "the block instance accepts a drag (InstancePosition) edit");
             if (posOk)
             {
-                var c = SegsBboxCentre(SketchLineSpans(sketch));
+                // The API InstancePosition write does NOT re-solve the host
+                // sketch — the bound squares follow on the next rebuild
+                // (bindexp E21/E22: BL stayed put until EditRebuild3, then
+                // tracked exactly). An interactive drag rebuilds anyway, so
+                // the gate rebuilds before measuring. EditRebuild3 exits
+                // sketch edit; the committed sketch is readable without
+                // re-entry and edit mode is re-entered afterwards.
+                try { doc.EditRebuild3(); } catch { }
+                var committed = sketchFeat?.GetSpecificFeature2() as ISketch ?? sketch;
+                var c = SegsBboxCentre(SketchLineSpans(committed));
                 Check(Math.Abs(c.x - 0.005) < 5e-4 && Math.Abs(c.y + 0.003) < 5e-4,
                     "dragging the block carries both squares — keep-out stays centred",
                     $"centroid=({c.x * 1000:F3},{c.y * 1000:F3}) mm");
-                try { inst.InstancePosition = SpikePt(mu, 0.0, 0.0); } catch { }
+                var instC = committed?.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+                try { (instC ?? inst).InstancePosition = SpikePt(mu, 0.0, 0.0); } catch { }
+                try { doc.EditRebuild3(); } catch { }
+                // Re-enter edit mode + re-acquire live handles for the
+                // scale/undo gates below.
+                if (mgr.ActiveSketch == null)
+                {
+                    doc.ClearSelection2(true);
+                    ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    mgr.InsertSketch(true);
+                    sketch = mgr.ActiveSketch as ISketch ?? sketch;
+                    sketchFeat = sketch as IFeature ?? sketchFeat;
+                    inst = sketch?.IGetSketchBlockInstances(0) as ISketchBlockInstance ?? inst;
+                }
             }
 
             // ---------- Scale tracking: the spec-10 resize promise ----------
@@ -2576,8 +2602,136 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var f = Extrude(fm);
                 if (f != null) { route = "SKETCHREGION picks"; return f; }
             }
-            route = $"all-routes-failed(regions={regionPicks})";
+
+            // ---- round-2 routes ----
+            var diag = new List<string> { $"regions={regionPicks}" };
+
+            // Route 4: sketch-feature select → THIN-feature extrusion. Thin
+            // features accept profile selections the solid path refuses.
+            doc.ClearSelection2(true);
+            bool skSel = ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            if (skSel)
+            {
+                var f = ExtrudeThin(fm);
+                if (f != null) { route = "sketch-feature + FeatureExtrusionThin"; return f; }
+                diag.Add("thin=null");
+            }
+
+            // Route 5: legacy FeatureExtrusion (pre-T0 signature).
+            doc.ClearSelection2(true);
+            if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                IFeature? f = null;
+                try
+                {
+                    f = fm.FeatureExtrusion(true, false, false,
+                        (int)swEndConditions_e.swEndCondBlind, 0, 0.002, 0.0,
+                        false, false, false, false, 0.0, 0.0,
+                        false, false, false, false, true,
+                        true, true) as IFeature;
+                }
+                catch (Exception ex) { diag.Add($"legacy threw {ex.GetType().Name}"); }
+                if (f != null) { route = "sketch-feature + FeatureExtrusion(legacy)"; return f; }
+                diag.Add("legacy=null");
+            }
+
+            // Route 6: the oldest route — SimpleFeatureBossExtrude by name.
+            try
+            {
+                doc.ClearSelection2(true);
+                var f = fm.SimpleFeatureBossExtrude(sketchName, 0.002, true) as IFeature;
+                if (f != null) { route = "SimpleFeatureBossExtrude"; return f; }
+                diag.Add("simple=null");
+            }
+            catch (Exception ex) { diag.Add($"simple threw {ex.GetType().Name}"); }
+
+            // Route 7: contour-mark selection — EnableContourSelection +
+            // SKETCHCONTOUR picks with the EXTSKETCHSEGS mark (the
+            // pre-selection scheme features consume).
+            doc.ClearSelection2(true);
+            if (sm != null) sm.EnableContourSelection = true;
+            int contourPicks = 0;
+            foreach (var pt in MaterialPoints(ctx.Expected, 4))
+                try
+                {
+                    if (ext.SelectByID2("", "SKETCHCONTOUR", pt.x, pt.y, 0,
+                            true, (int)swSelectType_e.swSelEXTSKETCHSEGS, null,
+                            (int)swSelectOption_e.swSelectOptionDefault))
+                        contourPicks++;
+                }
+                catch { }
+            if (sm != null) sm.EnableContourSelection = false;
+            diag.Add($"contourPicks={contourPicks}");
+            if (contourPicks > 0)
+            {
+                var f = Extrude(fm);
+                if (f != null) { route = "SKETCHCONTOUR+EXTSKETCHSEGS marks"; return f; }
+            }
+
+            // Route 8: the ISketchRegion objects themselves — Select each.
+            int regionSel = 0;
+            if (sketch != null)
+            {
+                doc.ClearSelection2(true);
+                var regions = sketch.GetSketchRegions() as object[];
+                if (regions != null)
+                    foreach (var r in regions.Take(8))
+                        if (r is ISketchRegion region)
+                            try { if (region.Select(true, 0)) regionSel++; } catch { }
+                diag.Add($"regionSel={regionSel}/{regions?.Length ?? -1}");
+                if (regionSel > 0)
+                {
+                    var f = Extrude(fm);
+                    if (f != null) { route = "ISketchRegion.Select"; return f; }
+                }
+            }
+
+            // Route 9: FeatureCut4 on the sketch-feature selection — the
+            // same profile, cut semantics (needs a body; records outcome
+            // either way).
+            doc.ClearSelection2(true);
+            if (ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                IFeature? f = null;
+                try
+                {
+                    f = fm.FeatureCut4(true, false, false,
+                        (int)swEndConditions_e.swEndCondBlind, 0, 0.002, 0.002,
+                        false, false, false, false, 0.0, 0.0,
+                        false, false, false, false, false,
+                        true, true, false, false, false,
+                        (int)swStartConditions_e.swStartSketchPlane, 0.0, false, false)
+                        as IFeature;
+                }
+                catch (Exception ex) { diag.Add($"cut threw {ex.GetType().Name}"); }
+                if (f != null) { route = "sketch-feature + FeatureCut4"; return f; }
+                diag.Add("cut=null");
+            }
+
+            route = $"all-routes-failed({string.Join(",", diag)})";
             return null;
+        }
+
+        /// <summary>Thin-feature extrusion — accepts profile sets solid extrusion refuses.</summary>
+        private static IFeature? ExtrudeThin(IFeatureManager fm)
+        {
+            try
+            {
+                return fm.FeatureExtrusionThin(
+                    true, false, false, (int)swEndConditions_e.swEndCondBlind, 0,
+                    0.002, 0.0, false, false, false, false, 0.0, 0.0,
+                    false, false, false, false, true,
+                    0.0005, 0.0, 0.0, 0, 0, false, 0.0,
+                    true, true) as IFeature;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"#   FeatureExtrusionThin threw {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>Bbox centres of the largest expected material regions (interior points).</summary>
@@ -4017,6 +4171,1316 @@ namespace SolidWorksQrAddIn.LiveProbe
                 feat = feat.GetNextFeature() as IFeature;
             }
             return null;
+        }
+
+        // =====================================================================
+        // `bindexp` — host-geometry ↔ block binding experiment matrix.
+        // Ticket #19 round 2: the square-binding bug's root cause is that
+        // SelectByID2 SKETCHPOINT picks on a block boundary always return the
+        // instance's BASE POINT, and SketchAddConstraints against block edges
+        // (SKETCHSEGMENT picks) silently no-op. This mode exhaustively tries
+        // every remaining route for binding host sketch geometry to
+        // block-internal/extent geometry before a spec-level fallback is
+        // considered: the AddRelation API on picked/proxy/def entity objects,
+        // other relation types, marked/programmatic selection, the
+        // EditSketchBlock context, and dimensions to the base point/edges.
+        // =====================================================================
+
+        private sealed class BindExp
+        {
+            public IModelDoc2 Doc = null!;
+            public IModelDocExtension Ext = null!;
+            public ISketchManager Mgr = null!;
+            public IMathUtility Mu = null!;
+            public ISelectionMgr Sel = null!;
+            public ISketch Sketch = null!;
+            public ISketchRelationManager? RelMgr;
+            public ISketchBlockInstance? Inst;
+            public double EdgeY = 0.010;          // the block's top extent at scale 1
+            public List<ISketchSegment> Litter = new List<ISketchSegment>();
+            /// <summary>Block-edge proxy objects picked before any host geometry exists
+            /// (bottom, right, top, left) — the product's binding targets.</summary>
+            public object?[] Proxies = new object?[4];
+
+            /// <summary>Selects a picked proxy/other object via its own Select4 route.</summary>
+            public bool SelectObj(object? obj, bool append)
+            {
+                try
+                {
+                    if (obj is ISketchSegment seg) return seg.Select4(append, null);
+                    if (obj is ISketchPoint pt) return pt.Select4(append, null);
+                    if (obj is IEntity ent) return ent.Select4(append, null);
+                }
+                catch { }
+                return false;
+            }
+
+            /// <summary>Endpoint readout of a sketch line, mm.</summary>
+            public string Ends(object? seg)
+            {
+                if (seg is ISketchLine l)
+                {
+                    var a = l.GetStartPoint2() as ISketchPoint;
+                    var b = l.GetEndPoint2() as ISketchPoint;
+                    if (a != null && b != null)
+                        return $"({a.X * 1000:F2},{a.Y * 1000:F2})->({b.X * 1000:F2},{b.Y * 1000:F2})";
+                }
+                return seg?.GetType().Name ?? "null";
+            }
+
+            /// <summary>A fresh horizontal host line at the given y; littered for cleanup.</summary>
+            public ISketchSegment? NewHostLine(double y, double x0 = -0.005, double x1 = 0.005)
+            {
+                var s = Mgr.CreateLine(x0, y, 0, x1, y, 0) as ISketchSegment;
+                if (s != null) Litter.Add(s);
+                return s;
+            }
+
+            /// <summary>First endpoint handle of a host line (a free ISketchPoint).</summary>
+            public ISketchPoint? StartPt(object? seg) =>
+                (seg as ISketchLine)?.GetStartPoint2() as ISketchPoint;
+
+            /// <summary>Picks at sketch coords; returns the selected object (or null).</summary>
+            public object? Pick(string type, double x, double y, out int selType, out bool ok)
+            {
+                Doc.ClearSelection2(true);
+                ok = false;
+                selType = -1;
+                try
+                {
+                    ok = Ext.SelectByID2("", type, x, y, 0, false, 0, null,
+                        (int)swSelectOption_e.swSelectOptionDefault);
+                    if (!ok) return null;
+                    try { selType = Sel.GetSelectedObjectType3(1, -1); } catch { }
+                    return Sel.GetSelectedObject6(1, -1);
+                }
+                catch { return null; }
+            }
+
+            /// <summary>
+            /// Scale-tracking probe: reads `measure` at Scale=1, sets Scale=2,
+            /// reads again, restores. Returns "appliedVal→scaledVal" so the
+            /// caller can see whether the bound entity followed the block.
+            /// </summary>
+            public string Track(Func<double> measure)
+            {
+                if (Inst == null) return "no-inst";
+                double at1, at2;
+                try { at1 = measure(); } catch (Exception ex) { return "m1EX:" + ex.GetType().Name; }
+                try { Inst.Scale = 2.0; } catch (Exception ex) { return "scaleEX:" + ex.GetType().Name; }
+                try { at2 = measure(); }
+                catch (Exception ex) { at2 = double.NaN; Console.WriteLine($"#   track m2 threw {ex.GetType().Name}"); }
+                try { Inst.Scale = 1.0; } catch { }
+                bool tracked = !double.IsNaN(at2) && Math.Abs(at2 - at1 * 2.0) < 5e-4;
+                return $"m={at1 * 1000:F2}→{at2 * 1000:F2} tracked={tracked}";
+            }
+        }
+
+        private static int BindExpMain(string[] args)
+        {
+            string progId = args.Length > 0 ? args[0] : "SldWorks.Application.31";
+            string only = args.Length > 1 ? args[1] : "";
+            bool dense = args.Any(a => string.Equals(a, "dense", StringComparison.OrdinalIgnoreCase));
+            Console.WriteLine("# host↔block BINDING experiment matrix (ticket #19 round 2)");
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+                // Dimension experiments need both prompt toggles off (hang trap).
+                try { sw.SetUserPreferenceToggle(
+                    (int)swUserPreferenceToggle_e.swInputDimValOnCreate, false); } catch { }
+                try { sw.SetUserPreferenceToggle(
+                    (int)swUserPreferenceToggle_e.swSketchOverdefiningDimsPromptToSetState, false); } catch { }
+
+                string template = sw.GetUserPreferenceStringValue(
+                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                if (doc == null) { Console.WriteLine("# FATAL: no part doc"); return 1; }
+                try { BindExpRun(sw, doc, only, dense); }
+                catch (Exception ex) { Console.WriteLine($"# FATAL body: {ex.GetType().Name}: {ex.Message}"); }
+                finally { try { sw.CloseDoc(doc.GetTitle()); } catch { } }
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        private static void BindExpRun(ISldWorks sw, IModelDoc2 doc, string only, bool dense = false)
+        {
+            var c = new BindExp
+            {
+                Doc = doc,
+                Ext = (IModelDocExtension)doc.Extension,
+                Mgr = (ISketchManager)doc.SketchManager,
+                Mu = (IMathUtility)sw.IGetMathUtility(),
+            };
+            c.Sel = doc.ISelectionManager as ISelectionMgr
+                ?? throw new InvalidOperationException("no selection manager");
+
+            bool Wants(string id) => only.Length == 0 || id.StartsWith(only);
+            void Exp(string id, string name, Action body)
+            {
+                if (!Wants(id)) return;
+                try { body(); }
+                catch (Exception ex) { Console.WriteLine($"# EXP{id} {name}: THREW {ex.GetType().Name}: {ex.Message}"); }
+            }
+
+            // ---------- the test block: a ±10 mm square, base point at centre ----------
+            if (!OpenFrontSketch(doc, c.Ext, c.Mgr)) { Console.WriteLine("# no sketch"); return; }
+            bool prevInf = c.Mgr.AutoInference;
+            try
+            {
+                c.Mgr.AutoInference = false;
+                c.Mgr.CreateLine(-0.010, -0.010, 0, 0.010, -0.010, 0);
+                c.Mgr.CreateLine(0.010, -0.010, 0, 0.010, 0.010, 0);
+                c.Mgr.CreateLine(0.010, 0.010, 0, -0.010, 0.010, 0);
+                c.Mgr.CreateLine(-0.010, 0.010, 0, -0.010, -0.010, 0);
+                if (dense)
+                {
+                    // A dense interior — the QR block's failure mode: 200+
+                    // interior segments make coordinate picks land arbitrary
+                    // def edges instead of the boundary (production finding).
+                    var rnd = new Random(42);
+                    for (int i = 0; i < 160; i++)
+                    {
+                        double x = -0.009 + rnd.NextDouble() * 0.018;
+                        double y = -0.009 + rnd.NextDouble() * 0.018;
+                        bool h = rnd.Next(2) == 0;
+                        c.Mgr.CreateLine(x, y, 0,
+                            h ? x + 0.002 : x, h ? y : y + 0.002, 0);
+                    }
+                    Console.WriteLine("#   dense fixture: +160 interior segs in block");
+                }
+            }
+            finally { c.Mgr.AutoInference = prevInf; }
+            doc.ClearSelection2(true);
+            c.Ext.SelectAll();
+            var def = c.Mgr.MakeSketchBlockFromSelected(SpikePt(c.Mu, 0, 0)) as ISketchBlockDefinition;
+            c.Sketch = c.Mgr.ActiveSketch as ISketch
+                ?? throw new InvalidOperationException("no active sketch");
+            if (def == null || c.Sketch.GetSketchBlockInstanceCount() != 1)
+            {
+                Console.WriteLine("# block fixture failed — aborting matrix");
+                return;
+            }
+            c.Inst = c.Sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+            try { c.RelMgr = c.Sketch.RelationManager as ISketchRelationManager; } catch { }
+            Console.WriteLine($"# fixture: block ±10 mm, base pt at centre; " +
+                $"inst={(c.Inst == null ? "null" : c.Inst.Name)} relMgr={(c.RelMgr == null ? "null" : "ok")}");
+
+            // Pre-pick the four extent-line edge proxies BEFORE any host
+            // geometry exists — the product does exactly this so the pick can
+            // never land on the construction square's own overlapping edge.
+            foreach (var (idx, px, py) in new[]
+                 {
+                     (0, 0.005, -0.010),   // bottom extent line
+                     (1, 0.010, 0.005),    // right
+                     (2, 0.005, 0.010),    // top
+                     (3, -0.010, 0.005),   // left
+                 })
+            {
+                c.Proxies[idx] = c.Pick("SKETCHSEGMENT", px, py, out int st, out bool ok);
+                Console.WriteLine($"#   proxy[{idx}] pick@({px * 1000:F0},{py * 1000:F0}) " +
+                    $"ok={ok} seltype={st} obj={DescribeCom(c.Proxies[idx])}");
+            }
+
+            // ---------- E1: what do boundary/extent picks actually return? ----------
+            Exp("E1", "pick census", () =>
+            {
+                var seg = c.Pick("SKETCHSEGMENT", 0.005, c.EdgeY, out int st, out bool ok);
+                Console.WriteLine($"# EXP1 seg pick ok={ok} seltype={st} obj={DescribeCom(seg)}");
+                var vtx = c.Pick("SKETCHPOINT", 0.010, c.EdgeY, out int st2, out bool ok2);
+                Console.WriteLine($"# EXP1 vertex pick ok={ok2} seltype={st2} obj={DescribeCom(vtx)}" +
+                    (vtx is ISketchPoint p ? $" at ({p.X * 1000:F2},{p.Y * 1000:F2})mm" : ""));
+                var mid = c.Pick("SKETCHPOINT", 0.005, c.EdgeY, out int st3, out bool ok3);
+                Console.WriteLine($"# EXP1 edge-mid SKETCHPOINT pick ok={ok3} seltype={st3} obj={DescribeCom(mid)}" +
+                    (mid is ISketchPoint p2 ? $" at ({p2.X * 1000:F2},{p2.Y * 1000:F2})mm" : ""));
+                var origin = c.Pick("SKETCHPOINT", 0.0, 0.0, out int st4, out bool ok4);
+                Console.WriteLine($"# EXP1 origin SKETCHPOINT pick ok={ok4} seltype={st4} obj={DescribeCom(origin)}" +
+                    (origin is ISketchPoint p3 ? $" at ({p3.X * 1000:F2},{p3.Y * 1000:F2})mm" : ""));
+            });
+
+            // ---------- E2: AddRelation API — host seg ↔ picked block edge ----------
+            Exp("E2", "AddRelation COLINEAR seg+blockEdge", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.005, c.EdgeY, out _, out bool ok);
+                var host = c.NewHostLine(0.014);
+                if (!ok || edgeObj == null || host == null || c.RelMgr == null)
+                { Console.WriteLine($"# EXP2 setup fail pick={ok} host={(host == null ? "null" : "ok")}"); return; }
+                Console.WriteLine($"# EXP2 host before {c.Ends(host)}");
+                var rel = c.RelMgr.AddRelation(
+                    new object[] { host, edgeObj }, (int)swConstraintType_e.swConstraintType_COLINEAR);
+                Console.WriteLine($"# EXP2 rel={(rel == null ? "null" : "ok")} host after {c.Ends(host)}" +
+                    $"  track[{c.Track(() => LineY(host))}]");
+            });
+
+            Exp("E3", "AddRelation COINCIDENT seg+blockEdge", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", -0.005, c.EdgeY, out _, out bool ok);
+                var host = c.NewHostLine(0.015);
+                if (!ok || edgeObj == null || host == null || c.RelMgr == null)
+                { Console.WriteLine("# EXP3 setup fail"); return; }
+                var rel = c.RelMgr.AddRelation(
+                    new object[] { host, edgeObj }, (int)swConstraintType_e.swConstraintType_COINCIDENT);
+                Console.WriteLine($"# EXP3 rel={(rel == null ? "null" : "ok")} host after {c.Ends(host)}" +
+                    $"  track[{c.Track(() => LineY(host))}]");
+            });
+
+            // ---------- E4/E5: point-on-edge coincident (the untested combo) ----------
+            Exp("E4", "AddRelation COINCIDENT point+blockEdge", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.003, c.EdgeY, out _, out bool ok);
+                var host = c.NewHostLine(0.016);
+                var pt = c.StartPt(host);
+                if (!ok || edgeObj == null || pt == null || c.RelMgr == null)
+                { Console.WriteLine("# EXP4 setup fail"); return; }
+                var rel = c.RelMgr.AddRelation(
+                    new object[] { pt, edgeObj }, (int)swConstraintType_e.swConstraintType_COINCIDENT);
+                Console.WriteLine($"# EXP4 rel={(rel == null ? "null" : "ok")} " +
+                    $"pt now ({pt.X * 1000:F2},{pt.Y * 1000:F2}) line {c.Ends(host)}" +
+                    $"  track[{c.Track(() => pt.Y)}]");
+            });
+
+            Exp("E5", "SketchAddConstraints point+blockEdge", () =>
+            {
+                var host = c.NewHostLine(0.017);
+                var pt = c.StartPt(host);
+                doc.ClearSelection2(true);
+                bool ptSel = false;
+                try { ptSel = pt != null && pt.Select4(false, null); } catch { }
+                bool segSel = c.Ext.SelectByID2("", "SKETCHSEGMENT", 0.006, c.EdgeY, 0,
+                    true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                Console.WriteLine($"# EXP5 pt={ptSel} seg={segSel}");
+                if (ptSel && segSel)
+                {
+                    doc.SketchAddConstraints("sgCOINCIDENT");
+                    Console.WriteLine($"# EXP5 pt now ({pt!.X * 1000:F2},{pt.Y * 1000:F2})" +
+                        $"  track[{c.Track(() => pt.Y)}]");
+                }
+            });
+
+            // ---------- E6: which relations does SW say are allowed? ----------
+            Exp("E6", "GetAllowedRelations census", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.004, c.EdgeY, out _, out _);
+                var baseObj = c.Pick("SKETCHPOINT", 0.0, 0.0, out _, out _);
+                var host = c.NewHostLine(0.018);
+                var host2 = c.NewHostLine(0.019);
+                var pt = c.StartPt(host);
+                if (c.RelMgr == null) { Console.WriteLine("# EXP6 no RelMgr"); return; }
+                DumpAllowed(c.RelMgr, "hostLine+blockEdge", new object?[] { host, edgeObj });
+                DumpAllowed(c.RelMgr, "hostPt+blockEdge", new object?[] { pt, edgeObj });
+                DumpAllowed(c.RelMgr, "hostLine+basePt", new object?[] { host, baseObj });
+                DumpAllowed(c.RelMgr, "hostPt+basePt", new object?[] { pt, baseObj });
+                DumpAllowed(c.RelMgr, "hostLine+hostLine", new object?[] { host, host2 });
+            });
+
+            // ---------- E7: other relation types on the picked block edge ----------
+            Exp("E7", "other relations on block edge", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.002, c.EdgeY, out _, out bool ok);
+                if (!ok || edgeObj == null || c.RelMgr == null) { Console.WriteLine("# EXP7 no pick"); return; }
+                // PARALLEL: an angled host line + the (horizontal) block edge.
+                var angled = c.Mgr.CreateLine(-0.004, 0.020, 0, 0.004, 0.024, 0) as ISketchSegment;
+                if (angled != null) c.Litter.Add(angled);
+                var relP = c.RelMgr.AddRelation(
+                    new object?[] { angled!, edgeObj },
+                    (int)swConstraintType_e.swConstraintType_PARALLEL);
+                Console.WriteLine($"# EXP7 PARALLEL rel={(relP == null ? "null" : "ok")} angled {c.Ends(angled)}" +
+                    $"  track[{c.Track(() => LineY(angled!))}]");
+                // ATMIDDLE: a host point to the block edge's midpoint.
+                var host = c.NewHostLine(0.021);
+                var pt = c.StartPt(host);
+                var relM = c.RelMgr.AddRelation(
+                    new object?[] { pt!, edgeObj },
+                    (int)swConstraintType_e.swConstraintType_ATMIDDLE);
+                Console.WriteLine($"# EXP7 ATMIDDLE rel={(relM == null ? "null" : "ok")} " +
+                    $"pt now ({pt!.X * 1000:F2},{pt.Y * 1000:F2})");
+                // PERPENDICULAR: a vertical host line + the block edge.
+                var vert = c.Mgr.CreateLine(0.022, 0.006, 0, 0.022, 0.016, 0) as ISketchSegment;
+                if (vert != null) c.Litter.Add(vert);
+                var relV = c.RelMgr.AddRelation(
+                    new object?[] { vert!, edgeObj },
+                    (int)swConstraintType_e.swConstraintType_PERPENDICULAR);
+                Console.WriteLine($"# EXP7 PERPENDICULAR rel={(relV == null ? "null" : "ok")} vert {c.Ends(vert)}");
+            });
+
+            // ---------- E8: definition-sketch entity handles ----------
+            Exp("E8", "def-sketch entity handles", () =>
+            {
+                var inst = c.Inst;
+                if (inst == null) { Console.WriteLine("# EXP8 no instance"); return; }
+                try
+                {
+                    var ownSketch = inst.GetSketch() as ISketch;
+                    var ownFeat = ownSketch as IFeature;
+                    Console.WriteLine($"# EXP8 inst.GetSketch -> '{ownFeat?.Name ?? "null"}' " +
+                        $"(host is '{(c.Sketch as IFeature)?.Name}')");
+                }
+                catch (Exception ex) { Console.WriteLine($"# EXP8 inst.GetSketch threw {ex.GetType().Name}"); }
+                var defI = inst.Definition as ISketchBlockDefinition;
+                if (defI == null) { Console.WriteLine("# EXP8 no def"); return; }
+                ISketch? defSketch = null;
+                try { defSketch = defI.GetSketch() as ISketch; } catch { }
+                Console.WriteLine($"# EXP8 def.GetSketch -> {(defSketch == null ? "null" : (defSketch as IFeature)?.Name ?? "unnamed")}");
+                if (defSketch != null)
+                {
+                    int pc1 = -1, pc2 = -1;
+                    try { pc1 = defSketch.GetSketchPointsCount(); } catch { }
+                    try { pc2 = defSketch.GetSketchPointsCount2(); } catch { }
+                    object? pts = null, pts2 = null, segs = null, lines = null;
+                    try { pts = defSketch.GetSketchPoints(); } catch { }
+                    try { pts2 = defSketch.GetSketchPoints2(); } catch { }
+                    try { segs = defSketch.GetSketchSegments(); } catch { }
+                    try { lines = defSketch.GetLines(); } catch { }
+                    int Count(object? o) => o is object[] a ? a.Length : o is System.Array aa ? aa.Length : -1;
+                    Console.WriteLine($"# EXP8 defSketch: ptsCount={pc1} pts2Count={pc2} " +
+                        $"pts={Count(pts)} pts2={Count(pts2)} segs={Count(segs)} lines={Count(lines)}");
+                }
+                object? defLines = null, defPts = null;
+                try { defLines = defI.GetLines(); } catch { }
+                try { defPts = defI.GetUserPoints(); } catch { }
+                var lineArr = defLines as object[];
+                var ptArr = defPts as object[];
+                Console.WriteLine($"# EXP8 def.GetLines -> {(lineArr == null ? "null" : lineArr.Length.ToString())} " +
+                    $"GetUserPoints -> {(ptArr == null ? "null" : ptArr.Length.ToString())}");
+                var defLine = lineArr?.FirstOrDefault(l => l is ISketchLine) as ISketchLine;
+                if (defLine != null)
+                {
+                    var da = defLine.GetStartPoint2() as ISketchPoint;
+                    var db = defLine.GetEndPoint2() as ISketchPoint;
+                    Console.WriteLine($"# EXP8 def line reads {c.Ends(defLine)} (def space)");
+                    // Route 8a: Select4 on the def entity + host line → SketchAddConstraints.
+                    var host = c.NewHostLine(0.022);
+                    doc.ClearSelection2(true);
+                    bool dsel = false, hsel = false;
+                    try { dsel = (defLine as ISketchSegment)?.Select4(false, null) ?? false; } catch { }
+                    try { hsel = host?.Select4(true, null) ?? false; } catch { }
+                    Console.WriteLine($"# EXP8a defLine.Select4={dsel} host.Select4={hsel}");
+                    if (dsel && hsel)
+                    {
+                        doc.SketchAddConstraints("sgCOLINEAR");
+                        Console.WriteLine($"# EXP8a host after {c.Ends(host)}");
+                    }
+                    // Route 8b: AddRelation on the def entity object.
+                    if (c.RelMgr != null)
+                    {
+                        var host2 = c.NewHostLine(0.023);
+                        var rel = c.RelMgr.AddRelation(
+                            new object?[] { host2!, defLine },
+                            (int)swConstraintType_e.swConstraintType_COLINEAR);
+                        Console.WriteLine($"# EXP8b rel={(rel == null ? "null" : "ok")} host {c.Ends(host2)}" +
+                            $"  track[{c.Track(() => LineY(host2!))}]");
+                    }
+                    // Route 8c: host point coincident to a def point.
+                    if (c.RelMgr != null && da != null)
+                    {
+                        var host3 = c.NewHostLine(0.024);
+                        var pt = c.StartPt(host3);
+                        var rel = c.RelMgr.AddRelation(
+                            new object?[] { pt!, da },
+                            (int)swConstraintType_e.swConstraintType_COINCIDENT);
+                        Console.WriteLine($"# EXP8c rel={(rel == null ? "null" : "ok")} " +
+                            $"pt now ({pt!.X * 1000:F2},{pt.Y * 1000:F2})");
+                    }
+                }
+            });
+
+            // ---------- E9: EditSketchBlock context ----------
+            Exp("E9", "EditSketchBlock context", () =>
+            {
+                var inst = c.Inst;
+                if (inst == null) { Console.WriteLine("# EXP9 no instance"); return; }
+                doc.ClearSelection2(true);
+                bool sel = false;
+                try { sel = inst.Select(true, null); } catch { }
+                Console.WriteLine($"# EXP9 inst.Select={sel}");
+                if (!sel) return;
+                try { c.Mgr.EditSketchBlock(); }
+                catch (Exception ex) { Console.WriteLine($"# EXP9 EditSketchBlock threw {ex.GetType().Name}"); return; }
+                var bs = c.Mgr.ActiveSketch as ISketch;
+                if (bs == null) Console.WriteLine("# EXP9 no active sketch inside block edit");
+                else
+                {
+                    int pc1 = -1, pc2 = -1;
+                    try { pc1 = bs.GetSketchPointsCount(); } catch { }
+                    try { pc2 = bs.GetSketchPointsCount2(); } catch { }
+                    object? pts = null, pts2 = null, segs = null, lines = null;
+                    try { pts = bs.GetSketchPoints(); } catch { }
+                    try { pts2 = bs.GetSketchPoints2(); } catch { }
+                    try { segs = bs.GetSketchSegments(); } catch { }
+                    try { lines = bs.GetLines(); } catch { }
+                    int Count(object? o) => o is object[] a ? a.Length : o is System.Array aa ? aa.Length : -1;
+                    Console.WriteLine($"# EXP9 inside: ptsCount={pc1} pts2Count={pc2} " +
+                        $"pts={Count(pts)} pts2={Count(pts2)} segs={Count(segs)} lines={Count(lines)}");
+                    // Can host-sketch entities be selected while inside block edit?
+                    doc.ClearSelection2(true);
+                    bool hostPick = c.Ext.SelectByID2("", "SKETCHSEGMENT", 0.005, 0.014, 0,
+                        false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                    Console.WriteLine($"# EXP9 host-entity pick inside block edit={hostPick}");
+                    // Can a relation land between two def points inside?
+                    if (pts is object[] pa && pa.Length >= 2 &&
+                        pa[0] is ISketchPoint dp1 && pa[1] is ISketchPoint dp2)
+                    {
+                        var rm = bs.RelationManager as ISketchRelationManager;
+                        var rel = rm?.AddRelation(
+                            new object?[] { dp1, dp2 },
+                            (int)swConstraintType_e.swConstraintType_COINCIDENT);
+                        Console.WriteLine($"# EXP9 def-internal AddRelation rel={(rel == null ? "null" : "ok")}");
+                    }
+                }
+                try { c.Mgr.EndEditSketchBlock(false); } catch { }
+            });
+
+            // ---------- E10: dimensions against block entities ----------
+            Exp("E10", "dims to block entities", () =>
+            {
+                // 10a: dim between the base point and a host line.
+                var host = c.NewHostLine(0.025);
+                doc.ClearSelection2(true);
+                bool bp = c.Ext.SelectByID2("", "SKETCHPOINT", 0.0, 0.0, 0,
+                    false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                bool hl = false;
+                try { hl = host != null && host.Select4(true, null); } catch { }
+                Console.WriteLine($"# EXP10a basePt={bp} hostLine={hl}");
+                IDisplayDimension? dd = null;
+                if (bp && hl)
+                    try { dd = doc.IAddDimension2(0.012, 0.030, 0) as IDisplayDimension; }
+                    catch (Exception ex) { Console.WriteLine($"# EXP10a dim threw {ex.GetType().Name}"); }
+                var dim = dd?.GetDimension2(0) as IDimension;
+                Console.WriteLine($"# EXP10a dim={(dim == null ? "null" : dim.FullName)} " +
+                    $"v={(dim == null ? -1 : dim.SystemValue * 1000):F2}mm " +
+                    $"driven={(dim == null ? -1 : dim.DrivenState)}");
+                if (dim != null)
+                {
+                    // Is it DRIVING (settable — would drag the line)?
+                    int r = -99;
+                    try { r = dim.SetSystemValue3(0.011, 0, null); } catch { }
+                    Console.WriteLine($"# EXP10a set11mm -> {r} line now {c.Ends(host)}");
+                    try { dim.SetSystemValue3(0.010, 0, null); } catch { }
+                }
+                // 10b: dim between a picked block edge and a host line.
+                var host2 = c.NewHostLine(0.027);
+                doc.ClearSelection2(true);
+                bool be = c.Ext.SelectByID2("", "SKETCHSEGMENT", 0.001, c.EdgeY, 0,
+                    false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                bool h2 = false;
+                try { h2 = host2 != null && host2.Select4(true, null); } catch { }
+                Console.WriteLine($"# EXP10b blockEdge={be} hostLine={h2}");
+                IDisplayDimension? dd2 = null;
+                if (be && h2)
+                    try { dd2 = doc.IAddDimension2(0.008, 0.030, 0) as IDisplayDimension; }
+                    catch (Exception ex) { Console.WriteLine($"# EXP10b dim threw {ex.GetType().Name}"); }
+                var dim2 = dd2?.GetDimension2(0) as IDimension;
+                Console.WriteLine($"# EXP10b dim={(dim2 == null ? "null" : dim2.FullName)} " +
+                    $"v={(dim2 == null ? -1 : dim2.SystemValue * 1000):F2}mm " +
+                    $"driven={(dim2 == null ? -1 : dim2.DrivenState)}");
+                if (dim2 != null)
+                {
+                    // Does the dim to block geometry TRACK a Scale edit?
+                    try { c.Inst!.Scale = 2.0; } catch { }
+                    double v2 = -1;
+                    try { v2 = dim2.SystemValue; } catch { }
+                    try { c.Inst!.Scale = 1.0; } catch { }
+                    Console.WriteLine($"# EXP10b dim after Scale=2: {v2 * 1000:F2}mm (0→tracked)");
+                }
+                // 10c: dim between the base point and a host corner point.
+                var host3 = c.NewHostLine(0.029);
+                var pt = c.StartPt(host3);
+                doc.ClearSelection2(true);
+                bool bp3 = c.Ext.SelectByID2("", "SKETCHPOINT", 0.0, 0.0, 0,
+                    false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                bool p3 = false;
+                try { p3 = pt != null && pt.Select4(true, null); } catch { }
+                IDisplayDimension? dd3 = null;
+                if (bp3 && p3)
+                    try { dd3 = doc.IAddDimension2(-0.020, 0.030, 0) as IDisplayDimension; }
+                    catch (Exception ex) { Console.WriteLine($"# EXP10c dim threw {ex.GetType().Name}"); }
+                var dim3 = dd3?.GetDimension2(0) as IDimension;
+                Console.WriteLine($"# EXP10c basePt+hostPt sel=({bp3},{p3}) " +
+                    $"dim={(dim3 == null ? "null" : dim3.FullName)} " +
+                    $"v={(dim3 == null ? -1 : dim3.SystemValue * 1000):F2}mm");
+            });
+
+            // ---------- E11: marked / programmatic selection routes ----------
+            Exp("E11", "AddSelectionListObject + SketchAddConstraints", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.007, c.EdgeY, out _, out bool ok);
+                var host = c.NewHostLine(0.031);
+                if (!ok || edgeObj == null || host == null) { Console.WriteLine("# EXP11 setup fail"); return; }
+                doc.ClearSelection2(true);
+                bool a1 = false, a2 = false;
+                try { a1 = c.Sel.AddSelectionListObject(host, null); } catch (Exception ex) { Console.WriteLine($"# EXP11 add1 {ex.GetType().Name}"); }
+                try { a2 = c.Sel.AddSelectionListObject(edgeObj, null); } catch (Exception ex) { Console.WriteLine($"# EXP11 add2 {ex.GetType().Name}"); }
+                int n = -1;
+                try { n = c.Sel.GetSelectedObjectCount(); } catch { }
+                Console.WriteLine($"# EXP11 add host={a1} add edge={a2} selCount={n}");
+                doc.SketchAddConstraints("sgCOLINEAR");
+                Console.WriteLine($"# EXP11 host after {c.Ends(host)}" +
+                    $"  track[{c.Track(() => LineY(host))}]");
+            });
+
+            Exp("E12", "Select4 on the picked proxy object", () =>
+            {
+                var edgeObj = c.Pick("SKETCHSEGMENT", 0.008, c.EdgeY, out _, out bool ok);
+                var host = c.NewHostLine(0.033);
+                if (!ok || edgeObj == null || host == null) { Console.WriteLine("# EXP12 setup fail"); return; }
+                doc.ClearSelection2(true);
+                bool es = false, hs = false;
+                if (edgeObj is ISketchSegment segObj)
+                    try { es = segObj.Select4(false, null); } catch { }
+                else if (edgeObj is IEntity entObj)
+                    try { es = entObj.Select4(false, null); } catch { }
+                try { hs = host.Select4(true, null); } catch { }
+                Console.WriteLine($"# EXP12 proxy.Select4={es} host.Select4={hs} proxyType={DescribeCom(edgeObj)}");
+                doc.SketchAddConstraints("sgCOLINEAR");
+                Console.WriteLine($"# EXP12 host after {c.Ends(host)}" +
+                    $"  track[{c.Track(() => LineY(host))}]");
+            });
+
+            // ---------- E13: block edit + host pick for a mid-segment vertex ----------
+            Exp("E13", "base-point coincident control (known-good route)", () =>
+            {
+                var baseObj = c.Pick("SKETCHPOINT", 0.0, 0.0, out _, out bool ok);
+                var host = c.NewHostLine(0.035);
+                var pt = c.StartPt(host);
+                if (!ok || baseObj == null || pt == null) { Console.WriteLine("# EXP13 setup fail"); return; }
+                if (c.RelMgr != null)
+                {
+                    var rel = c.RelMgr.AddRelation(
+                        new object?[] { pt, baseObj },
+                        (int)swConstraintType_e.swConstraintType_COINCIDENT);
+                    Console.WriteLine($"# EXP13 AddRelation rel={(rel == null ? "null" : "ok")} " +
+                        $"pt now ({pt.X * 1000:F2},{pt.Y * 1000:F2})" +
+                        $"  track[{c.Track(() => pt.Y)}]");
+                }
+                doc.ClearSelection2(true);
+                bool p1 = false, p2 = false;
+                try { p1 = pt.Select4(false, null); } catch { }
+                p2 = c.Ext.SelectByID2("", "SKETCHPOINT", 0.0, 0.0, 0,
+                    true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                if (p1 && p2) doc.SketchAddConstraints("sgCOINCIDENT");
+                Console.WriteLine($"# EXP13 sel-route pt=({p1},{p2}) pt now ({pt.X * 1000:F2},{pt.Y * 1000:F2})");
+            });
+
+            // ================= ROUND 2 — the product-route candidates =================
+
+            // Draws a construction square (min..max, axis-aligned) the product's
+            // way: 4 segments → corner merges → H/V + equal → rigid square.
+            // Returns the drawn lines; corners[k] gives BL,BR,TR,TL points.
+            List<ISketchSegment>? DrawSquare(
+                BindExp c, double min, double max, out ISketchPoint?[] corners)
+            {
+                corners = new ISketchPoint?[4];
+                var sq = new List<ISketchSegment>();
+                foreach (var (x1, y1, x2, y2) in new[]
+                     { (min, min, max, min), (max, min, max, max), (max, max, min, max), (min, max, min, min) })
+                {
+                    var l = c.Mgr.CreateLine(x1, y1, 0, x2, y2, 0) as ISketchSegment;
+                    if (l == null) return null;
+                    try { l.ConstructionGeometry = true; } catch { }
+                    sq.Add(l); c.Litter.Add(l);
+                }
+                // merge corners
+                for (int i = 0; i < 4; i++)
+                {
+                    var end = (sq[i] as ISketchLine)?.IGetEndPoint2() as ISketchPoint;
+                    var start = (sq[(i + 1) % 4] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                    doc.ClearSelection2(true);
+                    if ((end?.Select4(false, null) ?? false) && (start?.Select4(true, null) ?? false))
+                        doc.SketchAddConstraints("sgCOINCIDENT");
+                }
+                for (int i = 0; i < 4; i++)
+                {
+                    doc.ClearSelection2(true);
+                    if (sq[i].Select4(false, null))
+                        doc.SketchAddConstraints(i % 2 == 0 ? "sgHORIZONTAL" : "sgVERTICAL");
+                }
+                doc.ClearSelection2(true);
+                if (sq[0].Select4(false, null) && sq[1].Select4(true, null))
+                    doc.SketchAddConstraints("sgSAMELENGTH");
+                // corners: BL = bottom.start, BR = right.start, TR = top.start, TL = left.start
+                corners[0] = (sq[0] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                corners[1] = (sq[1] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                corners[2] = (sq[2] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                corners[3] = (sq[3] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                return sq;
+            }
+
+
+            // ---------- E14: stashed proxy + host point → sgCOINCIDENT ----------
+            Exp("E14", "pre-picked proxy + point coincident (product route)", () =>
+            {
+                var host = c.NewHostLine(0.040);
+                var pt = c.StartPt(host);
+                var proxy = c.Proxies[2];   // top extent line
+                if (pt == null || proxy == null) { Console.WriteLine("# EXP14 setup fail"); return; }
+                doc.ClearSelection2(true);
+                bool p1 = c.SelectObj(proxy, false);
+                bool p2 = pt.Select4(true, null);
+                Console.WriteLine($"# EXP14 proxy.Select4={p1} pt.Select4={p2}");
+                if (p1 && p2)
+                {
+                    doc.SketchAddConstraints("sgCOINCIDENT");
+                    Console.WriteLine($"# EXP14 pt now ({pt.X * 1000:F2},{pt.Y * 1000:F2})" +
+                        $"  track[{c.Track(() => pt.Y)}]");
+                }
+            });
+
+            // ---------- E15: proxy + host SEG → sgCOLINEAR at a clean scale ----------
+            Exp("E15", "pre-picked proxy + segment colinear", () =>
+            {
+                try { c.Inst!.Scale = 1.0; } catch { }   // guarantee scale 1
+                var host = c.NewHostLine(0.042);
+                var proxy = c.Proxies[0];   // bottom extent line
+                if (host == null || proxy == null) { Console.WriteLine("# EXP15 setup fail"); return; }
+                doc.ClearSelection2(true);
+                bool p1 = c.SelectObj(proxy, false);
+                bool p2 = host.Select4(true, null);
+                Console.WriteLine($"# EXP15 proxy={p1} host={p2}");
+                if (p1 && p2)
+                {
+                    doc.SketchAddConstraints("sgCOLINEAR");
+                    Console.WriteLine($"# EXP15 host after {c.Ends(host)}" +
+                        $"  track[{c.Track(() => LineY(host))}]");
+                }
+            });
+
+            // ---------- E16: drag tracking on a bound point ----------
+            Exp("E16", "drag tracking (InstancePosition)", () =>
+            {
+                try { c.Inst!.Scale = 1.0; } catch { }
+                var host = c.NewHostLine(0.044);
+                var pt = c.StartPt(host);
+                var proxy = c.Proxies[2];
+                if (pt == null || proxy == null) { Console.WriteLine("# EXP16 setup fail"); return; }
+                doc.ClearSelection2(true);
+                bool p1 = c.SelectObj(proxy, false);
+                bool p2 = pt.Select4(true, null);
+                if (!(p1 && p2)) { Console.WriteLine($"# EXP16 sel=({p1},{p2})"); return; }
+                doc.SketchAddConstraints("sgCOINCIDENT");
+                double before = pt.Y;
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.005, -0.003); } catch { }
+                double dx = pt.X - (-0.005), dy = pt.Y - before;
+                Console.WriteLine($"# EXP16 after drag pt=({pt.X * 1000:F2},{pt.Y * 1000:F2}) " +
+                    $"Δ=({dx * 1000:F2},{dy * 1000:F2})mm expected(+5,-3)");
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.0, 0.0); } catch { }
+            });
+
+            // ---------- E17: pick ambiguity on an overlapped extent line ----------
+            Exp("E17", "pick ambiguity: host edge ON the extent line", () =>
+            {
+                // Draw a host segment exactly ON the block's bottom extent line.
+                var on = c.Mgr.CreateLine(-0.004, -0.010, 0, 0.004, -0.010, 0) as ISketchSegment;
+                if (on != null) c.Litter.Add(on);
+                var picked = c.Pick("SKETCHSEGMENT", 0.0, -0.010, out int st, out bool ok);
+                Console.WriteLine($"# EXP17 pick@overlap ok={ok} seltype={st} " +
+                    $"obj={DescribeCom(picked)} ends={c.Ends(picked)} " +
+                    $"(host line ends {-0.004 * 1000:F0}..{0.004 * 1000:F0}mm at y=-10)");
+            });
+
+            // ---------- E18: def-sketch entity handles bound from the host ----------
+            Exp("E18", "def-sketch entity handles", () =>
+            {
+                var inst = c.Inst;
+                var defI = inst?.Definition as ISketchBlockDefinition;
+                var defSketch = defI?.GetSketch() as ISketch;
+                if (defSketch == null) { Console.WriteLine("# EXP18 no def sketch"); return; }
+                object? pts = null, lines = null;
+                try { pts = defSketch.GetSketchPoints(); } catch { }
+                try { lines = defSketch.GetLines(); } catch { }
+                var ptArr = pts as object[];
+                var lineArr = lines as object[];
+                Console.WriteLine($"# EXP18 defSketch pts={(ptArr == null ? "null" : ptArr.Length.ToString())} " +
+                    $"lines={(lineArr == null ? "null" : lineArr.Length.ToString())}");
+                var defPt = ptArr?.OfType<ISketchPoint>().FirstOrDefault();
+                var defLine = lineArr?.OfType<ISketchLine>().FirstOrDefault();
+                if (defPt != null)
+                    Console.WriteLine($"# EXP18 defPt at ({defPt.X * 1000:F2},{defPt.Y * 1000:F2})mm (def space)");
+                // host point coincident to a def vertex — via Select4 route.
+                var host = c.NewHostLine(0.046);
+                var hpt = c.StartPt(host);
+                doc.ClearSelection2(true);
+                bool s1 = false, s2 = false;
+                try { s1 = defPt?.Select4(false, null) ?? false; } catch { }
+                try { s2 = hpt?.Select4(true, null) ?? false; } catch { }
+                Console.WriteLine($"# EXP18 defPt.Select4={s1} hostPt.Select4={s2}");
+                if (s1 && s2)
+                {
+                    doc.SketchAddConstraints("sgCOINCIDENT");
+                    Console.WriteLine($"# EXP18 hostPt now ({hpt!.X * 1000:F2},{hpt.Y * 1000:F2})" +
+                        $"  track[{c.Track(() => hpt.Y)}]");
+                }
+                // host line colinear to a def line.
+                if (defLine != null)
+                {
+                    var host2 = c.NewHostLine(0.048);
+                    doc.ClearSelection2(true);
+                    bool d1 = c.SelectObj(defLine as ISketchSegment ?? (object)defLine, false);
+                    bool h1 = c.SelectObj(host2, true);
+                    Console.WriteLine($"# EXP18 defLine.Select4={d1} host={h1}");
+                    if (d1 && h1)
+                    {
+                        doc.SketchAddConstraints("sgCOLINEAR");
+                        Console.WriteLine($"# EXP18 host after {c.Ends(host2)}" +
+                            $"  track[{c.Track(() => LineY(host2!))}]");
+                    }
+                }
+            });
+
+            // ---------- E19: both-endpoint binds pin a whole host edge ----------
+            Exp("E19", "two point-on-edge binds pin one host edge", () =>
+            {
+                try { c.Inst!.Scale = 1.0; } catch { }
+                var host = c.NewHostLine(-0.050, -0.005, 0.005);   // vertical? no — horizontal at y=-50
+                if (host == null) { Console.WriteLine("# EXP19 draw fail"); return; }
+                var proxy = c.Proxies[0];
+                var a = c.StartPt(host);
+                var b = (host as ISketchLine)?.GetEndPoint2() as ISketchPoint;
+                if (proxy == null || a == null || b == null) { Console.WriteLine("# EXP19 setup fail"); return; }
+                foreach (var p in new[] { a, b })
+                {
+                    doc.ClearSelection2(true);
+                    bool q1 = c.SelectObj(proxy, false);
+                    bool q2 = p.Select4(true, null);
+                    if (q1 && q2) doc.SketchAddConstraints("sgCOINCIDENT");
+                    Console.WriteLine($"# EXP19 bind pt sel=({q1},{q2}) → ({p.X * 1000:F2},{p.Y * 1000:F2})");
+                }
+                Console.WriteLine($"# EXP19 host after {c.Ends(host)}" +
+                    $"  track[{c.Track(() => LineY(host))}]");
+            });
+
+            // ---------- E20: DRESS REHEARSAL — a fully bound host square ----------
+            Exp("E20", "bound host square tracks Scale + drag", () =>
+            {
+                try { c.Inst!.Scale = 1.0; } catch { }
+                // Draw a ±10 mm square — exactly on the block's extent lines,
+                // just like the product's staged QR square.
+                var sq = new List<ISketchLine>();
+                foreach (var (x1, y1, x2, y2) in new[]
+                     {
+                         (-0.010, -0.010, 0.010, -0.010),
+                         (0.010, -0.010, 0.010, 0.010),
+                         (0.010, 0.010, -0.010, 0.010),
+                         (-0.010, 0.010, -0.010, -0.010),
+                     })
+                {
+                    var l = c.Mgr.CreateLine(x1, y1, 0, x2, y2, 0) as ISketchLine;
+                    if (l is ISketchSegment seg) { c.Litter.Add(seg); sq.Add(l); }
+                }
+                if (sq.Count != 4) { Console.WriteLine("# EXP20 draw fail"); return; }
+                // Merge corners (the keep-out's exact routine).
+                for (int i = 0; i < 4; i++)
+                {
+                    var end = sq[i].IGetEndPoint2() as ISketchPoint;
+                    var start = sq[(i + 1) % 4].IGetStartPoint2() as ISketchPoint;
+                    doc.ClearSelection2(true);
+                    bool e1 = end?.Select4(false, null) ?? false;
+                    bool e2 = start?.Select4(true, null) ?? false;
+                    if (e1 && e2) doc.SketchAddConstraints("sgCOINCIDENT");
+                }
+                // H/V + equal → rigid square with (cx, cy, side) free.
+                foreach (var l in sq)
+                {
+                    doc.ClearSelection2(true);
+                    if ((l as ISketchSegment)?.Select4(false, null) == true)
+                        doc.SketchAddConstraints(sq.IndexOf(l) % 2 == 0 ? "sgHORIZONTAL" : "sgVERTICAL");
+                }
+                doc.ClearSelection2(true);
+                if ((sq[0] as ISketchSegment)?.Select4(false, null) == true &&
+                    (sq[1] as ISketchSegment)?.Select4(true, null) == true)
+                    doc.SketchAddConstraints("sgSAMELENGTH");
+                // The product's three binds: bottom-left corner → bottom edge;
+                // bottom-left corner → left edge; top-right corner → top edge.
+                // (sq[0]=bottom, sq[1]=right, sq[2]=top, sq[3]=left)
+                var binds = new[]
+                {
+                    (sq[0].IGetStartPoint2() as ISketchPoint, c.Proxies[0], "bottom"),
+                    (sq[3].IGetEndPoint2() as ISketchPoint, c.Proxies[3], "left"),
+                    (sq[2].IGetStartPoint2() as ISketchPoint, c.Proxies[2], "top"),
+                };
+                foreach (var (pt, proxy, tag) in binds)
+                {
+                    if (pt == null || proxy == null) { Console.WriteLine($"# EXP20 {tag}: no pt/proxy"); continue; }
+                    doc.ClearSelection2(true);
+                    bool q1 = c.SelectObj(proxy, false);
+                    bool q2 = pt.Select4(true, null);
+                    if (q1 && q2) doc.SketchAddConstraints("sgCOINCIDENT");
+                    Console.WriteLine($"# EXP20 bind {tag} sel=({q1},{q2}) " +
+                        $"pt=({pt.X * 1000:F2},{pt.Y * 1000:F2})");
+                }
+                double Half() => Math.Max(
+                    Math.Abs((sq[0].IGetStartPoint2() as ISketchPoint)!.Y),
+                    Math.Abs((sq[2].IGetStartPoint2() as ISketchPoint)!.Y));
+                // Scale tracking.
+                try { c.Inst!.Scale = 2.0; } catch { }
+                double h2 = Half();
+                try { c.Inst!.Scale = 1.0; } catch { }
+                double h1 = Half();
+                Console.WriteLine($"# EXP20 square half: 10→{h2 * 1000:F2}mm@S2, back→{h1 * 1000:F2}mm@S1 " +
+                    $"scaleTracked={Math.Abs(h2 - 0.020) < 5e-4 && Math.Abs(h1 - 0.010) < 5e-4}");
+                // Drag tracking.
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.004, 0.006); } catch { }
+                var p0 = sq[0].IGetStartPoint2() as ISketchPoint;
+                Console.WriteLine($"# EXP20 after drag(+4,+6) bottom-left corner=" +
+                    $"({p0!.X * 1000:F2},{p0.Y * 1000:F2})mm expected(-6,-4)");
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.0, 0.0); } catch { }
+            });
+
+            // ---------- E21: PRODUCT ROUTE CANDIDATE A — exact-coord square ----------
+            Exp("E21", "exact square + coord-pick corner binds (product candidate A)", () =>
+            {
+                try { c.Inst!.Scale = 1.0; c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+                // Square drawn EXACTLY on the block extents — the product's
+                // staged coords. Binds use EXP5's pattern (pt.Select4 then a
+                // SKETCHSEGMENT coordinate pick, appended) — the question is
+                // whether the coord pick lands on the block edge or the
+                // square's own coincident edge.
+                var sq = DrawSquare(c, -0.010, 0.010, out var corners);
+                if (sq == null) { Console.WriteLine("# EXP21 draw fail"); return; }
+                // Corner→extent-line binds: each corner to BOTH adjacent
+                // extent lines (8 attempts); pick coords are extent-line
+                // midpoints — ambiguous with the square's own edges.
+                var picks = new (double x, double y)[] { (0, -0.010), (0.010, 0), (0, 0.010), (-0.010, 0) };
+                var cornerSides = new[] { (0, 3), (0, 1), (2, 1), (2, 3) }; // BL,BR,TR,TL → (sideA,sideB)
+                int applied = 0;
+                for (int k = 0; k < 4; k++)
+                {
+                    var pt = corners[k];
+                    foreach (var side in new[] { cornerSides[k].Item1, cornerSides[k].Item2 })
+                    {
+                        doc.ClearSelection2(true);
+                        bool ps = false, es = false;
+                        try { ps = pt != null && pt.Select4(false, null); } catch { }
+                        es = c.Ext.SelectByID2("", "SKETCHSEGMENT", picks[side].x, picks[side].y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                        if (ps && es) { doc.SketchAddConstraints("sgCOINCIDENT"); applied++; }
+                        Console.WriteLine($"# EXP21 c{k}→side{side} sel=({ps},{es})");
+                    }
+                }
+                var bl = corners[0];
+                Console.WriteLine($"# EXP21 binds={applied} BL=({bl!.X * 1000:F2},{bl.Y * 1000:F2})");
+                try { c.Inst!.Scale = 2.0; } catch { }
+                Console.WriteLine($"# EXP21 @S2 BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-20,-20)");
+                try { c.Inst!.Scale = 1.0; } catch { }
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.004, 0.006); }
+                catch (Exception ex) { Console.WriteLine($"# EXP21 drag threw {ex.GetType().Name}"); }
+                // Did the instance actually move? Read the position back and
+                // probe where the block's bottom edge now sits.
+                try
+                {
+                    var pos = c.Inst!.InstancePosition as IMathPoint;
+                    var pd = pos?.ArrayData as double[];
+                    Console.WriteLine($"# EXP21 inst pos=({pd?[0] * 1000:F2},{pd?[1] * 1000:F2})mm");
+                }
+                catch { }
+                var probe = c.Pick("SKETCHSEGMENT", 0, -0.004, out _, out bool pk);
+                Console.WriteLine($"# EXP21 pick@(-?,-4) ok={pk} ends={c.Ends(probe)}");
+                Console.WriteLine($"# EXP21 dragged BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-6,-4)");
+                // A block move may not re-solve the host sketch the way a
+                // Scale write does — force a rebuild and re-read.
+                try { doc.EditRebuild3(); } catch { }
+                var back = ReopenBlockSketch(doc, c.Ext, c.Mgr);
+                if (back != null) c.Sketch = back;
+                // Re-acquire handles — sketch re-open may hand out new objects.
+                var bl2 = (sq[0] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                Console.WriteLine($"# EXP21 after rebuild BL=({bl2?.X * 1000:F2},{bl2?.Y * 1000:F2})" +
+                    $" (reopen={back != null})");
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+            });
+
+            // ---------- E22: PRODUCT ROUTE CANDIDATE B — inset square ----------
+            Exp("E22", "inset square + coord-pick corner binds (product candidate B)", () =>
+            {
+                try { c.Inst!.Scale = 1.0; c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+                var sq = DrawSquare(c, -0.008, 0.008, out var corners);
+                if (sq == null) { Console.WriteLine("# EXP22 draw fail"); return; }
+                var picks = new (double x, double y)[] { (0, -0.010), (0.010, 0), (0, 0.010), (-0.010, 0) };
+                var cornerSides = new[] { (0, 3), (0, 1), (2, 1), (2, 3) };
+                int applied = 0;
+                for (int k = 0; k < 4; k++)
+                {
+                    var pt = corners[k];
+                    foreach (var side in new[] { cornerSides[k].Item1, cornerSides[k].Item2 })
+                    {
+                        doc.ClearSelection2(true);
+                        bool ps = false, es = false;
+                        try { ps = pt != null && pt.Select4(false, null); } catch { }
+                        es = c.Ext.SelectByID2("", "SKETCHSEGMENT", picks[side].x, picks[side].y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                        if (ps && es) { doc.SketchAddConstraints("sgCOINCIDENT"); applied++; }
+                        Console.WriteLine($"# EXP22 c{k}→side{side} sel=({ps},{es})");
+                    }
+                }
+                var bl = corners[0];
+                var tr = corners[2];
+                Console.WriteLine($"# EXP22 binds={applied} BL=({bl!.X * 1000:F2},{bl.Y * 1000:F2}) " +
+                    $"TR=({tr!.X * 1000:F2},{tr.Y * 1000:F2}) expect(±10)");
+                try { c.Inst!.Scale = 2.0; } catch { }
+                Console.WriteLine($"# EXP22 @S2 BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) " +
+                    $"TR=({tr.X * 1000:F2},{tr.Y * 1000:F2}) expect(±20)");
+                try { c.Inst!.Scale = 1.0; } catch { }
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0.004, 0.006); } catch { }
+                Console.WriteLine($"# EXP22 dragged BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-6,-4)");
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+            });
+
+            // ---------- E23: WHAT does an overlapped pick actually return? ----------
+            Exp("E23", "overlapped-pick forensics (construction flag + identity)", () =>
+            {
+                try { c.Inst!.Scale = 1.0; c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+                var sq = DrawSquare(c, -0.010, 0.010, out _);
+                if (sq == null) { Console.WriteLine("# EXP23 draw fail"); return; }
+                for (int i = 0; i < 4; i++)
+                {
+                    var pickAt = new[] { (0.0, -0.010), (0.010, 0.0), (0.0, 0.010), (-0.010, 0.0) }[i];
+                    foreach (var append in new[] { false, true })
+                    {
+                        doc.ClearSelection2(true);
+                        if (append)
+                        {
+                            // mimic the product flow: a corner pt already selected
+                            var dummy = (sq[0] as ISketchLine)?.IGetStartPoint2() as ISketchPoint;
+                            try { dummy?.Select4(false, null); } catch { }
+                        }
+                        bool ok = c.Ext.SelectByID2("", "SKETCHSEGMENT", pickAt.Item1, pickAt.Item2, 0,
+                            append, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                        var obj = c.Sel.GetSelectedObject6(append ? 2 : 1, -1);
+                        bool cons = false, isOwn = false;
+                        int st = -1;
+                        try { st = c.Sel.GetSelectedObjectType3(append ? 2 : 1, -1); } catch { }
+                        if (obj is ISketchSegment seg)
+                        {
+                            try { cons = seg.ConstructionGeometry; } catch { }
+                            foreach (var own in sq)
+                                if (own.Equals(obj)) isOwn = true;
+                        }
+                        Console.WriteLine($"# EXP23 side{i} append={append} ok={ok} seltype={st} " +
+                            $"construction={cons} ownEdge={isOwn} ends={c.Ends(obj)}");
+                    }
+                }
+            });
+
+            // ---------- E24: swSelectOptionExtensive — pick THROUGH the square ----------
+            Exp("E24", "EXTENSIVE pick reaches the block edge under the square edge", () =>
+            {
+                try { c.Inst!.Scale = 1.0; c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+                var sq = DrawSquare(c, -0.010, 0.010, out var corners);
+                if (sq == null) { Console.WriteLine("# EXP24 draw fail"); return; }
+                var picks = new (double x, double y)[] { (0, -0.010), (0.010, 0), (0, 0.010), (-0.010, 0) };
+                var cornerSides = new[] { (0, 3), (0, 1), (2, 1), (2, 3) };
+                int applied = 0, ownPicks = 0;
+                for (int k = 0; k < 4; k++)
+                {
+                    var pt = corners[k];
+                    foreach (var side in new[] { cornerSides[k].Item1, cornerSides[k].Item2 })
+                    {
+                        doc.ClearSelection2(true);
+                        bool ps = false, es = false;
+                        object? obj = null;
+                        try { ps = pt != null && pt.Select4(false, null); } catch { }
+                        es = c.Ext.SelectByID2("", "SKETCHSEGMENT", picks[side].x, picks[side].y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionExtensive);
+                        if (es)
+                        {
+                            obj = c.Sel.GetSelectedObject6(2, -1);
+                            foreach (var own in sq) if (own.Equals(obj)) { ownPicks++; es = false; }
+                        }
+                        if (ps && es) { doc.SketchAddConstraints("sgCOINCIDENT"); applied++; }
+                        Console.WriteLine($"# EXP24 c{k}→side{side} sel=({ps},{es}) own={obj != null && sq.Any(s => s.Equals(obj))}");
+                    }
+                }
+                var bl = corners[0];
+                Console.WriteLine($"# EXP24 binds={applied} ownPicks={ownPicks} BL=({bl!.X * 1000:F2},{bl.Y * 1000:F2})");
+                try { c.Inst!.Scale = 2.0; } catch { }
+                Console.WriteLine($"# EXP24 @S2 BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-20,-20)");
+                try { c.Inst!.Scale = 1.0; } catch { }
+            });
+
+            // ---------- E25: binds against a PRE-SCALED instance (the product's state) ----------
+            Exp("E25", "bind corner pts to a scaled block's edges (scale-before-bind)", () =>
+            {
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); } catch { }
+                // The product's state at bind time: instance already scaled —
+                // def ±10mm × Scale 2 → effective ±20mm; square at ±20.
+                try { c.Inst!.Scale = 2.0; } catch { }
+                var sq = DrawSquare(c, -0.016, 0.016, out var corners);   // inset ±16 vs extents ±20
+                if (sq == null) { Console.WriteLine("# EXP25 draw fail"); return; }
+                var picks = new (double x, double y)[] { (0, -0.020), (0.020, 0), (0, 0.020), (-0.020, 0) };
+                var cornerSides = new[] { (0, 3), (0, 1), (2, 1), (2, 3) };
+                int applied = 0;
+                for (int k = 0; k < 4; k++)
+                {
+                    var pt = corners[k];
+                    foreach (var side in new[] { cornerSides[k].Item1, cornerSides[k].Item2 })
+                    {
+                        doc.ClearSelection2(true);
+                        bool ps = false, es = false;
+                        try { ps = pt != null && pt.Select4(false, null); } catch { }
+                        es = c.Ext.SelectByID2("", "SKETCHSEGMENT", picks[side].x, picks[side].y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                        if (ps && es) { doc.SketchAddConstraints("sgCOINCIDENT"); applied++; }
+                    }
+                }
+                var bl = corners[0];
+                Console.WriteLine($"# EXP25 binds={applied} BL=({bl!.X * 1000:F2},{bl.Y * 1000:F2}) expect(-20,-20)");
+                try { c.Inst!.Scale = 4.0; } catch { }
+                Console.WriteLine($"# EXP25 @S4 BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-40,-40)");
+                try { c.Inst!.Scale = 2.0; } catch { }
+                try { c.Inst!.Scale = 1.0; } catch { }
+            });
+
+            // ---------- E26: the product's flag state — AddToDB + no inference ----------
+            Exp("E26", "inset square + binds under AddToDB/AutoInference=false", () =>
+            {
+                try { c.Inst!.InstancePosition = SpikePt(c.Mu, 0, 0); c.Inst!.Scale = 1.0; } catch { }
+                bool prevDb = c.Mgr.AddToDB, prevInf = c.Mgr.AutoInference;
+                List<ISketchSegment>? sq;
+                ISketchPoint?[] corners;
+                try
+                {
+                    c.Mgr.AddToDB = true;
+                    c.Mgr.AutoInference = false;
+                    sq = DrawSquare(c, -0.008, 0.008, out corners);
+                }
+                finally { c.Mgr.AddToDB = prevDb; c.Mgr.AutoInference = prevInf; }
+                if (sq == null) { Console.WriteLine("# EXP26 draw fail"); return; }
+                var picks = new (double x, double y)[] { (0, -0.010), (0.010, 0), (0, 0.010), (-0.010, 0) };
+                var cornerSides = new[] { (0, 3), (0, 1), (2, 1), (2, 3) };
+                int applied = 0;
+                for (int k = 0; k < 4; k++)
+                {
+                    var pt = corners[k];
+                    foreach (var side in new[] { cornerSides[k].Item1, cornerSides[k].Item2 })
+                    {
+                        doc.ClearSelection2(true);
+                        bool ps = false, es = false;
+                        try { ps = pt != null && pt.Select4(false, null); } catch { }
+                        es = c.Ext.SelectByID2("", "SKETCHSEGMENT", picks[side].x, picks[side].y, 0,
+                            true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                        if (ps && es) { doc.SketchAddConstraints("sgCOINCIDENT"); applied++; }
+                    }
+                }
+                var bl = corners[0];
+                Console.WriteLine($"# EXP26 binds={applied} BL=({bl!.X * 1000:F2},{bl.Y * 1000:F2}) expect(-10,-10)");
+                try { c.Inst!.Scale = 2.0; } catch { }
+                Console.WriteLine($"# EXP26 @S2 BL=({bl.X * 1000:F2},{bl.Y * 1000:F2}) expect(-20,-20)");
+                try { c.Inst!.Scale = 1.0; } catch { }
+            });
+
+            // ---------- E30: does the host sketch enumerate block def points? ----------
+            Exp("E30", "sketch point census", () =>
+            {
+                object? ptsObj = null;
+                try { ptsObj = c.Sketch.GetSketchPoints(); } catch { }
+                var pts = ptsObj as object[];
+                Console.WriteLine($"# EXP30 GetSketchPoints -> {(pts == null ? "null" : pts.Length.ToString())}");
+                if (pts == null) return;
+                int shown = 0;
+                foreach (var o in pts)
+                {
+                    if (o is ISketchPoint sp && shown < 14)
+                    {
+                        try { Console.WriteLine($"#   skpt ({sp.X * 1000:F3},{sp.Y * 1000:F3})mm"); }
+                        catch { Console.WriteLine("#   skpt (unreadable)"); }
+                        shown++;
+                    }
+                }
+                // Try Select4 on every enumerated point — do any select?
+                int selOk = 0, selFail = 0;
+                foreach (var o in pts)
+                {
+                    doc.ClearSelection2(true);
+                    bool ok = c.SelectObj(o, false);
+                    if (ok) selOk++; else selFail++;
+                }
+                Console.WriteLine($"# EXP30 Select4 points: ok={selOk} fail={selFail}");
+            });
+
+            // ---------- E31: instance attached entities / instance sketch ----------
+            Exp("E31", "instance entity routes", () =>
+            {
+                var inst = c.Inst;
+                if (inst == null) { Console.WriteLine("# EXP31 no inst"); return; }
+                try
+                {
+                    object? ents = null, types = null;
+                    bool ok = inst.GetAttachedEntities(ref ents, ref types);
+                    var ea = ents as object[]; var ta = types as object[];
+                    Console.WriteLine($"# EXP31 GetAttachedEntities ok={ok} " +
+                        $"ents={(ea == null ? "null" : ea.Length.ToString())} " +
+                        $"types={(ta == null ? "null" : string.Join(",", ta))}");
+                    if (ea != null)
+                        foreach (var e in ea.Take(10))
+                            Console.WriteLine($"#   attached {DescribeCom(e)} {(e is ISketchLine l ? c.Ends(l) : "")}");
+                }
+                catch (Exception ex) { Console.WriteLine($"# EXP31 GetAttachedEntities threw {ex.GetType().Name}"); }
+            });
+
+            // ---------- E32: dense-block segment pick census ----------
+            Exp("E32", "dense pick census", () =>
+            {
+                foreach (var (px, py, tag) in new[]
+                    { (0.005, -0.010, "bottom"), (0.010, 0.005, "right"),
+                      (-0.005, 0.010, "top"), (-0.010, -0.005, "left") })
+                {
+                    var obj = c.Pick("SKETCHSEGMENT", px, py, out int st, out bool ok);
+                    string pos = obj is ISketchLine l ? c.Ends(l) : DescribeCom(obj);
+                    Console.WriteLine($"# EXP32 {tag} pick ok={ok} seltype={st} -> {pos}");
+                }
+                // def-space pick variant: same coords ÷ implicit scale (fixture is Scale=1 → identical)
+            });
+
+            // ---------- E33: def-sketch segment objects → Select4 in host context ----------
+            Exp("E33", "def seg object select", () =>
+            {
+                var def = c.Inst?.Definition as ISketchBlockDefinition;
+                var defSketch = def?.GetSketch() as ISketch;
+                if (defSketch == null) { Console.WriteLine("# EXP33 no def sketch"); return; }
+                object? segs = null;
+                try { segs = defSketch.GetSketchSegments(); } catch { }
+                var arr = segs as object[];
+                Console.WriteLine($"# EXP33 def segs={(arr == null ? "null" : arr.Length.ToString())}");
+                if (arr == null) return;
+                // Find the def segment that IS the bottom extent edge
+                // (horizontal, y = def min): pick candidates by endpoints.
+                ISketchLine? bottom = null; double minY = double.MaxValue;
+                foreach (var o in arr)
+                {
+                    if (o is ISketchLine l)
+                    {
+                        var a = l.GetStartPoint2() as ISketchPoint;
+                        var b = l.GetEndPoint2() as ISketchPoint;
+                        if (a == null || b == null) continue;
+                        if (Math.Abs(a.Y - b.Y) < 1e-9 && a.Y < minY) { minY = a.Y; bottom = l; }
+                    }
+                }
+                Console.WriteLine($"# EXP33 bottom extent def seg={(bottom == null ? "none" : c.Ends(bottom))}");
+                if (bottom == null) return;
+                // Does a def-segment object select in the HOST sketch context?
+                doc.ClearSelection2(true);
+                bool sel = false;
+                try { sel = (bottom as ISketchSegment)?.Select4(false, null) ?? false; } catch { }
+                int st = -1;
+                if (sel) try { st = c.Sel.GetSelectedObjectType3(1, -1); } catch { }
+                Console.WriteLine($"# EXP33 defSeg.Select4={sel} seltype={st}");
+                // And can a coincident bind a host corner to it?
+                var host = c.NewHostLine(0.030);
+                var pt = c.StartPt(host);
+                doc.ClearSelection2(true);
+                bool ps = false;
+                try { ps = pt != null && pt.Select4(false, null); } catch { }
+                bool bs = false;
+                try { bs = (bottom as ISketchSegment)?.Select4(true, null) ?? false; } catch { }
+                Console.WriteLine($"# EXP33 pt={ps} defSegAppend={bs}");
+                if (ps && bs)
+                {
+                    try { doc.SketchAddConstraints("sgCOINCIDENT"); } catch (Exception ex) { Console.WriteLine($"# EXP33 coincident threw {ex.GetType().Name}"); }
+                    Console.WriteLine($"# EXP33 host after {c.Ends(host)} (expect y~{minY * 1000:F1})");
+                }
+            });
+
+            // ---------- E34: does a pre-selected point corrupt the appended pick? ----------
+            Exp("E34", "append-mode pick census", () =>
+            {
+                var host = c.NewHostLine(0.030);
+                var pt = c.StartPt(host);
+                foreach (var (px, py, tag) in new[]
+                    { (0.005, -0.010, "bottom"), (0.010, 0.005, "right"),
+                      (-0.005, 0.010, "top"), (-0.010, -0.005, "left") })
+                {
+                    doc.ClearSelection2(true);
+                    bool ps = false;
+                    try { ps = pt != null && pt.Select4(false, null); } catch { }
+                    bool es = c.Ext.SelectByID2("", "SKETCHSEGMENT", px, py, 0,
+                        true, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                    object? obj = null; int st = -1;
+                    try { st = c.Sel.GetSelectedObjectType3(-1, -1); } catch { }
+                    try { obj = c.Sel.GetSelectedObject6(2, -1); } catch { }
+                    string pos = obj is ISketchLine l ? c.Ends(l) : DescribeCom(obj);
+                    Console.WriteLine($"# EXP34 {tag}: pt={ps} seg={es} seltype={st} -> {pos}");
+                }
+            });
+
+            // ---------- litter cleanup ----------
+            foreach (var s in c.Litter)
+            {
+                try
+                {
+                    doc.ClearSelection2(true);
+                    if (s.Select4(false, null))
+                        c.Ext.DeleteSelection2(0);
+                }
+                catch { }
+            }
+            doc.ClearSelection2(true);
+            try { c.Mgr.InsertSketch(false); } catch { }
+            Console.WriteLine("# bindexp done — litter removed, sketch closed");
+        }
+
+        /// <summary>The average |y| of a horizontal host line (its offset from the origin).</summary>
+        private static double LineY(ISketchSegment seg)
+        {
+            if (seg is ISketchLine l)
+            {
+                var a = l.GetStartPoint2() as ISketchPoint;
+                var b = l.GetEndPoint2() as ISketchPoint;
+                if (a != null && b != null) return (a.Y + b.Y) / 2.0;
+            }
+            return double.NaN;
+        }
+
+        /// <summary>A COM object's runtime identity for experiment logs.</summary>
+        private static string DescribeCom(object? o)
+        {
+            if (o == null) return "null";
+            string kinds = "";
+            if (o is ISketchPoint) kinds += "|SKETCHPOINT";
+            if (o is ISketchLine) kinds += "|SKETCHLINE";
+            if (o is ISketchSegment) kinds += "|SKETCHSEGMENT";
+            if (o is ISketchBlockInstance) kinds += "|BLOCKINST";
+            if (o is IEntity) kinds += "|ENTITY";
+            if (o is IFeature) kinds += "|FEATURE";
+            return $"{o.GetType().Name}{kinds}";
+        }
+
+        /// <summary>Logs the relation types SW allows between an entity pair.</summary>
+        private static void DumpAllowed(ISketchRelationManager rm, string tag, object?[] entities)
+        {
+            try
+            {
+                var raw = rm.GetAllowedRelations(entities!);
+                string vals;
+                if (raw is int[] ai) vals = string.Join(",", ai);
+                else if (raw is object[] ao) vals = string.Join(",", ao);
+                else if (raw is System.Array ar)
+                    vals = string.Join(",", ar.Cast<object>());
+                else vals = raw?.ToString() ?? "null";
+                Console.WriteLine($"# EXP6 {tag}: allowed=[{vals}]");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# EXP6 {tag}: threw {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         // ---------------- plumbing ----------------

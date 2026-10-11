@@ -1,5 +1,134 @@
 # Spec 10 — live block-instance gate results
 
+
+## Round 2 — 2026-10-11 (ticket #19, round 2)
+
+Harness: `tools/LiveProbe` modes `blockqr` + `undoapi` + `bindexp` against
+**SolidWorks 2023 SP5 (revision 31.5.0)**, spawned session-free (invisible,
+killed after the run). Same fixture as round 1: `SW-QR-MVP`, N=21, M=29,
+25 mm, pitch ≈ 1.18708 mm, keep-out ≈ 34.4255 mm.
+
+### Verdict: 55 gates — 49 PASS, 6 FAIL
+
+All six remaining fails are the **tracking** gates plus the named-undo step.
+Round-1's creation, undo-cleanup, and support regressions are fixed.
+
+| Fail | Evidence |
+|---|---|
+| drag carries both squares | centroid `(0,0)` after `InstancePosition` edit — squares do not follow |
+| `Scale` edit re-sizes squares | `Scale=40` accepted; halves stay `[12.500, 17.213]` |
+| driven dim re-measures + keep-out tracks | `D1=25.00`, `D2=34.43` unchanged after scale |
+| gap dims keep keep-out centred | `D3=D4=4.71` unchanged |
+| host geometry tracks block (coincident verified) | pick@12.5 and pick@20 both select — no corner bound |
+| named "Create QR Sketch" undo step | `FinishRecordingUndoObject2` refused in every arrangement (round-1 finding stands); the custom `SetApiUndoObject` step is what actually works — verified below |
+
+### Bug fixes verified live
+
+- **Bug 2 (dangling equations)** — `QrSketchUndoObject` now removes the
+  created sketch's equations before deleting the feature.
+  `undoapi` gate: `removed=True restored=True userIntact=True`,
+  equation count 0 after deletion. ALL PASSED.
+- **Bug 3 (redo/reinsert forms no block)** — `RealizeAsBlockInstance` now
+  selects each drawn contour segment by object (`Select4`, count-verified)
+  instead of `SelectAll`; the custom-undo restore path recreates the full
+  block (`restored=True` in `undoapi`).
+- **Bug 1 (binding to block base point)** — see the experiment matrix below:
+  every public route was tried; a correct bind is **impossible** with the
+  current API surface, so the QR square is now drawn at the exact staged
+  extents with **no** coincident binds (the round-1 "base-point coincident"
+  defect is gone — squares land at `halves=[12.500, 17.213]` exactly).
+- **Bug 4 (extrusion)** — 9 API routes were probed (see matrix);
+  `ISketchRegion.Select` extrudes both the block-bearing sketch and the
+  exploded raw lines. No product redesign needed.
+
+### Supports — all PASS
+
+Front Plane, planar face (`Boss-Extrude1` top), and Top Plane (90° datum)
+all create the QR sketch, keep one block instance centred at the sketch
+origin, land both squares centred (`centroid=(0,0)`), keep every endpoint on
+the support plane (`max |perp|=0`), and resolve the reference entity
+(seltype 2/4). The custom 30° ref plane remains a harness gap (all three
+plane-creation APIs returned null or wrong planes); Top Plane covers the
+rotated-datum gate.
+
+## Host↔block binding — round-2 experiment matrix
+
+Goal: pin the QR square's edges/corners to the block instance's four extent
+lines so a `Scale` or `InstancePosition` edit drags the square (spec #10's
+tracking requirement). Every route was run live; "binds at" states where the
+solver places the host entity.
+
+| # | Route | Result | Verdict |
+|---|---|---|---|
+| 1 | `ISketchRelationManager.AddRelation` coincident, any entity pair involving block internals | throws `RPC_E_SERVERFAULT` | dead |
+| 2 | Stashed block-edge proxy + `Select4` append + `SketchAddConstraints` | silently no-ops — relation never lands | dead |
+| 3 | Host corner `Select4` + coordinate `SelectByID2(SKETCHSEGMENT)` pick + `sgCOINCIDENT` (sketch/model coords) | lands an **arbitrary** block edge; coincident binds corner onto that edge's *projected* line — never the extent line (252-seg block) | dead |
+| 4 | Same, pick coords transformed into **definition space** | lands the right def edge but the coincident binds at its **raw def coords** — def `y=-0.168 mm` → host `y≈0` | dead |
+| 5 | `Select4` on definition-sketch segment object + coincident | selects in host context (E33) but binds at raw def coords (corner → `(0,0)`) | dead |
+| 6 | Driving **0-gap dimension** square-edge↔picked edge, self-verified by the dim's own value | pick landed 90°/270° angular or wrong linear dims every attempt; dim-value verification rejected all | dead (works mechanically, can't aim) |
+| 7 | Same with `Select4` def-segment object | dim measures the *projected* gap (≈inset) but the solve pins the edge at **raw def** position (`-0.17 mm`) | dead |
+| 8 | `SelectByID2` type `EXTSKETCHSEG` | same as SKETCHSEGMENT — arbitrary internal edge, binds its projection | dead |
+| 9 | `SelectByRay` (sketch-normal ray, radius 0.2 mm, types 10/24) | selects nothing — block internals not ray-hittable | dead |
+| 10 | `ISketchBlockInstance.Select` + dim to the whole instance | dim reads 15 mm (instance centre-ish), not the bbox edge | dead |
+| 11 | Pick coords swept just outside the def's raw bbox ("defside" picks, 5 margins × corner quarters) | still arbitrary internal edges | dead |
+| 12 | `SketchUseEdge2` on the object-selected extent def segment | converts to a host line at **raw def position** (`-0.34 mm`), not the projected line | dead |
+| 13 | `ISketchBlockInstance.GetAttachedEntities` | returns false/null | dead |
+| 14 | Inset-vs-exact square draw + pick-order variants, `AddToDB` on/off | no effect on any of the above | — |
+
+**Root cause (round-2 finding):** SolidWorks exposes block-internal entities
+to a host sketch **only at their raw definition coordinates**. Object
+handles (`Select4`), coordinate picks that land inside the def-raw zone, and
+`SketchUseEdge2` all yield definition-space objects whose constraints
+resolve at def coords (±0.5 mm here). Coordinate picks outside that zone
+yield instance-space wrappers that *do* bind at projected positions — but
+the pick evaluator cannot be aimed at a specific internal segment of a
+252-segment block (it returns arbitrary internals), so the right extent edge
+is unreachable. The projected instance drawing has no bindable identity.
+
+**Fallback implemented:** the QR square is drawn at the exact staged extents
+(merges + orientation + equal relations keep it square), the driven size dim
+and the three keep-out equations still land, and the squares represent the
+footprint correctly — they simply do not follow a later `Scale`/drag edit.
+The 5 tracking gates above remain open and would need a SolidWorks API that
+exposes instance-projected entities (or an interactive-only path — the same
+coincident is believed to work through the UI; not verified this round).
+
+## Extrusion routes — round-2
+
+`TryExtrudeByName` tries nine routes in order; the **first** that returns a
+feature wins:
+
+| Route | Result |
+|---|---|
+| sketch-feature select + `FeatureExtrusion3` | null |
+| block-instance object select + `FeatureExtrusion3` | null |
+| `SKETCHREGION` coord picks (contour selection on) | regions refused/null |
+| sketch-feature + `FeatureExtrusionThin` | null |
+| sketch-feature + legacy `FeatureExtrusion` | null |
+| `SimpleFeatureBossExtrude` | null |
+| `SKETCHCONTOUR` picks + `swSelEXTSKETCHSEGS` marks | null |
+| **`ISketchRegion.Select` per-region objects** | **PASS — `Boss-Extrude5`; consumed 8 material regions (faces=30)** |
+| sketch-feature + `FeatureCut4` | not reached (route 8 won) |
+
+`ISketchRegion.Select` also extrudes the **exploded** raw lines
+(`Boss-Extrude9`). The product's extrude-via-region design is unchanged.
+
+## Remaining work / open items
+
+- Tracking gates (5 fails) — blocked on a SolidWorks route that exposes
+  instance-projected block entities; the matrix above is the full survey.
+- Named undo step — `FinishRecordingUndoObject2` refuses; the custom
+  `SetApiUndoObject` path covers delete+restore (`undoapi` green).
+- Custom 30° ref plane creation — harness gap, not product.
+
+Unit tests at the time of the run: **307 passed**
+(`dotnet test tests\SolidWorksQrAddIn.Tests`).
+
+---
+
+# Round 1 — earlier run (kept for history)
+
+
 Ticket #19. Harness: `tools/LiveProbe` mode `blockqr` against **SolidWorks
 2023 SP5 (revision 31.5.0)**, spawned session-free (`Activator.CreateInstance`,
 invisible, killed after the run). Fixture `SW-QR-MVP`: N=21, working matrix

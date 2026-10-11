@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorks.Interop.sldworks;
@@ -37,6 +38,7 @@ namespace SolidWorksQrAddIn.Host
         private readonly List<QrConstructionSquare> _stagedSquares =
             new List<QrConstructionSquare>();
         private QrDimensionSpec? _dimensionSpec;
+        private double _appliedScale = 1.0;
         private bool _committed;
         private bool _aborted;
         private bool _flagsRestored;
@@ -174,7 +176,8 @@ namespace SolidWorksQrAddIn.Host
 
             // 1. Draw the definition: staged edges ÷ scale = unit-proportioned
             //    (one document unit across). These are ordinary sketch lines
-            //    until the select-all step swallows them into the block.
+            //    until the block-make step swallows them into the block.
+            var drawn = new List<ISketchSegment>(_buffered.Count);
             for (var i = 0; i < _buffered.Count; i++)
             {
                 var e = _buffered[i];
@@ -187,6 +190,7 @@ namespace SolidWorksQrAddIn.Host
                         throw new SketchInsertionException(
                             $"CreateLine returned no segment while drawing the block definition " +
                             $"(line {i + 1} of {_buffered.Count}).");
+                    drawn.Add(segment);
                 }
                 catch (SketchInsertionException) { throw; }
                 catch (Exception ex)
@@ -201,14 +205,28 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     "The document exposed no extension/math interface — the QR block could not be formed.");
 
-            // 2. Select exactly what this session drew — the sketch was born
-            //    empty, so SelectAll can only reach the definition lines —
-            //    then fold the selection into the block definition + instance.
+            // 2. Select exactly what this session drew — BY OBJECT, not
+            //    SelectAll. Measured live (undo-callback reinsert, round-1
+            //    blockqr gate): inside the API undo object's redo the blanket
+            //    select-all delivered an empty selection and
+            //    MakeSketchBlockFromSelected formed no definition. Selecting
+            //    each drawn segment via Select4 is exact in every context —
+            //    and can never swallow the construction geometry emitted
+            //    after this step (there is none yet anyway).
             ISketchBlockDefinition? def;
             try
             {
                 _doc.ClearSelection2(true);
-                _ext.SelectAll();
+                var selected = 0;
+                foreach (var segment in drawn)
+                {
+                    try { if (segment.Select4(true, null)) selected++; }
+                    catch { /* one refused segment is not fatal — counted below */ }
+                }
+                if (selected < drawn.Count)
+                    throw new SketchInsertionException(
+                        $"Only {selected} of {drawn.Count} block-definition segments could be " +
+                        "selected — the block make would be partial or empty.");
                 var origin = _math.CreatePoint(new[] { 0.0, 0.0, 0.0 }) as MathPoint
                     ?? throw new SketchInsertionException(
                         "The math utility returned no insertion point.");
@@ -239,6 +257,7 @@ namespace SolidWorksQrAddIn.Host
                     ?? throw new SketchInsertionException(
                         "The block instance could not be read back.");
                 instance.Scale = scaleDocUnits;
+                _appliedScale = scaleDocUnits;
             }
             catch (SketchInsertionException) { throw; }
             catch (Exception ex)
@@ -260,6 +279,19 @@ namespace SolidWorksQrAddIn.Host
         /// </summary>
         private void EmitConstructionLayout()
         {
+            // Relations and dimensions need the live solver — AddToDB bulk
+            // mode (still on from the contour insert) adds geometry without
+            // solving, so the coincident binds' read-back verifies stale
+            // positions. Normal insert mode for the whole layout phase; the
+            // flag snapshot restores the session state at exit anyway.
+            bool prevAddToDB = false;
+            try { prevAddToDB = _mgr.AddToDB; _mgr.AddToDB = false; } catch { }
+            try { EmitConstructionLayoutBody(); }
+            finally { try { _mgr.AddToDB = prevAddToDB; } catch { } }
+        }
+
+        private void EmitConstructionLayoutBody()
+        {
             var spec = _dimensionSpec!;
             var square = _stagedSquares.Find(s => s.Role == spec.DrivenSquare);
             if (square == null)
@@ -270,8 +302,23 @@ namespace SolidWorksQrAddIn.Host
                     "The document exposed no extension interface — the QR square " +
                     "could not be constrained to the block's outer edges.");
 
+            // The square is drawn at the exact staged extents. Round-2's
+            // binding experiment matrix (docs/BLOCK-GATES.md) exhausted every
+            // public route for tying a host edge to a block-internal edge —
+            // relation-manager AddRelation, coordinate picks in sketch /
+            // model / definition space, object-selected definition segments,
+            // EXTSKETCHSEG picks, SelectByRay, block-instance object dims,
+            // SketchUseEdge2 conversion, and driving zero-gap dimensions —
+            // and SolidWorks binds every one of them at the DEFINITION's raw
+            // coordinates (or lands an arbitrary internal segment), never at
+            // the scaled instance's projected line. A coincident to the raw
+            // def position would actively mis-place the square, so the
+            // honest shape is exact-drawn host geometry with no fake binds:
+            // it represents the footprint correctly and simply does not
+            // follow a later Scale edit (recorded as a remaining gate).
             var qrDrawn = DrawConstructionSquare(square);
-            BindSquareToBlock(square, qrDrawn);
+            MergeSquareCorners(qrDrawn);
+            ConstrainQrSquareShape(qrDrawn);
             string qrDimName = AddDrivenDimension(square, qrDrawn[0]);
 
             var keepOut = _stagedSquares.Find(s => s.Role == spec.EquationLinkedSquare);
@@ -288,18 +335,34 @@ namespace SolidWorksQrAddIn.Host
         /// coordinates (coordinate picks at the square's own locations are
         /// ambiguous once block geometry overlaps them).
         /// </summary>
-        private List<ISketchSegment> DrawConstructionSquare(QrConstructionSquare square)
+        private List<ISketchSegment> DrawConstructionSquare(
+            QrConstructionSquare square, double inset = 0.0)
         {
             string label = square.Role == QrSquareRole.QrSquare ? "QR square" : "keep-out square";
             var drawn = new List<ISketchSegment>(4);
+            // An inset square is built from vertices shrunk toward the
+            // centroid — adjacent edges still share their shrunken corner,
+            // so the corner merge below finds coincident endpoints.
+            var verts = square.Vertices;
+            var shrunk = new List<SketchPoint2>(verts.Count);
+            if (inset > 0.0)
+            {
+                double cx = verts.Average(q => q.X), cy = verts.Average(q => q.Y);
+                foreach (var q in verts)
+                    shrunk.Add(new SketchPoint2(
+                        q.X + Math.Sign(cx - q.X) * inset,
+                        q.Y + Math.Sign(cy - q.Y) * inset));
+            }
             int i = 0;
             foreach (var e in square.Edges)
             {
                 i++;
+                var a = inset > 0.0 ? shrunk[(i - 1) % verts.Count] : e.Start;
+                var b = inset > 0.0 ? shrunk[i % verts.Count] : e.End;
                 try
                 {
                     var segment = _mgr.CreateLine(
-                        e.Start.X, e.Start.Y, 0.0, e.End.X, e.End.Y, 0.0) as ISketchSegment;
+                        a.X, a.Y, 0.0, b.X, b.Y, 0.0) as ISketchSegment;
                     if (segment == null)
                         throw new SketchInsertionException(
                             $"CreateLine returned no segment while drawing the {label} " +
@@ -319,114 +382,17 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// Coincident-binds each square edge to the block instance's outer
-        /// edges so a Scale edit drags the square. Per edge (the square is
-        /// CCW from bottom-left: bottom, right, top, left — on the block's
-        /// four extent lines):
-        ///   - up to TWO coincident relations to distinct block boundary
-        ///     vertices on the edge's line (two points pin the line's
-        ///     position AND orientation rigidly), plus
-        ///   - one horizontal/vertical relation recording the square's
-        ///     axis-aligned shape.
-        /// Block entities are reachable only by coordinate selection — the
-        /// block's internals are not enumerable (spike Q3) — so a boundary
-        /// vertex is picked by its coordinates as "SKETCHPOINT". Vertices
-        /// strictly interior to a side are tried first: at a square corner
-        /// the pick could grab the square's own endpoint instead of the
-        /// block's point. Every edge must land at least one coincident or
-        /// the square would not track Scale — a failure there throws so the
-        /// command's cleanup path owns the partial sketch.
+        /// Pins the square's shape so the solver can never skew it: axis
+        /// orientation on all four edges plus an equal relation on adjacent
+        /// sides. The corner merges already share endpoints, so this is the
+        /// minimum that keeps the construction square square.
         /// </summary>
-        private void BindSquareToBlock(
-            QrConstructionSquare square, IReadOnlyList<ISketchSegment> drawn)
+        private void ConstrainQrSquareShape(IReadOnlyList<ISketchSegment> drawn)
         {
-            var v = square.Vertices;
-            double minX = v[0].X, minY = v[0].Y, maxX = v[2].X, maxY = v[2].Y;
-            for (int i = 0; i < 4; i++)
-            {
-                bool horizontal = i % 2 == 0;
-                double lineCoord = i == 0 ? minY : i == 2 ? maxY : i == 1 ? maxX : minX;
-                int coincident = BindEdgeToBlock(
-                    drawn[i], horizontal, lineCoord, minX, minY, maxX, maxY);
-                if (coincident < 1)
-                    throw new SketchInsertionException(
-                        "A QR square edge found no block boundary point to constrain " +
-                        "to — the square would not track a Scale edit.");
-                AddOrientationConstraint(drawn[i], horizontal);
-            }
-        }
-
-        /// <summary>
-        /// Applies coincident relations between one square edge and up to two
-        /// block boundary vertices on the edge's extent line; returns how
-        /// many were applied. The vertex candidates come from the staged
-        /// edges — the block's effective geometry in sketch space.
-        /// </summary>
-        private int BindEdgeToBlock(
-            ISketchSegment edge, bool horizontal, double lineCoord,
-            double minX, double minY, double maxX, double maxY)
-        {
-            const double tol = 1e-9;
-            var interior = new List<(double X, double Y)>();
-            var corner = new List<(double X, double Y)>();
-            var seen = new List<(double X, double Y)>();
-            foreach (var e in _buffered)
-            {
-                foreach (var p in new[] { (e.X1, e.Y1), (e.X2, e.Y2) })
-                {
-                    double onLine = horizontal ? p.Item2 : p.Item1;
-                    double cross = horizontal ? p.Item1 : p.Item2;
-                    double crossMin = horizontal ? minX : minY;
-                    double crossMax = horizontal ? maxX : maxY;
-                    if (Math.Abs(onLine - lineCoord) > tol ||
-                        cross < crossMin - tol || cross > crossMax + tol)
-                        continue;
-                    if (seen.Exists(s => Math.Abs(s.X - p.Item1) < tol && Math.Abs(s.Y - p.Item2) < tol))
-                        continue;
-                    seen.Add((p.Item1, p.Item2));
-                    if (cross > crossMin + tol && cross < crossMax - tol)
-                        interior.Add((p.Item1, p.Item2));
-                    else
-                        corner.Add((p.Item1, p.Item2));
-                }
-            }
-
-            int applied = 0;
-            foreach (var cand in Chain(interior, corner))
-            {
-                if (applied >= 2) break;
-                try
-                {
-                    _doc.ClearSelection2(true);
-                    bool picked = _ext!.SelectByID2(
-                        "", "SKETCHPOINT", cand.X, cand.Y, 0.0,
-                        false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
-                    bool edgeSelected = false;
-                    try { edgeSelected = edge.Select4(true, null); }
-                    catch { /* object selection failed — count it as not applied */ }
-                    if (!picked || !edgeSelected)
-                    {
-                        Diag.Log(
-                            $"QR square binding: selection failed at " +
-                            $"({cand.X:F6},{cand.Y:F6}) block={picked} edge={edgeSelected}");
-                        continue;
-                    }
-                    _doc.SketchAddConstraints("sgCOINCIDENT");
-                    applied++;
-                }
-                catch (Exception ex)
-                {
-                    Diag.Log($"QR square binding failed at ({cand.X:F6},{cand.Y:F6}): {ex.Message}");
-                }
-            }
-            return applied;
-        }
-
-        private static IEnumerable<(double X, double Y)> Chain(
-            List<(double X, double Y)> first, List<(double X, double Y)> then)
-        {
-            foreach (var p in first) yield return p;
-            foreach (var p in then) yield return p;
+            for (int i = 0; i < 4 && i < drawn.Count; i++)
+                AddOrientationConstraint(drawn[i], horizontal: i % 2 == 0);
+            if (drawn.Count > 1)
+                AddEqualRelation(drawn[0], drawn[1]);
         }
 
         /// <summary>
@@ -589,7 +555,7 @@ namespace SolidWorksQrAddIn.Host
                     as ISketchPoint;
                 if (end == null || start == null)
                     throw new SketchInsertionException(
-                        "A keep-out square corner's endpoints could not be read.");
+                        "A square corner's endpoints could not be read.");
                 try
                 {
                     _doc.ClearSelection2(true);
@@ -597,14 +563,14 @@ namespace SolidWorksQrAddIn.Host
                     bool pickedStart = start.Select4(true, null);
                     if (!pickedEnd || !pickedStart)
                         throw new SketchInsertionException(
-                            "A keep-out square corner could not be selected for merging.");
+                            "A square corner could not be selected for merging.");
                     _doc.SketchAddConstraints("sgCOINCIDENT");
                 }
                 catch (SketchInsertionException) { throw; }
                 catch (Exception ex)
                 {
                     throw new SketchInsertionException(
-                        $"A keep-out square corner merge failed: {ex.Message}", ex);
+                        $"A square corner merge failed: {ex.Message}", ex);
                 }
             }
         }
@@ -622,7 +588,7 @@ namespace SolidWorksQrAddIn.Host
                 _doc.ClearSelection2(true);
                 if (!a.Select4(false, null) || !b.Select4(true, null))
                     throw new SketchInsertionException(
-                        "The keep-out square's edges could not be selected " +
+                        "The square's edges could not be selected " +
                         "for the equal relation.");
                 _doc.SketchAddConstraints("sgSAMELENGTH");
             }

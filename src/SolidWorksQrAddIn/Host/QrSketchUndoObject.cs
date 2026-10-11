@@ -181,12 +181,29 @@ namespace SolidWorksQrAddIn.Host
                 return;
             }
 
+            // Capture the name BEFORE the delete — it keys the equation
+            // sweep below (a feature's name is unreadable once it is gone).
+            string sketchName;
+            try { sketchName = live.Name ?? ""; }
+            catch { sketchName = ""; }
+
+            // Sweep the sketch's equations BEFORE the feature delete —
+            // verified live (round-2 blockqr): SolidWorks refuses to delete
+            // a sketch whose dimensions still feed the equation manager in
+            // a headless session (plain delete AND delete-with-children both
+            // returned false while "D2@Sketch2"=... entries existed). The
+            // entries dangle the moment the feature goes anyway, so removing
+            // them first loses nothing; on a failed delete the sketch simply
+            // keeps its geometry without the keep-out links.
+            RemoveSketchEquations(doc, sketchName);
             var error = OwnedSketchCleanup.DeleteSketchFeature(doc, live);
             Diag.Log(error != null
                 ? $"QR undo delete failed: {error}"
                 : "QR undo: created sketch deleted");
             _sketch = null;
             _undone = true;
+            if (error == null)
+                RemoveSketchEquations(doc, sketchName);
             // Verified live: SolidWorks never invokes the handler on
             // EditRedo — an API undo item is undo-only. Re-registering the
             // SAME handler puts a fresh step on the undo list, so the next
@@ -197,6 +214,58 @@ namespace SolidWorksQrAddIn.Host
             // unreachable by Ctrl+Z.
             if (error == null)
                 ReRegister();
+        }
+
+        /// <summary>
+        /// Removes every equation that references the (now-deleted) sketch.
+        /// The equations we emit are the sketch-local links
+        /// ("D2@<i>sketch</i>" = ...) plus any user-added reference to one of
+        /// its dims — all of them dangle once the feature is gone, and the
+        /// dangling entries make the NEXT create's Add2(solve:true) fail
+        /// (live gate evidence). SolidWorks dim names are
+        /// "D2@Sketch2@Part1.Part", so an equation references our sketch iff a
+        /// "@<i>sketchName</i>@" or "@<i>sketchName</i>"" token appears. The
+        /// sweep runs BACKWARDS because IEquationMgr.Delete re-indexes the
+        /// remaining entries.
+        /// </summary>
+        private static void RemoveSketchEquations(IModelDoc2 doc, string sketchName)
+        {
+            if (string.IsNullOrEmpty(sketchName))
+                return;
+            try
+            {
+                var eq = doc.GetEquationMgr() as IEquationMgr;
+                if (eq == null)
+                    return;
+                var token = "@" + sketchName;
+                for (int i = eq.GetCount() - 1; i >= 0; i--)
+                {
+                    string? text = null;
+                    try { text = eq.get_Equation(i) as string; } catch { }
+                    if (text == null || !EquationMentionsSketch(text, token))
+                        continue;
+                    try { eq.Delete(i); }
+                    catch { /* one bad index is not worth the rest */ }
+                }
+            }
+            catch
+            {
+                // Equation cleanup is best-effort: the sketch is already gone,
+                // and a failed sweep must never throw inside an undo callback.
+            }
+        }
+
+        private static bool EquationMentionsSketch(string equation, string token)
+        {
+            int idx = 0;
+            while ((idx = equation.IndexOf(token, idx, StringComparison.Ordinal)) >= 0)
+            {
+                int end = idx + token.Length;
+                if (end >= equation.Length || equation[end] == '@' || equation[end] == '"')
+                    return true;
+                idx = end;
+            }
+            return false;
         }
 
         /// <summary>Re-adds this handler to the document's undo list. Never throws.</summary>
