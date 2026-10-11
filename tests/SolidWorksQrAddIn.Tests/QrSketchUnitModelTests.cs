@@ -93,7 +93,7 @@ namespace SolidWorksQrAddIn.Tests
         // ---------- construction squares + dimension spec ----------
 
         [Fact]
-        public void Qr_square_bounds_the_grown_qr_extent_at_the_requested_size()
+        public void Qr_square_is_the_unit_box_in_definition_space()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
@@ -101,18 +101,19 @@ namespace SolidWorksQrAddIn.Tests
                 s => s.Role == QrSquareRole.QrSquare);
             Assert.True(qrSquare.IsConstruction);
 
-            // The grown QR-cell extent: S per side, centred on the origin.
-            double half = SizeMm / 2.0 / 1000.0;
+            // ADR 0003: the square lives INSIDE the block definition, in the
+            // same unit space as the Unit contours — the grown QR-cell extent
+            // reads exactly ±0.5 there; the instance Scale projects it to ±S/2.
             Assert.Equal(4, qrSquare.Vertices.Count);
-            Assert.Equal(half, qrSquare.Vertices.Max(v => v.X), 9);
-            Assert.Equal(-half, qrSquare.Vertices.Min(v => v.X), 9);
-            Assert.Equal(half, qrSquare.Vertices.Max(v => v.Y), 9);
-            Assert.Equal(-half, qrSquare.Vertices.Min(v => v.Y), 9);
+            Assert.Equal(0.5, qrSquare.Vertices.Max(v => v.X), 9);
+            Assert.Equal(-0.5, qrSquare.Vertices.Min(v => v.X), 9);
+            Assert.Equal(0.5, qrSquare.Vertices.Max(v => v.Y), 9);
+            Assert.Equal(-0.5, qrSquare.Vertices.Min(v => v.Y), 9);
             Assert.Equal(4, qrSquare.Edges.Count());
         }
 
         [Fact]
-        public void Keep_out_square_is_the_working_matrix_boundary()
+        public void Keep_out_square_is_the_working_matrix_boundary_in_unit_space()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
@@ -121,9 +122,12 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(keepOut.IsConstruction);
 
             // ADR 0002: the working-matrix boundary — (N+8) cell pitches per
-            // side, centred on the origin. NOT "4 cells outside the grown QR
-            // square" (that would be S + 8p = (N + 2r′ + 8)·p — a larger square).
-            double expectedSide = 29 * sketch.Info.PitchMm / 1000.0; // metres
+            // side at the requested size. In unit definition space the
+            // requested size is 1.0, so the square reads (N+8)·pitch/S per
+            // side — the same square the instance projects to the physical
+            // matrix boundary at Scale=S.
+            double expectedSide =
+                sketch.Info.MatrixCellCount * sketch.Info.PitchMm / sketch.Info.FinalSizeMm;
             double side = keepOut.Vertices.Max(v => v.X) - keepOut.Vertices.Min(v => v.X);
             Assert.Equal(expectedSide, side, 9);
             Assert.Equal(expectedSide,
@@ -161,34 +165,16 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Dimension_spec_marks_the_qr_square_driven_and_the_keep_out_equation_linked()
+        public void Squares_are_definition_geometry_no_dimensions_are_emitted()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
-            // The QR square carries the driven dim (the live size readout);
-            // the keep-out side is equation-linked to it (ADR 0001).
-            Assert.Equal(QrSquareRole.QrSquare, sketch.DimensionSpec.DrivenSquare);
-            Assert.Equal(QrSquareRole.KeepOutSquare, sketch.DimensionSpec.EquationLinkedSquare);
-        }
-
-        [Fact]
-        public void Dimension_spec_relates_the_square_sides_in_cell_units()
-        {
-            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
-
-            // keep-out side = QR-square side + (8 − 2r′) cell pitches:
-            // (N+8) cells vs (N + 2·0.03) cells → 7.94 pitches.
-            var spec = sketch.DimensionSpec;
-            Assert.Equal(8.0 - 2.0 * sketch.Info.GrowthFractionPerSide,
-                spec.KeepOutSideOffsetCells, 9);
-            Assert.Equal(7.94, spec.KeepOutSideOffsetCells, 9);
-
-            // The relation must reconstruct the emitted keep-out side exactly —
-            // an independent check that spec and squares tell the same story.
-            double qrSideMm = SizeMm;
-            double keepOutSideMm = 29 * sketch.Info.PitchMm;
-            Assert.Equal(keepOutSideMm,
-                qrSideMm + spec.KeepOutSideOffsetCells * sketch.Info.PitchMm, 9);
+            // ADR 0003 superseded the dimension plan: the squares ride inside
+            // the block definition and inherit the instance transform, so the
+            // model carries squares only — the size surfaces are the block PM
+            // Scale field and the pane readout, never sketch dimensions.
+            Assert.Equal(2, sketch.ConstructionSquares.Count);
+            Assert.All(sketch.ConstructionSquares, s => Assert.True(s.IsConstruction));
         }
 
         // ---------- unit-proportioned contours alongside the sized set ----------

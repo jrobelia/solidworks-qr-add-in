@@ -9,24 +9,29 @@ namespace SolidWorksQrAddIn.Core.Geometry
     public enum QrSquareRole
     {
         /// <summary>
-        /// The square bounding the grown QR-cell extent — carries the driven
-        /// dimension (the live size readout).
+        /// The square bounding the grown QR-cell extent — the block
+        /// instance's visible footprint, spanning exactly ±0.5 in
+        /// block-definition units.
         /// </summary>
         QrSquare,
 
         /// <summary>
         /// The working-matrix boundary square — the quiet-zone clearance
-        /// marker (ADR 0002), equation-linked to the QR square's dimension.
+        /// marker (ADR 0002), the QR square enlarged by the fixed four-cell
+        /// margin per side.
         /// </summary>
         KeepOutSquare,
     }
 
     /// <summary>
-    /// One construction square emitted for the host sketch: four corner
-    /// vertices in sketch-space metres, closed-loop convention like
+    /// One construction square that rides INSIDE the QR sketch block
+    /// definition (ADR 0003): four corner vertices in unit block-definition
+    /// space — the same space <see cref="QrSketch.Unit"/> contours use, where
+    /// the grown QR outline spans exactly 1×1 — closed-loop convention like
     /// <see cref="QrContour"/> (the last vertex connects back to the first).
-    /// Always construction geometry — a bounds/clearance marker the engineer
-    /// can constrain and dimension, never cuttable profile.
+    /// Always construction geometry inside the definition, so it scales and
+    /// moves with the block instance, renders as a dashed bounds/clearance
+    /// marker, and never feeds an extrude profile.
     /// </summary>
     public sealed class QrConstructionSquare
     {
@@ -39,7 +44,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>Which square this is in the QR layout.</summary>
         public QrSquareRole Role { get; }
 
-        /// <summary>The four corner vertices in sketch-space metres.</summary>
+        /// <summary>
+        /// The four corner vertices in unit block-definition space — NOT
+        /// sketch metres; the host draws them unscaled so the definition
+        /// carries the squares and the instance projects them.
+        /// </summary>
         public IReadOnlyList<SketchPoint2> Vertices { get; }
 
         /// <summary>Always true — squares emit as construction geometry.</summary>
@@ -54,35 +63,5 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     yield return new SketchEdge(Vertices[i], Vertices[(i + 1) % Vertices.Count]);
             }
         }
-    }
-
-    /// <summary>
-    /// The dimension plan for the construction squares — model types only, no
-    /// host objects (ADR 0001). The QR square carries the driven dimension —
-    /// a readout that tracks the size, never drives it; the keep-out square's
-    /// side dimension is equation-linked to it so the total footprint stays a
-    /// live readout when the block is rescaled.
-    /// </summary>
-    public sealed class QrDimensionSpec
-    {
-        public QrDimensionSpec(double keepOutSideOffsetCells)
-        {
-            KeepOutSideOffsetCells = keepOutSideOffsetCells;
-        }
-
-        /// <summary>The square carrying the driven (reference readout) dimension.</summary>
-        public QrSquareRole DrivenSquare => QrSquareRole.QrSquare;
-
-        /// <summary>The square whose side dimension is equation-linked to the driven one.</summary>
-        public QrSquareRole EquationLinkedSquare => QrSquareRole.KeepOutSquare;
-
-        /// <summary>
-        /// The equation relation in cell-pitch units: keep-out side = QR-square
-        /// side + this many pitches. Per ADR 0002 the keep-out is the
-        /// working-matrix boundary, so the offset is 2·(quiet − r′) = 8 − 2r′
-        /// cell pitches (per side: 4 − r′ cells of light margin past the grown
-        /// outline).
-        /// </summary>
-        public double KeepOutSideOffsetCells { get; }
     }
 }

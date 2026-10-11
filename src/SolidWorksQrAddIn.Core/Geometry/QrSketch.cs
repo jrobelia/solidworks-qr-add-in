@@ -166,13 +166,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
             IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
             QrContourSet unit,
             IReadOnlyList<QrConstructionSquare> constructionSquares,
-            QrDimensionSpec dimensionSpec, QrSketchInfo info)
+            QrSketchInfo info)
         {
             Regions = regions;
             Contours = contours;
             Unit = unit;
             ConstructionSquares = constructionSquares;
-            DimensionSpec = dimensionSpec;
             Info = info;
         }
 
@@ -195,14 +194,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public QrContourSet Unit { get; }
 
         /// <summary>
-        /// The QR square and keep-out square, flagged construction geometry for
-        /// the host sketch (ADR 0001/0002) — bounds/clearance markers, never
-        /// cuttable profile and never part of <see cref="Contours"/>.
+        /// The QR square and keep-out square in unit block-definition space —
+        /// construction geometry that rides INSIDE the block definition (ADR
+        /// 0003) so the footprint and the four-cell quiet-zone boundary scale
+        /// and move with the instance. Never cuttable profile and never part
+        /// of <see cref="Contours"/>.
         /// </summary>
         public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
-
-        /// <summary>Which square carries the driven dim, which the equation-linked one, and the relation.</summary>
-        public QrDimensionSpec DimensionSpec { get; }
 
         public QrSketchInfo Info { get; }
 

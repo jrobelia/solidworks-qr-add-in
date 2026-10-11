@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
@@ -23,14 +22,22 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     /// <summary>One line segment recorded in sketch-space metres.</summary>
     public sealed class FakeLine
     {
-        public FakeLine(double x1, double y1, double x2, double y2)
+        public FakeLine(double x1, double y1, double x2, double y2, bool construction = false)
         {
             X1 = x1; Y1 = y1; X2 = x2; Y2 = y2;
+            Construction = construction;
         }
         public double X1 { get; }
         public double Y1 { get; }
         public double X2 { get; }
         public double Y2 { get; }
+
+        /// <summary>
+        /// Construction geometry — reference/clearance lines, never part of a
+        /// cuttable profile. Inside a block definition the flag rides with
+        /// the segment exactly like the real API's ConstructionGeometry.
+        /// </summary>
+        public bool Construction { get; }
     }
 
     /// <summary>An in-memory sketch: a named feature holding its segments.</summary>
@@ -51,276 +58,23 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public List<FakeBlockInstance> BlockInstances { get; } = new List<FakeBlockInstance>();
 
         /// <summary>
-        /// Construction squares drawn in this sketch — the QR square lives
-        /// here, bound to the block instance by coincident relations. Never
-        /// part of <see cref="Segments"/> and never inside a block.
-        /// </summary>
-        public List<FakeConstructionSquare> ConstructionSquares { get; } =
-            new List<FakeConstructionSquare>();
-
-        /// <summary>Display dimensions placed in this sketch (the QR square's driven readout).</summary>
-        public List<FakeDisplayDimension> Dimensions { get; } = new List<FakeDisplayDimension>();
-
-        /// <summary>
         /// The geometry the sketch actually shows: raw drawn segments plus
         /// every block instance's effective (scale/angle/position-resolved)
         /// edges — the world-state a test should assert on when it asks
-        /// "what did the create leave in the sketch". Construction geometry
-        /// (squares) is deliberately NOT part of this enumeration — it is
-        /// reference geometry, asserted separately.
+        /// "what did the create leave in the sketch". Construction-flagged
+        /// lines inside a block render too (ADR 0003) — they carry
+        /// <see cref="FakeLine.Construction"/> so profile assertions filter
+        /// them, never by accident counting them as cuttable geometry.
         /// </summary>
         public IEnumerable<FakeLine> EffectiveSegments =>
             Segments.Concat(BlockInstances.SelectMany(i => i.EffectiveEdges));
-    }
-
-    /// <summary>
-    /// A construction square in a sketch — the in-memory stand-in for the
-    /// host-sketch construction geometry the QR layout squares emit as.
-    /// The QR square's edges are coincident-bound to a block instance's
-    /// outer edges (<see cref="CoincidentBindings"/> relations), so a Scale
-    /// edit on the instance drags the square. The keep-out square cannot
-    /// bind to the block (it sits outside its extent): it is centred on the
-    /// QR square (<see cref="CentredOn"/>) by equation-linked offset dims
-    /// and sized by the equation-linked side dim (<see cref="SizedBy"/>) —
-    /// so it tracks the QR square wherever the block takes it.
-    /// <see cref="EffectiveEdges"/> is derived from the CURRENT anchor
-    /// state, recomputed on every read exactly like
-    /// <see cref="FakeBlockInstance.EffectiveEdges"/>.
-    /// </summary>
-    public sealed class FakeConstructionSquare
-    {
-        public FakeConstructionSquare(QrSquareRole role, List<FakeLine> drawnEdges, FakeBlockInstance? bound)
-        {
-            Role = role;
-            DrawnEdges = drawnEdges;
-            BoundInstance = bound;
-        }
-
-        /// <summary>Which square of the QR layout this is (QR square, keep-out).</summary>
-        public QrSquareRole Role { get; }
-
-        /// <summary>The edges as drawn, in sketch-space metres.</summary>
-        public List<FakeLine> DrawnEdges { get; }
 
         /// <summary>
-        /// The block instance the square's edges are coincident-bound to —
-        /// null when no instance exists to constrain to (degraded: the square
-        /// then stands at its drawn position and does not track).
+        /// The profile-eligible geometry — <see cref="EffectiveSegments"/>
+        /// minus construction lines. An extrude reads only this set.
         /// </summary>
-        public FakeBlockInstance? BoundInstance { get; }
-
-        /// <summary>
-        /// How many coincident relations the emission applied between the
-        /// square's edges and the block's outer-edge points — the world-state
-        /// stand-in for the sketch's relation set.
-        /// </summary>
-        public int CoincidentBindings { get; set; }
-
-        /// <summary>Always true — squares emit as construction geometry.</summary>
-        public bool IsConstruction => true;
-
-        /// <summary>
-        /// The construction square this square is centred on — the world-state
-        /// stand-in for the keep-out square's equation-linked offset
-        /// dimensions (they hold its centre on the QR square's centre). Null
-        /// for the QR square, which is block-bound instead.
-        /// </summary>
-        public FakeConstructionSquare? CentredOn { get; set; }
-
-        /// <summary>
-        /// The dimension that sizes this square — the keep-out square's
-        /// equation-linked side dim. Null when the square's size is
-        /// geometry-bound (the QR square) or when no dim landed.
-        /// </summary>
-        public FakeDisplayDimension? SizedBy { get; set; }
-
-        /// <summary>
-        /// The square's four edges as the sketch currently shows them: the
-        /// bound block instance's effective bounding box (recomputed live —
-        /// a Scale edit moves them); or, for the keep-out square, the square
-        /// centred on <see cref="CentredOn"/> at the <see cref="SizedBy"/>
-        /// dimension's current value — recomputed live, so the square grows
-        /// and travels exactly as its constraints drive it. With neither
-        /// anchor, the drawn edges.
-        /// </summary>
-        public IEnumerable<FakeLine> EffectiveEdges
-        {
-            get
-            {
-                var bound = BoundInstance;
-                if (bound != null)
-                {
-                    foreach (var e in BoxEdges(bound.EffectiveEdges)) yield return e;
-                    yield break;
-                }
-                var anchor = CentredOn;
-                if (anchor != null)
-                {
-                    // The offset dims hold the keep-out square centred on the
-                    // QR square's current centre; the side dim sets its span.
-                    double cx = 0.0, cy = 0.0;
-                    double minX = double.MaxValue, maxX = double.MinValue;
-                    double minY = double.MaxValue, maxY = double.MinValue;
-                    foreach (var e in anchor.EffectiveEdges)
-                    {
-                        minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                        maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-                        minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
-                        maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
-                    }
-                    cx = (minX + maxX) / 2.0;
-                    cy = (minY + maxY) / 2.0;
-                    double side = SizedBy?.ValueMetres ?? DrawnSide();
-                    foreach (var e in BoxEdges(CentredBox(cx, cy, side))) yield return e;
-                    yield break;
-                }
-                foreach (var e in DrawnEdges) yield return e;
-            }
-        }
-
-        private double DrawnSide()
-        {
-            double minX = double.MaxValue, maxX = double.MinValue;
-            foreach (var e in DrawnEdges)
-            {
-                minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-            }
-            return maxX - minX;
-        }
-
-        private static IEnumerable<FakeLine> CentredBox(double cx, double cy, double side)
-        {
-            double h = side / 2.0;
-            return BoxEdges(new[]
-            {
-                new FakeLine(cx - h, cy - h, cx + h, cy - h),
-                new FakeLine(cx + h, cy - h, cx + h, cy + h),
-                new FakeLine(cx + h, cy + h, cx - h, cy + h),
-                new FakeLine(cx - h, cy + h, cx - h, cy - h),
-            });
-        }
-
-        private static IEnumerable<FakeLine> BoxEdges(IEnumerable<FakeLine> edges)
-        {
-            double minX = double.MaxValue, maxX = double.MinValue;
-            double minY = double.MaxValue, maxY = double.MinValue;
-            foreach (var e in edges)
-            {
-                minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-                minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
-                maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
-            }
-            yield return new FakeLine(minX, minY, maxX, minY);
-            yield return new FakeLine(maxX, minY, maxX, maxY);
-            yield return new FakeLine(maxX, maxY, minX, maxY);
-            yield return new FakeLine(minX, maxY, minX, minY);
-        }
-    }
-
-    /// <summary>What a display dimension on a construction square measures.</summary>
-    public enum FakeDimMeasure
-    {
-        /// <summary>The target square's side length.</summary>
-        SideLength,
-
-        /// <summary>
-        /// The per-axis gap between the target square's edge and the
-        /// corresponding edge of the square it is centred on — the keep-out
-        /// square's locating dims (the ticket's "offset dims", kept
-        /// equation-linked so the square stays centred as the QR grows).
-        /// </summary>
-        OffsetGap,
-    }
-
-    /// <summary>
-    /// A DisplayDimension in a sketch — the in-memory stand-in for the
-    /// IDisplayDimension the readouts land as. Its value is either MEASURED
-    /// from the square it targets (a driven readout like the QR square's
-    /// dim) or EVALUATED from its recorded equation link (the keep-out
-    /// square's side + offset dims, which drive the square) — recomputed on
-    /// every read, so a Scale edit moves every dependent value.
-    /// </summary>
-    public sealed class FakeDisplayDimension
-    {
-        private readonly FakeDocument _doc;
-
-        public FakeDisplayDimension(FakeConstructionSquare target, FakeDocument doc)
-        {
-            Target = target;
-            _doc = doc;
-        }
-
-        /// <summary>
-        /// The dimension's name as the host would report it
-        /// ("D1@Sketch1", ...) — the handle an equation uses to reference it.
-        /// </summary>
-        public string Name { get; set; } = "";
-
-        /// <summary>The construction square the dimension measures or positions.</summary>
-        public FakeConstructionSquare Target { get; }
-
-        /// <summary>What the dimension measures — a side, or an offset gap.</summary>
-        public FakeDimMeasure Measures { get; set; } = FakeDimMeasure.SideLength;
-
-        /// <summary>True for a driven (reference readout) dimension — it never drives.</summary>
-        public bool IsDriven { get; set; }
-
-        /// <summary>
-        /// The recorded equation text — the world-state stand-in for the
-        /// entry IEquationMgr holds, e.g. "D2@Sketch1" = "D1@Sketch1" * r.
-        /// Null when the dimension is not equation-linked.
-        /// </summary>
-        public string? Equation { get; set; }
-
-        /// <summary>
-        /// The dimension the equation reads — for the keep-out dims, the QR
-        /// square's driven dimension. Null when <see cref="Equation"/> is null.
-        /// </summary>
-        public FakeDisplayDimension? EquationSource { get; set; }
-
-        /// <summary>
-        /// The equation's multiplier on the source value — the cell-count
-        /// ratio for the side dim, half the margin for the offset dims.
-        /// </summary>
-        public double EquationMultiplier { get; set; } = 1.0;
-
-        /// <summary>
-        /// Whether the two dimension-prompt user toggles were suppressed at
-        /// the moment the dimension was created — the world-state stand-in
-        /// for the guards the real adapter applies around IAddDimension2
-        /// (which hangs an invisible session when they are on).
-        /// </summary>
-        public bool PromptsSuppressedAtCreation { get; set; }
-
-        /// <summary>
-        /// The live readout in document units — the target square's measured
-        /// side for a plain dim, the equation result for an equation-linked
-        /// dim. Recomputed on every read, so a bound square that tracks a
-        /// Scale edit moves every dependent value.
-        /// </summary>
-        public double ValueDocUnits
-        {
-            get
-            {
-                if (EquationSource != null)
-                    return EquationSource.ValueDocUnits * EquationMultiplier;
-                double minX = double.MaxValue, maxX = double.MinValue;
-                double minY = double.MaxValue, maxY = double.MinValue;
-                foreach (var e in Target.EffectiveEdges)
-                {
-                    minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                    maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-                    minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
-                    maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
-                }
-                return Math.Max(maxX - minX, maxY - minY) / _doc.MetresPerLengthUnit;
-            }
-        }
-
-        /// <summary>The live value in sketch-space metres.</summary>
-        public double ValueMetres => ValueDocUnits * _doc.MetresPerLengthUnit;
+        public IEnumerable<FakeLine> ProfileSegments =>
+            EffectiveSegments.Where(e => !e.Construction);
     }
 
     /// <summary>
@@ -336,6 +90,14 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>The definition's contours in sketch-space metres (one document unit across).</summary>
         public List<FakeLine> Contours { get; } = new List<FakeLine>();
+
+        /// <summary>
+        /// The definition's construction segments — the QR square and the
+        /// keep-out square drawn at unit coordinates (ADR 0003). They render
+        /// on every instance as construction geometry, tracking Scale and
+        /// position, and never feed a profile.
+        /// </summary>
+        public List<FakeLine> ConstructionEdges { get; } = new List<FakeLine>();
 
         /// <summary>Instances of this definition placed in sketches.</summary>
         public List<FakeBlockInstance> Instances { get; } = new List<FakeBlockInstance>();
@@ -375,9 +137,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>
         /// The geometry the instance currently contributes to the sketch, in
-        /// sketch-space metres: definition contours × Scale, rotated by
-        /// <see cref="Angle"/>, offset to the insertion point. Recomputed on
-        /// every read — a Scale edit rescales it immediately.
+        /// sketch-space metres: definition contours AND construction
+        /// segments × Scale, rotated by <see cref="Angle"/>, offset to the
+        /// insertion point — the construction lines render on the instance
+        /// and track its transforms (ADR 0003, live-verified consexp).
+        /// Recomputed on every read — a Scale edit rescales it immediately.
         /// </summary>
         public IEnumerable<FakeLine> EffectiveEdges
         {
@@ -385,16 +149,24 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             {
                 double cos = Math.Cos(Angle);
                 double sin = Math.Sin(Angle);
-                foreach (var e in Definition.Contours)
+                foreach (var e in Definition.Contours.Concat(Definition.ConstructionEdges))
                 {
                     yield return new FakeLine(
                         X + Scale * (e.X1 * cos - e.Y1 * sin),
                         Y + Scale * (e.X1 * sin + e.Y1 * cos),
                         X + Scale * (e.X2 * cos - e.Y2 * sin),
-                        Y + Scale * (e.X2 * sin + e.Y2 * cos));
+                        Y + Scale * (e.X2 * sin + e.Y2 * cos),
+                        e.Construction);
                 }
             }
         }
+
+        /// <summary>
+        /// The profile-eligible geometry the instance contributes — every
+        /// effective edge that is not construction geometry.
+        /// </summary>
+        public IEnumerable<FakeLine> ProfileEdges =>
+            EffectiveEdges.Where(e => !e.Construction);
     }
 
     /// <summary>
@@ -461,14 +233,6 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>Display symbol for the document's length unit ("mm", "in", …).</summary>
         public string LengthUnitSymbol { get; set; } = "mm";
-
-        /// <summary>
-        /// The document's equation list — the in-memory stand-in for
-        /// IEquationMgr. The keep-out square's dimension links land here as
-        /// equation text ("D2@Sketch1" = "D1@Sketch1" * r); the dims that own
-        /// them evaluate through <see cref="FakeDisplayDimension.EquationSource"/>.
-        /// </summary>
-        public List<string> Equations { get; } = new List<string>();
 
         /// <summary>Mutable sketch-manager flags, as the real ISketchManager exposes.</summary>
         public Dictionary<string, bool> SketchManagerFlags { get; } = new Dictionary<string, bool>
@@ -660,66 +424,10 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>
         /// When true, the commit's construction-square draw stage fails —
-        /// the block instance is already in the sketch but the square could
-        /// not be drawn. Abort removes the whole sketch.
+        /// the square's def-space lines could not be drawn into the block
+        /// definition. Abort removes the whole sketch.
         /// </summary>
         public bool FailSquareDraw { get; set; }
-
-        /// <summary>
-        /// When true, the square's coincident-binding stage fails — the
-        /// square was drawn but could not be constrained to the block's
-        /// outer edges. Abort removes the whole sketch.
-        /// </summary>
-        public bool FailSquareConstraint { get; set; }
-
-        /// <summary>
-        /// When true, the dimension emission fails — IAddDimension2 returned
-        /// no dimension. Abort removes the whole sketch; the prompt toggles
-        /// must still be restored.
-        /// </summary>
-        public bool FailDimension { get; set; }
-
-        /// <summary>
-        /// When true, the keep-out square's draw stage fails — the QR square
-        /// and its dim are already in the sketch but the keep-out could not
-        /// be drawn. Abort removes the whole sketch.
-        /// </summary>
-        public bool FailKeepOutDraw { get; set; }
-
-        /// <summary>
-        /// When true, the keep-out square's constraint stage fails — the
-        /// square was drawn but its corners/orientation could not be
-        /// constrained. Abort removes the whole sketch.
-        /// </summary>
-        public bool FailKeepOutConstraint { get; set; }
-
-        /// <summary>
-        /// When true, the keep-out square's dimension stage fails —
-        /// IAddDimension2 returned no dimension. Abort removes the whole
-        /// sketch; the prompt toggles must still be restored.
-        /// </summary>
-        public bool FailKeepOutDimension { get; set; }
-
-        /// <summary>
-        /// When true, the equation emission fails — the equation manager
-        /// refused the keep-out dim links. Abort removes the whole sketch.
-        /// </summary>
-        public bool FailEquation { get; set; }
-
-        /// <summary>
-        /// Application-level user-preference toggle — the in-memory stand-in
-        /// for ISldWorks.SetUserPreferenceToggle(swInputDimValOnCreate). On by
-        /// default: the dangerous state the spike documented (IAddDimension2
-        /// hangs an invisible session when it is on).
-        /// </summary>
-        public bool InputDimValOnCreate { get; set; } = true;
-
-        /// <summary>
-        /// Application-level user-preference toggle — the stand-in for
-        /// swSketchOverdefiningDimsPromptToSetState. On by default; while on,
-        /// an over-defining dimension prompts instead of landing driven.
-        /// </summary>
-        public bool OverdefiningDimsPromptToSetState { get; set; } = true;
 
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
@@ -794,48 +502,14 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     doc.Sketches.Remove(target);
                     if (ReferenceEquals(doc.ActiveSketch, target))
                         doc.ActiveSketch = null;
-                    // The native undo object's delete also removes the sketch's
-                    // equations — they dangle in the equation manager otherwise
-                    // and the next create's Add2(solve:true) is refused (live
-                    // gate evidence). An equation references the sketch when a
-                    // "@<sketchName>" dimension token appears in it.
-                    doc.Equations.RemoveAll(e => EquationMentionsSketch(e, registration.SketchName));
                 }
             });
             step.DoRedo = () =>
             {
                 if (target != null && !doc.Sketches.Contains(target))
-                {
                     doc.Sketches.Add(target);
-                    // The redo reinsertion re-emits the construction layout —
-                    // the equation-linked dims' equations land in the manager
-                    // again (native RecreateSketch re-runs the emission).
-                    foreach (var dim in target.Dimensions)
-                        if (dim.Equation != null && !doc.Equations.Contains(dim.Equation))
-                            doc.Equations.Add(dim.Equation);
-                }
             };
             doc.UndoSteps.Add(step);
-        }
-
-        /// <summary>
-        /// The fake stand-in for the native equation-name matcher: an
-        /// equation references a sketch when it contains a
-        /// "@&lt;sketchName&gt;@" or "@&lt;sketchName&gt;"" dimension token
-        /// (SolidWorks dim names are "D2@Sketch2@Part1.Part").
-        /// </summary>
-        private static bool EquationMentionsSketch(string equation, string sketchName)
-        {
-            var at = "@" + sketchName;
-            int idx = 0;
-            while ((idx = equation.IndexOf(at, idx, System.StringComparison.Ordinal)) >= 0)
-            {
-                int end = idx + at.Length;
-                if (end >= equation.Length || equation[end] == '@' || equation[end] == '"')
-                    return true;
-                idx = end;
-            }
-            return false;
         }
 
         public SketchHostState CaptureState()
@@ -947,7 +621,6 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         private readonly List<FakeLine> _buffered = new List<FakeLine>();
         private readonly List<QrConstructionSquare> _stagedSquares =
             new List<QrConstructionSquare>();
-        private QrDimensionSpec? _dimensionSpec;
         private bool _committed;
         private bool _aborted;
         private CleanupOutcome? _abortOutcome;
@@ -991,21 +664,20 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         }
 
         /// <summary>
-        /// Stages the model's construction layout — construction squares plus
-        /// the dimension plan — for commit-time emission. Like the buffered
-        /// contour edges nothing lands yet; <see cref="KeepOpen"/> emits the
-        /// staged layout AFTER the block instance exists, so the squares can
-        /// constrain to its outer edges (a select-all inside the block step
-        /// would swallow anything drawn earlier into the definition).
+        /// Stages the model's construction squares — QR square and keep-out
+        /// square in unit block-definition space — for commit-time emission
+        /// INSIDE the block definition (ADR 0003). Nothing lands yet:
+        /// <see cref="KeepOpen"/> draws them into the same definition fold
+        /// as the contours, flagged construction — they then track the
+        /// instance's Scale and moves with no constraints, dims, or
+        /// equations anywhere.
         /// </summary>
-        public void AddConstructionLayout(
-            IReadOnlyList<QrConstructionSquare> squares, QrDimensionSpec? dimensionSpec)
+        public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
         {
             if (_aborted || _committed)
                 throw new SketchInsertionException("The insertion session is already finished.");
             if (squares != null)
                 _stagedSquares.AddRange(squares);
-            _dimensionSpec = dimensionSpec;
         }
 
         public void KeepOpen()
@@ -1014,8 +686,6 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
             if (_buffered.Count > 0)
                 RealizeAsBlockInstance();
-            if (_dimensionSpec != null)
-                EmitConstructionLayout();
             _committed = true;
             // Live-verified on SW 2023 SP5: the AddToDB recording is refused
             // (FinishRecordingUndoObject2 returns false), so a committed
@@ -1053,15 +723,39 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     e.X2 / scaleDocUnits, e.Y2 / scaleDocUnits));
             }
 
+            // The staged construction squares drawn at the document-unit
+            // size, construction-flagged — the same fold swallows them into
+            // the definition, where they track the instance's transforms.
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                foreach (var e in square.Edges)
+                {
+                    squareIndex++;
+                    if (_host.FailSquareDraw && squareIndex == 1)
+                        throw new SketchInsertionException(
+                            "CreateLine returned no segment while drawing the construction square.");
+                    _sketch.Segments.Add(new FakeLine(
+                        e.Start.X * _doc.MetresPerLengthUnit,
+                        e.Start.Y * _doc.MetresPerLengthUnit,
+                        e.End.X * _doc.MetresPerLengthUnit,
+                        e.End.Y * _doc.MetresPerLengthUnit,
+                        construction: true));
+                }
+            }
+
             if (_host.FailBlockMake)
                 throw new SketchInsertionException(
                     "MakeSketchBlockFromSelected failed to form a block definition.");
 
             // The select-all → MakeSketchBlockFromSelected step: the drawn
             // lines leave the sketch's raw segment list and become the
-            // definition's content; the first instance lands at the origin.
+            // definition's content — solid edges as contours, construction-
+            // flagged edges as the def's construction segments; the first
+            // instance lands at the origin.
             var def = new FakeBlockDefinition("Block" + _doc.NextBlockNumber++);
-            def.Contours.AddRange(_sketch.Segments);
+            def.Contours.AddRange(_sketch.Segments.Where(e => !e.Construction));
+            def.ConstructionEdges.AddRange(_sketch.Segments.Where(e => e.Construction));
             _sketch.Segments.Clear();
             _doc.BlockDefinitions.Add(def);
             var instance = new FakeBlockInstance(def, 0.0, 0.0) { Name = def.Name + "-1" };
@@ -1072,210 +766,6 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                 throw new SketchInsertionException(
                     "The block instance's Scale could not be applied.");
             instance.Scale = scaleDocUnits;
-        }
-
-        /// <summary>
-        /// The construction-layout emission the native adapter performs
-        /// inside the open sketch edit AFTER the block instance exists —
-        /// the model's staged squares + dimension spec become host-sketch
-        /// world state:
-        ///   1. draw the spec's driven square as construction geometry;
-        ///   2. coincident-bind each of its edges to the block instance's
-        ///      outer edges, so a Scale edit drags the square;
-        ///   3. add the driven DisplayDimension — created only while the two
-        ///      dimension-prompt toggles are suppressed (spike: the call
-        ///      hangs an invisible session otherwise), restored after;
-        ///   4. emit the spec's equation-linked square — the keep-out, the
-        ///      working-matrix boundary — centred on the QR square by
-        ///      equation-linked offset dims and sized by an equation-linked
-        ///      side dim.
-        /// The emission walks the spec's roles in order: the driven square
-        /// first (the keep-out's dims reference its dimension), then the
-        /// equation-linked square.
-        /// </summary>
-        private void EmitConstructionLayout()
-        {
-            var spec = _dimensionSpec!;
-            var staged = _stagedSquares.FirstOrDefault(s => s.Role == spec.DrivenSquare);
-            if (staged == null)
-                throw new SketchInsertionException(
-                    "The dimension spec names a construction square that was never staged.");
-            var instance = _sketch.BlockInstances.LastOrDefault();
-
-            // 1. Draw — the square's edges land as construction geometry.
-            if (_host.FailSquareDraw)
-                throw new SketchInsertionException(
-                    "CreateLine returned no segment while drawing the construction square.");
-            var drawn = staged.Edges
-                .Select(e => new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y))
-                .ToList();
-            var square = new FakeConstructionSquare(staged.Role, drawn, instance);
-
-            // 2. Coincident bindings — each edge gets two relations to block
-            //    boundary points (a line pinned at two points tracks rigidly).
-            if (_host.FailSquareConstraint)
-                throw new SketchInsertionException(
-                    "The construction square's edge could not be constrained coincident " +
-                    "to the block's outer edges.");
-            square.CoincidentBindings = drawn.Count * 2;
-            _sketch.ConstructionSquares.Add(square);
-
-            // 3. The driven dimension — the live size readout. Its name is
-            //    the handle the keep-out dims' equations reference.
-            var qrDim = AddGuardedDimensions(square, FakeDimMeasure.SideLength,
-                driven: true, fail: _host.FailDimension);
-
-            // 4. The keep-out square — the equation-linked spec square.
-            var keepStaged = _stagedSquares.FirstOrDefault(s => s.Role == spec.EquationLinkedSquare);
-            if (keepStaged == null)
-                throw new SketchInsertionException(
-                    "The dimension spec names a construction square that was never staged.");
-            EmitKeepOutSquare(staged, keepStaged, square, qrDim);
-        }
-
-        /// <summary>
-        /// The keep-out square emission the native adapter performs after the
-        /// QR square exists: it cannot coincident-bind to the block (it sits
-        /// outside the block's extent), so the emission draws it at the
-        /// staged matrix-boundary position, coincident-merges its corners
-        /// into a connected square, then positions and sizes it entirely by
-        /// equations off the QR square's driven dimension:
-        ///   - two offset dims (one per axis, keep-out edge ↔ QR edge) hold
-        ///     its centre on the QR square's centre;
-        ///   - the side dim carries the footprint equation
-        ///     "side = QR side × (N+8)/(N+2r′)" — the margin stays the fixed
-        ///     cell offset at every Scale (the ticket's "offset dim placed"
-        ///     is KEPT equation-linked: deleting it would free the position
-        ///     and let the square drift off-centre on the next rescale).
-        /// </summary>
-        private void EmitKeepOutSquare(
-            QrConstructionSquare qrStaged, QrConstructionSquare keepStaged,
-            FakeConstructionSquare qrSquare, FakeDisplayDimension qrDim)
-        {
-            // 1. Draw — construction edges at the staged matrix boundary.
-            if (_host.FailKeepOutDraw)
-                throw new SketchInsertionException(
-                    "CreateLine returned no segment while drawing the keep-out square.");
-            var drawn = keepStaged.Edges
-                .Select(e => new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y))
-                .ToList();
-            var square = new FakeConstructionSquare(keepStaged.Role, drawn, bound: null)
-            {
-                CentredOn = qrSquare,
-            };
-
-            // 2. Corner coincident merges + orientation + equal relations —
-            //    the connected axis-aligned square the dims fully define.
-            if (_host.FailKeepOutConstraint)
-                throw new SketchInsertionException(
-                    "The keep-out square's geometry could not be constrained.");
-            square.CoincidentBindings = drawn.Count;   // one coincident per corner
-            _sketch.ConstructionSquares.Add(square);
-
-            // 3. Side dim + per-axis offset dims — all equation-linked to the
-            //    QR square's dim — inside the same prompt-toggle guard.
-            var prevInput = _host.InputDimValOnCreate;
-            var prevOverdef = _host.OverdefiningDimsPromptToSetState;
-            try
-            {
-                _host.InputDimValOnCreate = false;
-                _host.OverdefiningDimsPromptToSetState = false;
-                if (_host.FailKeepOutDimension)
-                    throw new SketchInsertionException(
-                        "IAddDimension2 returned no dimension for the keep-out square.");
-                var sideDim = NewDimension(square, FakeDimMeasure.SideLength, driven: false);
-                var gapX = NewDimension(square, FakeDimMeasure.OffsetGap, driven: false);
-                var gapY = NewDimension(square, FakeDimMeasure.OffsetGap, driven: false);
-
-                // 4. The equations — the side is the QR side × the cell-count
-                //    ratio, so the quiet-zone offset stays fixed in CELLS at
-                //    every Scale (the pitch rescales with the block); the
-                //    gaps split the margin evenly to keep the square centred.
-                if (_host.FailEquation)
-                    throw new SketchInsertionException(
-                        "The equation manager refused the keep-out dimension links.");
-                double qrSide = SideOf(qrStaged);
-                double keepSide = SideOf(keepStaged);
-                double ratio = keepSide / qrSide;          // (N+8) / (N+2r′)
-                LinkEquation(sideDim, qrDim, ratio);
-                LinkEquation(gapX, qrDim, (ratio - 1.0) / 2.0);
-                LinkEquation(gapY, qrDim, (ratio - 1.0) / 2.0);
-                square.SizedBy = sideDim;
-            }
-            finally
-            {
-                _host.InputDimValOnCreate = prevInput;
-                _host.OverdefiningDimsPromptToSetState = prevOverdef;
-            }
-        }
-
-        /// <summary>
-        /// One dimension inside the prompt-toggle guard the native adapter
-        /// holds around every IAddDimension2 — both app-level dimension
-        /// prompts forced off for exactly the creation, restored after even
-        /// on failure.
-        /// </summary>
-        private FakeDisplayDimension AddGuardedDimensions(
-            FakeConstructionSquare target, FakeDimMeasure measure, bool driven, bool fail)
-        {
-            var prevInput = _host.InputDimValOnCreate;
-            var prevOverdef = _host.OverdefiningDimsPromptToSetState;
-            try
-            {
-                _host.InputDimValOnCreate = false;
-                _host.OverdefiningDimsPromptToSetState = false;
-                if (fail)
-                    throw new SketchInsertionException(
-                        "IAddDimension2 returned no dimension for the construction square.");
-                return NewDimension(target, measure, driven);
-            }
-            finally
-            {
-                _host.InputDimValOnCreate = prevInput;
-                _host.OverdefiningDimsPromptToSetState = prevOverdef;
-            }
-        }
-
-        /// <summary>
-        /// Records a new display dimension on the sketch — named D(n)@sketch
-        /// in creation order, like the host names them — with the current
-        /// prompt-suppression state captured.
-        /// </summary>
-        private FakeDisplayDimension NewDimension(
-            FakeConstructionSquare target, FakeDimMeasure measure, bool driven)
-        {
-            var dim = new FakeDisplayDimension(target, _doc)
-            {
-                Name = $"D{_sketch.Dimensions.Count + 1}@{_sketch.Name}",
-                IsDriven = driven,
-                Measures = measure,
-                PromptsSuppressedAtCreation =
-                    !_host.InputDimValOnCreate && !_host.OverdefiningDimsPromptToSetState,
-            };
-            _sketch.Dimensions.Add(dim);
-            return dim;
-        }
-
-        /// <summary>
-        /// Wires one equation link: the dim's recorded text (as IEquationMgr
-        /// would hold it — "D2@Sketch" = "D1@Sketch" * multiplier) plus the
-        /// live evaluation link that makes its value track the source dim.
-        /// </summary>
-        private void LinkEquation(
-            FakeDisplayDimension dim, FakeDisplayDimension source, double multiplier)
-        {
-            dim.EquationSource = source;
-            dim.EquationMultiplier = multiplier;
-            dim.Equation = string.Format(
-                CultureInfo.InvariantCulture,
-                "\"{0}\" = \"{1}\" * {2:R}", dim.Name, source.Name, multiplier);
-            _doc.Equations.Add(dim.Equation);
-        }
-
-        /// <summary>A staged square's side length in sketch-space metres.</summary>
-        private static double SideOf(QrConstructionSquare square)
-        {
-            return square.Vertices.Max(v => v.X) - square.Vertices.Min(v => v.X);
         }
 
         /// <summary>The staged outline span (max of the x/y extents), metres.</summary>

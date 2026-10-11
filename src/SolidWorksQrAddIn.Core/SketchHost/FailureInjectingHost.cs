@@ -78,10 +78,8 @@ namespace SolidWorksQrAddIn.Core.Hosting
                 _inner.AddLine(x1, y1, x2, y2);
             }
 
-            public void AddConstructionLayout(
-                IReadOnlyList<QrConstructionSquare> squares,
-                QrDimensionSpec? dimensionSpec) =>
-                _inner.AddConstructionLayout(squares, dimensionSpec);
+            public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares) =>
+                _inner.AddConstructionSquares(squares);
 
             public void KeepOpen() => _inner.KeepOpen();
 

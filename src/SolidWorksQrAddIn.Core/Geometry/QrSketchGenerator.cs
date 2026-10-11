@@ -31,10 +31,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      endpoints stay bit-identical — centred on the origin, matrix row 0
     ///      at +y so the QR is upright rather than mirrored.
     ///
-    /// The result carries the sized contour set PLUS (ADR 0001/0002): the
+    /// The result carries the sized contour set PLUS (ADR 0001/0002/0003): the
     /// same contours unit-proportioned (grown outline = 1×1, the block-
-    /// definition space), the QR square and keep-out square as construction
-    /// geometry, and the dimension spec linking them.
+    /// definition space) and the QR square and keep-out square as unit-space
+    /// construction geometry that folds into the block definition.
     ///
     /// Contains no SolidWorks objects.
     /// </summary>
@@ -281,26 +281,27 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount);
 
-            // ---------- construction squares + dimension spec ----------
-            // The squares live in the HOST sketch (ADR 0001) at real sketch
-            // size: the QR square bounds the grown QR-cell extent (S per
-            // side); the keep-out square IS the working-matrix boundary
-            // (M·p per side — ADR 0002, not "4 cells outside the QR square").
-            double qrHalf = sizeMm / 2000.0;
-            double keepOutHalf = m * u * mPerUnit / 2.0;
+            // ---------- construction squares (unit block-definition space) ----------
+            // The squares live INSIDE the block definition as construction
+            // geometry (ADR 0003): they scale and move with the instance, so
+            // the footprint and the four-cell quiet zone track live — the
+            // host-square + dimension/equation machinery of rounds 2–3 is
+            // abandoned (BLOCK-GATES.md: no public route can bind host
+            // geometry to instance-projected edges or read instance Scale).
+            // Coordinates are the same unit space as `Unit`: the QR square
+            // bounds the grown outline — literally ±0.5 — and the keep-out
+            // square is the working-matrix boundary M·u/(N·u+2g) of that
+            // span (ADR 0002, not "4 cells outside the QR square").
+            double keepOutHalf = 0.5 * m * u / grownUnits;
             var squares = new List<QrConstructionSquare>(2)
             {
-                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(qrHalf)),
+                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(0.5)),
                 new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(keepOutHalf)),
             };
-            // keep-out side − QR-square side = M·p − (N + 2r′)·p = (8 − 2r′)·p.
-            double keepOutOffsetCells =
-                2.0 * (QrSketchInfo.QuietZoneCellsPerSide - (double)g / u);
-            var dimensionSpec = new QrDimensionSpec(keepOutOffsetCells);
 
             return QrSketchResult.Ok(new QrSketch(
                 regions, contours, new QrContourSet(unitRegions, unitContours),
-                squares, dimensionSpec, info));
+                squares, info));
         }
 
         private static SketchPoint2[] SquareVertices(double half) =>

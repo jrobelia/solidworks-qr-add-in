@@ -107,9 +107,12 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(doc.RedoLastStep());         // the same handler toggles back
             Assert.Contains(qrSketch, doc.Sketches);
-            // Redo restores the sketch whole — block instance and contours.
+            // Redo restores the sketch whole — block instance, contours, and
+            // the construction squares inside its definition.
             Assert.Equal(Expected.Info.SegmentCount,
-                qrSketch.EffectiveSegments.Count());
+                qrSketch.ProfileSegments.Count());
+            Assert.Equal(8, qrSketch.BlockInstances.Single()
+                .Definition.ConstructionEdges.Count);
             // ... with the block instance back at the same scale — the live
             // round-1 failure was the rebuild dying inside
             // MakeSketchBlockFromSelected, leaving no instance at all.
@@ -143,27 +146,23 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Undo_removes_the_created_sketchs_equations_so_the_next_create_succeeds()
+        public void Undo_removes_the_created_sketch_so_the_next_create_succeeds()
         {
             var host = HostWithSelectedPlane();
             var doc = host.Document!;
             var userSketch = PriorUserSketch(doc);
             Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
-            Assert.NotEmpty(doc.Equations);   // the keep-out dimension links landed
 
             doc.ActiveSketch = null;
             Assert.True(doc.UndoLastStep());
-
-            // The deleted sketch's dimension names dangle in the equation
-            // manager — left there, the next create's Add2(solve) is refused
-            // (live gate round 1). The undo step owns removing them.
-            Assert.Empty(doc.Equations);
             Assert.Contains(userSketch, doc.Sketches);
+            Assert.Single(doc.Sketches);
 
-            // And the next creation's equations land unimpeded.
+            // A create following the undo lands cleanly — the removed sketch
+            // left nothing behind to impede it.
             var second = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
             Assert.True(second.Succeeded, second.Message);
-            Assert.Equal(3, doc.Equations.Count);
+            Assert.Equal(2, doc.Sketches.Count);
         }
 
         [Fact]

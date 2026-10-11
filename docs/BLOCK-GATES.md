@@ -1,6 +1,87 @@
 # Spec 10 — live block-instance gate results
 
 
+## Round 4 — construction geometry INSIDE the block definition (ADR 0003)
+
+Harness: `tools/LiveProbe` mode `consexp` against **SolidWorks 2023 SP5
+(revision 31.5.0)**, spawned session-free (invisible, killed after the
+run). Fixture: a ±0.5-doc-unit solid square plus a ±0.7-doc-unit
+construction-flagged square folded into ONE block definition — the same
+shape the product now emits (unit contours + unit squares).
+
+**Verdict: ALL CHECKS PASSED** — the deciding fact for the round-4 design.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| fixture drew 4 solid + 4 construction segments | PASS | `solid=4 cons=4 flagged=4` |
+| block formed with the construction square inside | PASS | 1 definition, 1 instance |
+| def holds 8 segments — exactly 4 construction | PASS | `segs=8 construction=4` |
+| def construction square is larger than the solid | PASS | `consLen=1.400mm solidLen=1.000mm ratio=1.400` |
+| **construction geometry inside the def RENDERS on the instance** | **PASS** | at Scale=100: picks hit x=52/58/65/70 mm, miss at 74/80/95 mm — solid content ends at ±50 mm, only the construction square renders to ±70 mm |
+| Scale edit rescales the def-internal square | PASS | at Scale=40: hits at 24/28 mm, miss at 32/45/70 mm → extent shrank to ±28 mm |
+| drag carries the def-internal square | PASS | `InstancePosition(10,-5)` → pick hits the displaced edge at (38,-5) mm |
+| explode executes + yields all 8 def segments | PASS | `raw=8` |
+| exploded construction lines KEEP the flag | PASS | `flagged=4 of 8` |
+| exploded cons square lands at the projected extent | PASS | half ≈ 17.5 mm at Scale=25 (±0.7 def-units × 25) |
+| construction content never feeds a profile | PASS | `GetSketchRegionCount` unchanged through explode |
+
+### Frame caveat (harness, not product)
+
+The def sketch reports segment endpoints in an **offset frame** (observed
+at the def bbox's bottom-centre), so def-content verification reads
+segment **lengths** and rendered **extents** — never raw coordinates. The
+coordinate picks also return a fixed proxy edge (round-2 finding), so
+hit-testing extents — not proxy identity — is the render proof.
+
+### Consequences folded into the product
+
+- `SwSketchInsertion` draws the staged unit-space squares
+  construction-flagged into the definition fold before
+  `MakeSketchBlockFromSelected` — the same `Select4` selection as the
+  contours. Host-side squares, coincident binds, display dims, and
+  equations are gone.
+- `blockqr` gates rewritten for the new world: def seg census + flags,
+  rendered-extent pick scans for render/scale/drag tracking, zero dims /
+  zero equations checks, explode flag preservation.
+
+### `blockqr` product gates — 2026-10-12 run (route A, in-proc pane path)
+
+Verdict: **54 PASS / 1 FAIL** — the single fail is the long-standing
+`EditUndo2`-from-the-harness gate (rounds 1–2 same); the custom undo
+object itself verified below.
+
+| Gate group | Result | Evidence |
+|---|---|---|
+| one block instance, Scale=25, at origin | PASS | `Scale=25.0000` `inst=(0,0)` |
+| host sketch carries NO enumerable segments | PASS | `hostSegs=0` |
+| def folds contours + 8 construction segs | PASS | `defSegs=260 construction=8` (252+8) |
+| construction segs = unit QR + unit keep-out squares | PASS | `short=4/4 long=4/4 lens=[4×1.000, 4×1.377]mm` |
+| no display dims / no equations | PASS | `dims=0 eqs=0` |
+| construction geometry renders to the keep-out edge | PASS | picks hit 13/15/17 mm, miss 19/22 mm |
+| drag carries the keep-out square | PASS | `InstancePosition(10,-5)` → hit at (27,-5) mm |
+| Scale=40 resizes the squares | PASS | hits 21/25/27 mm, miss 30 mm (new keep-out ±27.5 mm) |
+| extrude on the block-bearing sketch | PASS | `ISketchRegion.Select` → `Boss-Extrude` |
+| explode: instance gone, 252 raw + 8 flagged cons | PASS | `raw=252 cons=8 of 260`, extrude on exploded works |
+| named undo step via harness `EditUndo2` | **FAIL** | `DeleteSelection2 failed for 'Sketch2'` — the same post-explode-context fail as rounds 1–2; see `undoapi` below |
+| prior user work survives undo presses | PASS | marker sketch intact |
+| equation manager stays empty | PASS | `eqCount=0` — no litter to dangle |
+| supports: planar face, Top Plane 90° | PASS | 1 instance at origin, `hostSegs=0`, `defCons=8`, def squares centred on def content |
+
+### `undoapi` — 2026-10-12 run (in-proc, new build)
+
+**ALL PASSED**: `removed=True restored=True userIntact=True` —
+EditUndo removes exactly the QR sketch through the custom
+`SetApiUndoObject` handler, a further undo re-fires the toggle and
+reinserts the sketch with its def-internal squares, and the pre-existing
+user sketch survives everything. The blockqr `EditUndo2` fail is a
+harness-context artifact (out-of-proc presses after the explode gate),
+not a product defect — the handler's `DoUndo` fires and logs the delete
+attempt.
+
+Unit tests at the time of the run: **301 passed**.
+
+
+
 ## Round 2 — 2026-10-11 (ticket #19, round 2)
 
 Harness: `tools/LiveProbe` modes `blockqr` + `undoapi` + `bindexp` against

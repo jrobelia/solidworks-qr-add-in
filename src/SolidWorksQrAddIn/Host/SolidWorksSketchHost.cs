@@ -114,7 +114,7 @@ namespace SolidWorksQrAddIn.Host
             var doc = _sw.IActiveDoc2 as IModelDoc2
                 ?? throw new SketchHostException("No active document.");
             var insertion = BeginOnSelectedSupport(
-                doc, _sw, recordUndo: true, math: MathUtilityOrNull(), capturedSupport: out var support);
+                doc, recordUndo: true, math: MathUtilityOrNull(), capturedSupport: out var support);
             // The undo-step plumbing the command calls next binds to THIS
             // begin's context — the doc, the sketch feature it created, and
             // the support a redo would reselect.
@@ -158,7 +158,7 @@ namespace SolidWorksQrAddIn.Host
                 var handler = new QrSketchUndoObject();
                 handler.Initialize(
                     pending.Doc, pending.Sketch, pending.Support,
-                    registration, MathUtilityOrNull(), _sw);
+                    registration, MathUtilityOrNull());
                 if (ext.SetApiUndoObject(handler, registration.UndoName))
                     QrSketchUndoRegistry.Keep(handler);
                 else
@@ -196,7 +196,7 @@ namespace SolidWorksQrAddIn.Host
         }
 
         internal static SwSketchInsertion BeginOnSelectedSupport(
-            IModelDoc2 doc, ISldWorks? sw, bool recordUndo, IMathUtility? math,
+            IModelDoc2 doc, bool recordUndo, IMathUtility? math,
             out object? capturedSupport)
         {
             var mgr = doc.SketchManager as ISketchManager
@@ -263,7 +263,7 @@ namespace SolidWorksQrAddIn.Host
                 try
                 {
                     return new SwSketchInsertion(
-                        doc, sw, mgr, sketchFeature, ext, math, recording, previousFlags);
+                        doc, mgr, sketchFeature, ext, math, recording, previousFlags);
                 }
                 catch (Exception ex)
                 {

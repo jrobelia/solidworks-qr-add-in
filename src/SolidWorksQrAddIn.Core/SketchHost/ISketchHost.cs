@@ -140,9 +140,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
     ///    instance whose Scale reads the staged span in document units —
     ///    spec #10 — so nothing lands as raw segments until
     ///    <see cref="KeepOpen"/>).
-    ///  - <see cref="AddConstructionLayout"/> STAGES the construction squares
-    ///    + dimension plan the same way — realized at commit after the
-    ///    contour content so the squares can constrain to it.
+    ///  - <see cref="AddConstructionSquares"/> STAGES the definition-internal
+    ///    construction squares the same way — realized at commit INSIDE the
+    ///    block definition, so they scale and move with the instance.
     ///  - <see cref="KeepOpen"/> commits success: the staged geometry is
     ///    realized, the new sketch stays open in edit mode and is never
     ///    cleaned up.
@@ -171,20 +171,19 @@ namespace SolidWorksQrAddIn.Core.Hosting
         void AddLine(double x1, double y1, double x2, double y2);
 
         /// <summary>
-        /// Stages the model's construction layout — the construction squares
-        /// plus the dimension plan that links them — for commit-time emission
-        /// into the host sketch. Like <see cref="AddLine"/> this only stages:
-        /// <see cref="KeepOpen"/> emits the layout AFTER the staged contour
-        /// content is realized, so host-sketch geometry that constrains to it
-        /// (the squares coincident to the realized content's outer edges) is
-        /// always drawn last. The session emits the squares the spec names,
-        /// in the spec's order — the driven square's construction edges plus
-        /// its driven dimension first, then the equation-linked keep-out
-        /// square (its dims reference the driven one). A null spec stages
-        /// nothing. Throws <see cref="SketchInsertionException"/> on failure.
+        /// Stages the model's construction squares — the QR square and the
+        /// keep-out square — for commit-time emission INSIDE the block
+        /// definition (ADR 0003). Like <see cref="AddLine"/> this only
+        /// stages: <see cref="KeepOpen"/> draws the squares into the same
+        /// unit-proportioned definition space as the contours, flagged
+        /// construction, BEFORE the selection fold that forms the block —
+        /// so the footprint and the quiet-zone boundary are definition
+        /// content that scales and moves with the instance, with no
+        /// host-side constraints, dimensions, or equations. A null or empty
+        /// list stages nothing. Throws <see cref="SketchInsertionException"/>
+        /// on failure.
         /// </summary>
-        void AddConstructionLayout(
-            IReadOnlyList<QrConstructionSquare> squares, QrDimensionSpec? dimensionSpec);
+        void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares);
 
         void KeepOpen();
 

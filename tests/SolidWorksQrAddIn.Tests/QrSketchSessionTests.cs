@@ -218,7 +218,7 @@ namespace SolidWorksQrAddIn.Tests
             var sketch = host.Document!.Sketches.Single();
             var expected = QrSketchGenerator.Generate(PayloadA,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
-            var effective = sketch.EffectiveSegments.ToList();
+            var effective = sketch.ProfileSegments.ToList();
             Assert.Equal(expected.Info.SegmentCount, effective.Count);
             var expectedEdges = expected.Edges.ToList();
             for (var i = 0; i < expectedEdges.Count; i++)
@@ -245,12 +245,12 @@ namespace SolidWorksQrAddIn.Tests
             var expectedB = QrSketchGenerator.Generate(PayloadB,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
             Assert.Equal(expectedB.Info.SegmentCount,
-                host.Document.Sketches[1].EffectiveSegments.Count());
+                host.Document.Sketches[1].ProfileSegments.Count());
             // The first sketch keeps its own payload's geometry — unchanged.
             var expectedA = QrSketchGenerator.Generate(PayloadA,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
             Assert.Equal(expectedA.Info.SegmentCount,
-                host.Document.Sketches[0].EffectiveSegments.Count());
+                host.Document.Sketches[0].ProfileSegments.Count());
         }
 
         [Fact]

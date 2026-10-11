@@ -72,6 +72,10 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(result.Succeeded, result.Message);
             var def = Assert.Single(host.Document!.BlockDefinitions);
             Assert.Equal(Expected.Info.SegmentCount, def.Contours.Count);
+            // The definition also folds in the two construction squares —
+            // QR square + keep-out square, four edges each (ADR 0003).
+            Assert.Equal(8, def.ConstructionEdges.Count);
+            Assert.All(def.ConstructionEdges, e => Assert.True(e.Construction));
             // One document unit across: ±0.5 mm on an mm document. The def
             // content is the staged geometry ÷ the instance scale — exactly
             // the generator's unit contour set drawn in document units.
@@ -100,8 +104,10 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(result.Succeeded, result.Message);
             var instance = host.Document!.Sketches.Single().BlockInstances.Single();
             // Effective geometry = def × scale — the same contour set the
-            // sized emission produced, in sketch-space metres, ±S/2.
-            var effective = instance.EffectiveEdges.ToList();
+            // sized emission produced, in sketch-space metres, ±S/2. The
+            // construction squares render alongside it (they make
+            // EffectiveEdges longer) — the cuttable pattern is ProfileEdges.
+            var effective = instance.ProfileEdges.ToList();
             var expected = Expected.Edges.ToList();
             Assert.Equal(expected.Count, effective.Count);
             for (var i = 0; i < expected.Count; i++)
@@ -138,7 +144,7 @@ namespace SolidWorksQrAddIn.Tests
                 Assert.Equal(before[i].Y2 * 2.0, after[i].Y2, 12);
             }
             Assert.Equal(50.0 / 2.0 / 1000.0,
-                after.Max(e => System.Math.Max(e.X1, e.X2)), 9);
+                instance.ProfileEdges.Max(e => System.Math.Max(e.X1, e.X2)), 9);
         }
 
         [Fact]
@@ -159,10 +165,9 @@ namespace SolidWorksQrAddIn.Tests
                 .SelectMany(e => new[] { e.X1, e.X2 }).ToList();
             Assert.Equal(0.0254 / 2.0, xs.Max(), 12);
             Assert.Equal(-0.0254 / 2.0, xs.Min(), 12);
-            // And the effective geometry is the same 25 mm pattern.
-            var effective = instance.EffectiveEdges.ToList();
+            // And the effective profile geometry is the same 25 mm pattern.
             Assert.Equal(SizeMm / 2.0 / 1000.0,
-                effective.Max(e => System.Math.Max(e.X1, e.X2)), 9);
+                instance.ProfileEdges.Max(e => System.Math.Max(e.X1, e.X2)), 9);
         }
 
         // ---------- failure / cleanup at the block step ----------
@@ -276,8 +281,10 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(Core.Hosting.SketchHostContract.CreationUndoName, reg.UndoName);
             Assert.Equal(qrSketch.Name, reg.SketchName);
             // The registration still carries the requested geometry — the
-            // staged edges a redo would re-insert through the same session.
+            // staged edges plus the unit-space squares a redo would re-fold
+            // into the definition through the same session.
             Assert.Equal(Expected.Info.SegmentCount, reg.Edges.Count);
+            Assert.Equal(2, reg.ConstructionSquares!.Count);
 
             doc.ActiveSketch = null;
             Assert.True(doc.UndoLastStep());
@@ -306,7 +313,9 @@ namespace SolidWorksQrAddIn.Tests
             var instance = Assert.Single(qrSketch.BlockInstances);
             Assert.Equal(SizeMm, instance.Scale, 9);
             Assert.Equal(Expected.Info.SegmentCount,
-                instance.EffectiveEdges.Count());
+                instance.ProfileEdges.Count());
+            // The construction squares ride back inside the definition too.
+            Assert.Equal(8, instance.Definition.ConstructionEdges.Count);
         }
     }
 }

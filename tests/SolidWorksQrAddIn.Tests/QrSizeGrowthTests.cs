@@ -400,7 +400,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(result.Succeeded, result.Message);
             var expected = QrSketchGenerator.Generate(Payload, 40.0, 0.08).Sketch!;
             var sketch = host.Document!.Sketches.Single();
-            var segs = sketch.EffectiveSegments.ToList();
+            var segs = sketch.ProfileSegments.ToList();
             Assert.Equal(expected.Info.SegmentCount, segs.Count);
             double half = 40.0 / 2.0 / 1000.0;
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
@@ -445,8 +445,8 @@ namespace SolidWorksQrAddIn.Tests
             session.SetContent(Payload);
             Assert.True(session.CreateSketch(host).Succeeded);
             var first = host.Document!.Sketches.Single();
-            int firstSegCount = first.EffectiveSegments.Count();
-            var firstEdges = first.EffectiveSegments
+            int firstSegCount = first.ProfileSegments.Count();
+            var firstEdges = first.ProfileSegments
                 .Select(s => (s.X1, s.Y1, s.X2, s.Y2)).ToList();
             host.Document.ActiveSketch = null; // engineer exits the sketch
 
@@ -454,8 +454,8 @@ namespace SolidWorksQrAddIn.Tests
             session.SetGrowthText("12");
             session.SetContent("DIFFERENT-CONTENT");
 
-            Assert.Equal(firstSegCount, first.EffectiveSegments.Count());
-            Assert.Equal(firstEdges, first.EffectiveSegments
+            Assert.Equal(firstSegCount, first.ProfileSegments.Count());
+            Assert.Equal(firstEdges, first.ProfileSegments
                 .Select(s => (s.X1, s.Y1, s.X2, s.Y2)).ToList());
         }
 
@@ -475,11 +475,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, host.Document.Sketches.Count);
             // Sketch 1 is still the 25 mm request…
             double quarter = 25.0 / 2.0 / 1000.0;
-            var segs1 = host.Document.Sketches[0].EffectiveSegments.ToList();
+            var segs1 = host.Document.Sketches[0].ProfileSegments.ToList();
             Assert.Equal(quarter, segs1.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             // …and sketch 2 spans the new 40 mm.
             double half40 = 40.0 / 2.0 / 1000.0;
-            var segs2 = host.Document.Sketches[1].EffectiveSegments.ToList();
+            var segs2 = host.Document.Sketches[1].ProfileSegments.ToList();
             Assert.Equal(half40, segs2.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             Assert.Equal(segs1.Count, segs2.Count); // same payload, same contours
         }
@@ -500,14 +500,14 @@ namespace SolidWorksQrAddIn.Tests
             double half = 25.0 / 2.0 / 1000.0;
             foreach (var sketch in host.Document!.Sketches)
             {
-                var segs = sketch.EffectiveSegments.ToList();
+                var segs = sketch.ProfileSegments.ToList();
                 Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
                 Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
             }
             // But the geometry is different — 10% growth ≠ 3% growth.
             Assert.NotEqual(
-                host.Document.Sketches[0].EffectiveSegments.Select(s => (s.X1, s.X2)).ToList(),
-                host.Document.Sketches[1].EffectiveSegments.Select(s => (s.X1, s.X2)).ToList());
+                host.Document.Sketches[0].ProfileSegments.Select(s => (s.X1, s.X2)).ToList(),
+                host.Document.Sketches[1].ProfileSegments.Select(s => (s.X1, s.X2)).ToList());
         }
 
         [Fact]
@@ -536,7 +536,7 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             double half = 40.0 / 2.0 / 1000.0;
-            var segs = host.Document!.Sketches.Single().EffectiveSegments.ToList();
+            var segs = host.Document!.Sketches.Single().ProfileSegments.ToList();
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 9);
             Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 9);
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.Y1, s.Y2)), 9);

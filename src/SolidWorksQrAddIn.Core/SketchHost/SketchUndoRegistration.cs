@@ -8,9 +8,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// a committed insertion just produced — the step's display name, the
     /// created sketch feature's name, and the STAGED model: the contour
     /// edges in sketch-space metres at the final size plus the construction
-    /// layout (construction squares + dimension plan). A redo re-stages all
-    /// of it through the same buffered insertion session — block instance,
-    /// squares and dimension included.
+    /// squares in unit block-definition space. A redo re-stages all of it
+    /// through the same buffered insertion session — block instance,
+    /// squares included.
     /// Contains no SolidWorks objects; the host binds it to its own
     /// document/feature references.
     /// </summary>
@@ -18,14 +18,12 @@ namespace SolidWorksQrAddIn.Core.Hosting
     {
         public SketchUndoRegistration(
             string undoName, string sketchName, IReadOnlyList<SketchEdge> edges,
-            IReadOnlyList<QrConstructionSquare>? constructionSquares = null,
-            QrDimensionSpec? dimensionSpec = null)
+            IReadOnlyList<QrConstructionSquare>? constructionSquares = null)
         {
             UndoName = undoName;
             SketchName = sketchName;
             Edges = edges;
             ConstructionSquares = constructionSquares;
-            DimensionSpec = dimensionSpec;
         }
 
         /// <summary>The undo step's display name (SketchHostContract.CreationUndoName).</summary>
@@ -39,12 +37,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         /// <summary>
         /// The construction squares the command staged, or null when the
-        /// creation carried no layout — a redo re-stages them so the square
-        /// and its dimension survive an undo/redo cycle.
+        /// creation carried none — a redo re-stages them inside the block
+        /// definition so the squares survive an undo/redo cycle.
         /// </summary>
         public IReadOnlyList<QrConstructionSquare>? ConstructionSquares { get; }
-
-        /// <summary>The dimension plan staged with the squares, or null.</summary>
-        public QrDimensionSpec? DimensionSpec { get; }
     }
 }

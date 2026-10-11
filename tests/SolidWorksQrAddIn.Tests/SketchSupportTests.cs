@@ -85,7 +85,7 @@ namespace SolidWorksQrAddIn.Tests
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.True(result.Succeeded, result.Message);
-            var segs = host.Document!.Sketches.Single().EffectiveSegments.ToList();
+            var segs = host.Document!.Sketches.Single().ProfileSegments.ToList();
             var expected = Expected.Edges.ToList();
             Assert.Equal(expected.Count, segs.Count);
             for (var i = 0; i < expected.Count; i++)
@@ -108,8 +108,8 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(new CreateQrSketchCommand().Execute(onPlane, Content, SizeMm, Growth).Succeeded);
             Assert.True(new CreateQrSketchCommand().Execute(onFace, Content, SizeMm, Growth).Succeeded);
 
-            var fromPlane = onPlane.Document!.Sketches.Single().EffectiveSegments.ToList();
-            var fromFace = onFace.Document!.Sketches.Single().EffectiveSegments.ToList();
+            var fromPlane = onPlane.Document!.Sketches.Single().ProfileSegments.ToList();
+            var fromFace = onFace.Document!.Sketches.Single().ProfileSegments.ToList();
             Assert.Equal(fromPlane.Count, fromFace.Count);
             for (var i = 0; i < fromPlane.Count; i++)
             {
@@ -132,7 +132,7 @@ namespace SolidWorksQrAddIn.Tests
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.True(result.Succeeded, result.Message);
-            var segs = host.Document!.Sketches.Single().EffectiveSegments.ToList();
+            var segs = host.Document!.Sketches.Single().ProfileSegments.ToList();
             double half = SizeMm / 2.0 / 1000.0;
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 12);
             Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 12);
