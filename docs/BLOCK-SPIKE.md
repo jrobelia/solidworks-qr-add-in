@@ -195,3 +195,31 @@ acceptable UX, the block route buys parametric scaling "for free"; if the
 goal was a *persistent* parametric block the engineer never explodes, it is
 dead and the fallback is the current plain-sketch design (static geometry,
 resize by re-generation).
+
+## UPDATE — engineer's interactive counter-evidence (2026-10-10)
+
+The engineer reproduced the block workflow BY HAND on a real QR sketch:
+selected all QR lines → Make Sketch Block → block instance inside the
+sketch → **extruded the sketch feature successfully — no problem.** The
+spike's "regions don't exist for the feature system" verdict was too broad:
+what fails is every API *selection* route to block-internal contours — but
+extruding THE SKETCH FEATURE (the interactive workflow) works. The
+selection-route failure was a probe artifact, not a capability limit.
+
+The corrected kill test — replicate the exact interactive sequence via API:
+create lines → MakeSketchBlockFromSelected → exit sketch → select the
+sketch FEATURE → FeatureExtrusion3 — is queued for the next session-free
+window (user session was open). Provisional verdict moves toward GO.
+
+Engineer's other observations (consistent with spike findings):
+- Cannot dimension a block instance from outside → the driving dim must
+  live INSIDE the block definition (confirms squares+dim-inside design).
+- Constraints to block geometry DO work (host sketch point coincident to
+  the block origin — matches probe's coincident-to-corner result).
+
+Note: `IAddDimension2` can HANG an invisible session (documented trap) —
+if this spike interacted with a session that became visible mid-run, an
+in-flight hang + spawned-process cleanup could have contributed to a crash.
+The probe guard refuses visible/doc sessions; timing on this box made a
+collision possible in the window between the user's session exiting and
+the spike's own invisible instance starting.
