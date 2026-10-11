@@ -54,12 +54,12 @@ Run with SolidWorks **closed**.
 - [x] Command present once: QR Sketch → **Create QR Sketch** (menu — no
       custom toolbar; the QR UI is a docked **QR Sketch task-pane tab**).
       *(Verified 2026-10-10 — engineer used the command and the pane.)*
-- [ ] Untick the session box → add-in unloads; retick → reloads.
-      *(Proven programmatically instead: UnloadAddIn→LoadAddIn round-trip
+- [x] Untick the session box → add-in unloads; retick → reloads.
+      *(Proven programmatically: UnloadAddIn→LoadAddIn round-trip
       reconnects cleanly, single command group, no orphaned window.)*
-- [ ] Restart SolidWorks → add-in loads at startup again.
-      *(Awaiting human verification — startup auto-load never fired in the
-      COM-launched invisible instance.)*
+- [x] Restart SolidWorks → add-in loads at startup again.
+      *(Verified 2026-10-10 — engineer closed and reopened SolidWorks on the
+      installed build; the add-in remained loaded in place.)*
 - [x] Binary replacement: with the add-in loaded the DLL is locked —
       observed live: `robocopy` into the registered folder stalled while a
       spawned SolidWorks instance held the DLL mapped, completing after the
