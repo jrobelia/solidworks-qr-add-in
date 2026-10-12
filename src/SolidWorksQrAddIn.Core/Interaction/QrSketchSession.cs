@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
+using SolidWorksQrAddIn.Core.Payload;
 using SolidWorksQrAddIn.Core.Preview;
 
 namespace SolidWorksQrAddIn.Core.Interaction
@@ -27,6 +29,25 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      text is the percentage of cell width grown per side. Scaling is
     ///      uniform: growth changes preserve the entered outline size through
     ///      the cell-pitch recalculation p = S/(N + 2r).
+    ///
+    ///      The content type (spec #11, ticket #27): <see cref="SetContentType"/>
+    ///      selects a <see cref="PayloadComposer"/> preset — "raw" is the
+    ///      default and is today's single content box unchanged. Other presets
+    ///      expose fields (<see cref="CurrentPreset"/>); every field edit
+    ///      (<see cref="SetPresetField"/>) composes them through
+    ///      <see cref="PayloadComposer.Compose"/> and lands the literal
+    ///      payload in the content box — the same verbatim state a typed
+    ///      edit writes. A field set that cannot compose fails the request
+    ///      with the composer's message on the status line; nothing malformed
+    ///      reaches the generator or the host.
+    ///
+    ///      THE VERBATIM RULE: a manual content edit while a preset is
+    ///      selected is treated exactly like a Raw/typed edit — the content
+    ///      box is authoritative free text, so the type reverts to Raw (the
+    ///      alternative — fields that no longer describe the box — would be
+    ///      a lie the next field edit silently wipes). Entered field values
+    ///      are remembered per preset: re-picking the type restores the
+    ///      fields and recomposes, overwriting the box with their payload.
     ///
     ///   2. Create. <see cref="CreateSketch"/> runs the insertion command with
     ///      the CURRENT inputs against a freshly-captured host state — the
@@ -101,6 +122,17 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private IQrSketchWindow? _window;
         private IQrSketchWindow? _attachedView;
         private string _content = string.Empty;
+        private string _presetId = PayloadComposer.DefaultPresetId;
+        // Entered field values, remembered per preset — switching types and
+        // back restores them. "raw" never appears here: its single "content"
+        // field IS _content, so storing it would duplicate the truth.
+        private readonly Dictionary<string, Dictionary<string, string>> _presetFields =
+            new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        // A pending composition failure — set by the last SetContentType /
+        // SetPresetField that could not produce a payload, cleared by the
+        // next successful compose or any direct content edit. While set the
+        // request is invalid no matter what other fields do.
+        private PayloadComposeError? _composeError;
         private string _sizeText = InitialSizeText;
         private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
@@ -274,11 +306,142 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// Records <paramref name="content"/> verbatim and re-validates the
         /// whole request — current content, size and growth — so the picture
         /// and pending request always reflect the CURRENT inputs.
+        ///
+        /// A direct content edit is exactly a Raw/typed edit (spec #11's
+        /// "editable verbatim" rule): the content box is authoritative free
+        /// text, so the content type reverts to Raw and a pending preset-field
+        /// failure drops away. The edited text stays — it is the literal
+        /// payload now.
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
+            _presetId = PayloadComposer.DefaultPresetId;
+            _composeError = null;
             _content = content ?? string.Empty;
             return Regenerate();
+        }
+
+        // ---------------- content type + preset fields ----------------
+
+        /// <summary>
+        /// The selected content-type preset id — <see cref="PayloadComposer.DefaultPresetId"/>
+        /// ("raw") initially and whenever the content box is edited directly.
+        /// </summary>
+        public string ContentPresetId => _presetId;
+
+        /// <summary>
+        /// The selected preset's descriptor — the pane renders
+        /// <see cref="PayloadPresetDescriptor.Fields"/> as its per-preset
+        /// inputs from this, never hard-coding per-preset UI.
+        /// </summary>
+        public PayloadPresetDescriptor CurrentPreset =>
+            FindPreset(_presetId) ?? PayloadComposer.Presets[0];
+
+        /// <summary>
+        /// The selected preset's entered field values, keyed by field
+        /// <see cref="PayloadFieldDescriptor.Key"/> — the pane prefills its
+        /// inputs from this (absent keys take the descriptor's
+        /// <see cref="PayloadFieldDescriptor.DefaultValue"/>). For "raw" the
+        /// map is synthesized: its only field IS the content box.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> PresetFields
+        {
+            get
+            {
+                if (_presetId == PayloadComposer.DefaultPresetId)
+                    return new Dictionary<string, string> { ["content"] = _content };
+                return new Dictionary<string, string>(FieldsFor(_presetId));
+            }
+        }
+
+        /// <summary>
+        /// The pending preset-composition failure — which field is wrong and
+        /// why (<see cref="PayloadComposeError.FieldKey"/> names the bad
+        /// input so the pane can flag it) — or null while the fields compose.
+        /// </summary>
+        public PayloadComposeError? PresetFieldError => _composeError;
+
+        /// <summary>
+        /// Selects the content-type preset and composes immediately from its
+        /// remembered fields (defaults on first pick): a composed payload
+        /// lands in the content box verbatim; a field set that cannot compose
+        /// fails the request with the composer's message — the pane can never
+        /// show fields describing one payload while the box encodes another.
+        /// An unknown id is refused with the composer's UnknownPreset error —
+        /// the current selection stays in force.
+        /// </summary>
+        public QrSketchResult SetContentType(string? presetId)
+        {
+            var preset = FindPreset(presetId);
+            if (preset == null)
+            {
+                // The composer produces the same refusal; only the error is
+                // kept (Compose of an unknown id can never succeed).
+                _composeError = PayloadComposer.Compose(presetId ?? string.Empty, null).Error;
+                return Regenerate();
+            }
+            _presetId = preset.Id;
+            return ComposePreset();
+        }
+
+        /// <summary>
+        /// Records one preset-field edit — keyed by the descriptor's
+        /// <see cref="PayloadFieldDescriptor.Key"/>, the literal text for
+        /// text kinds, the option Value for Choice, "true"/"false" for
+        /// Boolean — then recomposes. A successful compose lands in the
+        /// content box verbatim; a failure names the bad field on the status
+        /// line and the request stays invalid until it is fixed. A key the
+        /// current preset does not declare is refused — a caller bug the
+        /// status line should name, never silently drop.
+        /// </summary>
+        public QrSketchResult SetPresetField(string key, string? value)
+        {
+            var preset = CurrentPreset;
+            if (!preset.Fields.Any(f => f.Key == key))
+            {
+                _composeError = new PayloadComposeError(
+                    PayloadComposeErrorKind.InvalidField, key,
+                    preset.DisplayName + ": '" + (key ?? string.Empty) +
+                    "' is not one of its fields (" +
+                    string.Join(", ", preset.Fields.Select(f => f.Key)) + ").");
+                return Regenerate();
+            }
+            if (_presetId == PayloadComposer.DefaultPresetId)
+                return SetContent(value ?? string.Empty);   // raw's only field IS the content box
+            FieldsFor(_presetId)[key] = value ?? string.Empty;
+            return ComposePreset();
+        }
+
+        /// <summary>
+        /// Composes the current preset's fields. Success lands the literal
+        /// payload in <see cref="_content"/> — written directly, NOT through
+        /// <see cref="SetContent"/>, which is the manual-edit path that
+        /// reverts to Raw — and clears the compose error. Failure keeps the
+        /// error pending (and the box's last text) for <see cref="Regenerate"/>
+        /// to report.
+        /// </summary>
+        private QrSketchResult ComposePreset()
+        {
+            var compose = PayloadComposer.Compose(_presetId, PresetFields);
+            _composeError = compose.Error;
+            if (compose.Succeeded)
+                _content = compose.Content!;
+            return Regenerate();
+        }
+
+        private static PayloadPresetDescriptor? FindPreset(string? presetId) =>
+            PayloadComposer.Presets.FirstOrDefault(
+                p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The remembered field map for a non-raw preset, created on first use.</summary>
+        private Dictionary<string, string> FieldsFor(string presetId)
+        {
+            if (!_presetFields.TryGetValue(presetId, out var fields))
+            {
+                fields = new Dictionary<string, string>();
+                _presetFields[presetId] = fields;
+            }
+            return fields;
         }
 
         /// <summary>
@@ -358,6 +521,17 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 _sizeMm = sizeMm;
                 _growthFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
+            }
+            else if (_composeError != null)
+            {
+                // A pending preset-field failure is a content-level problem:
+                // it wins over generation and nothing malformed reaches the
+                // generator. The numeric fields stay recorded — they are not
+                // what is wrong.
+                _sizeMm = sizeMm;
+                _growthFraction = growthFraction;
+                _current = QrSketchResult.Fail(
+                    QrSketchErrorKind.InvalidPayload, _composeError.Message);
             }
             else
             {

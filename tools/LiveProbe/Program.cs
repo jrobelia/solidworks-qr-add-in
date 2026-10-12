@@ -6378,6 +6378,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string SetQrEccProbe(string level) => Invoke("SetQrEccProbe", level);
             public string SetQrInvertProbe(bool invert) => Invoke("SetQrInvertProbe", invert);
+            public string SetQrContentTypeProbe(string presetId) => Invoke("SetQrContentTypeProbe", presetId);
+            public string SetQrPresetFieldProbe(string key, string value) => Invoke("SetQrPresetFieldProbe", key, value);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
             public string UndoArrangementProbe(int arrangement) => Invoke("UndoArrangementProbe", arrangement);
             public string UndoRedoQrProbe() => Invoke("UndoRedoQrProbe");
