@@ -110,6 +110,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "consexp", StringComparison.OrdinalIgnoreCase))
                 return ConsExpMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "units", StringComparison.OrdinalIgnoreCase))
+                return UnitsMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -266,9 +269,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Check(again.StartsWith("ERROR") && again.Contains("already"),
                         "create blocked while sketch A is being edited", again);
                     Check(((object[])sketchA.GetSketchSegments()).Length == expectedA.Info.SegmentCount,
-            if (args.Length > 0 &&
-                string.Equals(args[0], "units", StringComparison.OrdinalIgnoreCase))
-                return UnitsMain(args.Skip(1).ToArray());
                         "blocked create left the open sketch unchanged");
 
                     mgr.InsertSketch(false); // engineer exits the sketch
@@ -743,6 +743,128 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
         }
 
+        private static int UnitsMain(string[] args)
+        {
+            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
+            {
+                Console.WriteLine("# FATAL: unit verification requires SolidWorks to be closed.");
+                return 1;
+            }
+            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            ISldWorks? sw = null;
+            IDisposable? nativeWatcher = null;
+            QrSketchSession? session = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) return 1;
+                WaitForStartup(sw);
+                if (sw.Visible || sw.GetDocumentCount() > 0)
+                {
+                    Console.WriteLine("# FATAL: refusing to change units in an interactive SolidWorks session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+                var assembly = System.Reflection.Assembly.LoadFrom(Path.Combine(deployDir, "SolidWorksQrAddIn.dll"));
+                var host = (ISketchHost)Activator.CreateInstance(
+                    assembly.GetType("SolidWorksQrAddIn.Host.SolidWorksSketchHost", true)!, new object[] { sw });
+                var watcher = (IHostStateWatcher)Activator.CreateInstance(
+                    assembly.GetType("SolidWorksQrAddIn.Host.SwHostStateWatcher", true)!, new object[] { sw });
+                nativeWatcher = (IDisposable)watcher;
+                session = new QrSketchSession(() => throw new InvalidOperationException("No test window"), () => host, watcher);
+                int changes = 0;
+                watcher.Changed += () =>
+                {
+                    Interlocked.Increment(ref changes);
+                    Console.WriteLine($"# unit event: host={host.CaptureState().LengthUnit.Symbol}, cell={session.CellSizeReadout}");
+                };
+                string template = sw.GetUserPreferenceStringValue((int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                if (doc == null) return 1;
+                doc.SetUserPreferenceIntegerValue((int)swUserPreferenceIntegerValue_e.swUnitSystem,
+                    (int)swUnitSystem_e.swUnitSystem_MMGS);
+                Thread.Sleep(1000);
+                session.SetContent(PayloadA);
+                Check(session.CellSizeReadout.EndsWith(" mm"), "millimetre baseline", session.CellSizeReadout);
+                var paneProbe = TryGetProbe(sw);
+                if (paneProbe == null)
+                {
+                    int loaded = sw.LoadAddIn(Path.Combine(deployDir, "SolidWorksQrAddIn.dll"));
+                    Console.WriteLine($"# LoadAddIn -> {loaded}");
+                    paneProbe = TryGetProbe(sw);
+                }
+                if (paneProbe == null)
+                {
+                    Check(false, "installed add-in probe available",
+                        "Install the current build and pass its registered folder; a different DLL path does not override COM CodeBase.");
+                    return 1;
+                }
+                paneProbe.SetQrContentProbe(PayloadA);
+                string state = paneProbe.WindowStateProbe();
+                Check(state.Contains("viewSizeLabel=QR code size (mm):") && state.Contains("viewCell=1.187 mm"),
+                    "pre-created pane is synchronized without invoking the menu command", state);
+
+                int before = changes;
+                doc.SetUserPreferenceIntegerValue((int)swUserPreferenceIntegerValue_e.swUnitSystem,
+                    (int)swUnitSystem_e.swUnitSystem_IPS);
+                Thread.Sleep(1000);
+                Check(doc.LengthUnit == (int)swLengthUnit_e.swINCHES, "native document changed to inches");
+                Check(changes > before, "native unit change notified the watcher", $"events={changes - before}");
+                Check(session.CellSizeReadout.EndsWith(" in"),
+                    "information refreshes without a field edit or Create", session.CellSizeReadout);
+                Check(Math.Abs(session.RequestedSizeMm!.Value - 25) < 1e-9,
+                    "unit switch preserves the physical QR size", $"sizeMm={session.RequestedSizeMm}");
+                state = paneProbe.WindowStateProbe();
+                Check(state.Contains("viewSizeLabel=QR code size (in):") && state.Contains("viewCell=0.04674 in"),
+                    "rendered pane updates on the native event without Create or a menu command", state);
+                Check(state.Contains("viewSize=0.984251968504"), "rendered input converts its physical size", state);
+
+                before = changes;
+                doc.SetUnits((short)swLengthUnit_e.swMM, 0, 2, 0, false);
+                Thread.Sleep(1000);
+                Check(changes > before && session.CellSizeReadout.EndsWith(" mm"),
+                    "SetUnits also refreshes the information", $"events={changes - before}, cell={session.CellSizeReadout}");
+                before = changes;
+                doc.LengthUnit = (int)swLengthUnit_e.swINCHES;
+                Thread.Sleep(1000);
+                Console.WriteLine($"# API LengthUnit setter: native={doc.LengthUnit}, notifications={changes - before}; " +
+                    "a silent API assignment does not test the interactive UnitsChangeNotify path.");
+
+                var second = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                if (second == null) return 1;
+                second.SetUnits((short)swLengthUnit_e.swMM, 0, 2, 0, false);
+                Thread.Sleep(1000);
+                Check(session.CellSizeReadout.EndsWith(" mm"), "new active document refreshes the information", session.CellSizeReadout);
+                doc.SetUnits((short)swLengthUnit_e.swINCHES, 0, 4, 0, false);
+                Thread.Sleep(1000);
+                Check(session.CellSizeReadout.EndsWith(" mm"), "inactive document does not change the displayed unit", session.CellSizeReadout);
+                sw.ActivateDoc(doc.GetTitle());
+                Thread.Sleep(1000);
+                Check(session.CellSizeReadout.EndsWith(" in"), "switching documents refreshes the information", session.CellSizeReadout);
+                state = paneProbe.WindowStateProbe();
+                Check(state.Contains("viewSizeLabel=QR code size (in):") && state.Contains("viewCell=0.04674 in"),
+                    "rendered pane follows the active document", state);
+                Console.WriteLine(_failures == 0 ? "# UNITS ALL PASSED" : $"# {_failures} unit check(s) failed");
+                return _failures == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex}");
+                return 1;
+            }
+            finally
+            {
+                session?.Release();
+                nativeWatcher?.Dispose();
+                if (_spawnedFresh)
+                {
+                    try { sw?.CloseAllDocuments(true); sw?.ExitApp(); } catch { }
+                }
+            }
+        }
+
         /// <summary>
         /// `LiveProbe.exe undoapi [deployDir] [progId]` — the custom undo
         /// object (SetApiUndoObject) verification through
@@ -899,128 +1021,6 @@ namespace SolidWorksQrAddIn.LiveProbe
         private static string WithSpikeDoc(ISldWorks sw, Func<ISldWorks, IModelDoc2, string> body)
         {
             string template = sw.GetUserPreferenceStringValue(
-        private static int UnitsMain(string[] args)
-        {
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: unit verification requires SolidWorks to be closed.");
-                return 1;
-            }
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            ISldWorks? sw = null;
-            IDisposable? nativeWatcher = null;
-            QrSketchSession? session = null;
-            try
-            {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) return 1;
-                WaitForStartup(sw);
-                if (sw.Visible || sw.GetDocumentCount() > 0)
-                {
-                    Console.WriteLine("# FATAL: refusing to change units in an interactive SolidWorks session.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-                var assembly = System.Reflection.Assembly.LoadFrom(Path.Combine(deployDir, "SolidWorksQrAddIn.dll"));
-                var host = (ISketchHost)Activator.CreateInstance(
-                    assembly.GetType("SolidWorksQrAddIn.Host.SolidWorksSketchHost", true)!, new object[] { sw });
-                var watcher = (IHostStateWatcher)Activator.CreateInstance(
-                    assembly.GetType("SolidWorksQrAddIn.Host.SwHostStateWatcher", true)!, new object[] { sw });
-                nativeWatcher = (IDisposable)watcher;
-                session = new QrSketchSession(() => throw new InvalidOperationException("No test window"), () => host, watcher);
-                int changes = 0;
-                watcher.Changed += () =>
-                {
-                    Interlocked.Increment(ref changes);
-                    Console.WriteLine($"# unit event: host={host.CaptureState().LengthUnit.Symbol}, cell={session.CellSizeReadout}");
-                };
-                string template = sw.GetUserPreferenceStringValue((int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
-                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
-                if (doc == null) return 1;
-                doc.SetUserPreferenceIntegerValue((int)swUserPreferenceIntegerValue_e.swUnitSystem,
-                    (int)swUnitSystem_e.swUnitSystem_MMGS);
-                Thread.Sleep(1000);
-                session.SetContent(PayloadA);
-                Check(session.CellSizeReadout.EndsWith(" mm"), "millimetre baseline", session.CellSizeReadout);
-                var paneProbe = TryGetProbe(sw);
-                if (paneProbe == null)
-                {
-                    int loaded = sw.LoadAddIn(Path.Combine(deployDir, "SolidWorksQrAddIn.dll"));
-                    Console.WriteLine($"# LoadAddIn -> {loaded}");
-                    paneProbe = TryGetProbe(sw);
-                }
-                if (paneProbe == null)
-                {
-                    Check(false, "installed add-in probe available",
-                        "Install the current build and pass its registered folder; a different DLL path does not override COM CodeBase.");
-                    return 1;
-                }
-                paneProbe.SetQrContentProbe(PayloadA);
-                string state = paneProbe.WindowStateProbe();
-                Check(state.Contains("viewSizeLabel=QR code size (mm):") && state.Contains("viewCell=1.187 mm"),
-                    "pre-created pane is synchronized without invoking the menu command", state);
-
-                int before = changes;
-                doc.SetUserPreferenceIntegerValue((int)swUserPreferenceIntegerValue_e.swUnitSystem,
-                    (int)swUnitSystem_e.swUnitSystem_IPS);
-                Thread.Sleep(1000);
-                Check(doc.LengthUnit == (int)swLengthUnit_e.swINCHES, "native document changed to inches");
-                Check(changes > before, "native unit change notified the watcher", $"events={changes - before}");
-                Check(session.CellSizeReadout.EndsWith(" in"),
-                    "information refreshes without a field edit or Create", session.CellSizeReadout);
-                Check(Math.Abs(session.RequestedSizeMm!.Value - 25) < 1e-9,
-                    "unit switch preserves the physical QR size", $"sizeMm={session.RequestedSizeMm}");
-                state = paneProbe.WindowStateProbe();
-                Check(state.Contains("viewSizeLabel=QR code size (in):") && state.Contains("viewCell=0.04674 in"),
-                    "rendered pane updates on the native event without Create or a menu command", state);
-                Check(state.Contains("viewSize=0.984251968504"), "rendered input converts its physical size", state);
-
-                before = changes;
-                doc.SetUnits((short)swLengthUnit_e.swMM, 0, 2, 0, false);
-                Thread.Sleep(1000);
-                Check(changes > before && session.CellSizeReadout.EndsWith(" mm"),
-                    "SetUnits also refreshes the information", $"events={changes - before}, cell={session.CellSizeReadout}");
-                before = changes;
-                doc.LengthUnit = (int)swLengthUnit_e.swINCHES;
-                Thread.Sleep(1000);
-                Console.WriteLine($"# API LengthUnit setter: native={doc.LengthUnit}, notifications={changes - before}; " +
-                    "a silent API assignment does not test the interactive UnitsChangeNotify path.");
-
-                var second = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
-                if (second == null) return 1;
-                second.SetUnits((short)swLengthUnit_e.swMM, 0, 2, 0, false);
-                Thread.Sleep(1000);
-                Check(session.CellSizeReadout.EndsWith(" mm"), "new active document refreshes the information", session.CellSizeReadout);
-                doc.SetUnits((short)swLengthUnit_e.swINCHES, 0, 4, 0, false);
-                Thread.Sleep(1000);
-                Check(session.CellSizeReadout.EndsWith(" mm"), "inactive document does not change the displayed unit", session.CellSizeReadout);
-                sw.ActivateDoc(doc.GetTitle());
-                Thread.Sleep(1000);
-                Check(session.CellSizeReadout.EndsWith(" in"), "switching documents refreshes the information", session.CellSizeReadout);
-                state = paneProbe.WindowStateProbe();
-                Check(state.Contains("viewSizeLabel=QR code size (in):") && state.Contains("viewCell=0.04674 in"),
-                    "rendered pane follows the active document", state);
-                Console.WriteLine(_failures == 0 ? "# UNITS ALL PASSED" : $"# {_failures} unit check(s) failed");
-                return _failures == 0 ? 0 : 1;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"# FATAL: {ex}");
-                return 1;
-            }
-            finally
-            {
-                session?.Release();
-                nativeWatcher?.Dispose();
-                if (_spawnedFresh)
-                {
-                    try { sw?.CloseAllDocuments(true); sw?.ExitApp(); } catch { }
-                }
-            }
-        }
-
                 (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
             if (string.IsNullOrEmpty(template))
                 return "no-template";

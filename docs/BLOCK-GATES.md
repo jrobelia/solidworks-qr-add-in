@@ -1,5 +1,20 @@
 # Spec 10 — live block-instance gate results
 
+## UI/document-unit follow-up — fa5d951
+
+**Accepted build:** `SolidWorksQrAddIn-fa5d951-Setup.exe`.
+**Manual evidence:** the engineer approved the UI/unit update and reported
+"manual qa passes" after installing the updated build.
+
+The accepted scope is the document-unit size label/input and information
+refresh, physical-size-preserving unit conversion, single-unit dimensions,
+and QR code / quiet zone / overall size wording. Headless Release tests:
+**318 passed, 0 failed**.
+
+This closes the UI follow-up's manual verification item. It does not claim
+that the automated `units` mode was rerun successfully or close the separate
+round-5 block-instance gates below.
+
 
 ## Round 5 — real-size definition, Scale as factor (ADR 0004)
 
