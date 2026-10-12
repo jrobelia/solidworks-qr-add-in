@@ -80,6 +80,19 @@ attempt.
 
 Unit tests at the time of the run: **301 passed**.
 
+### Re-verify after the code-review fixes — 2026-10-11 (commit `1770aaf`)
+
+`blockqr` re-run on the post-review build (authoritative `StagedSpan` scale,
+honest construction-flag propagation, sized-metre square staging):
+**54 PASS / 1 FAIL — identical to the baseline, no regression.** Def census
+`260 segs / 8 construction`, `Scale=25.0000`, squares render/track drag and
+`Scale=40`, explode `252 raw + 8 construction`, `ISketchRegion.Select`
+extrudes block-bearing and exploded sketches, face/datum supports centred,
+`dims=0 eqs=0`. The 1 FAIL is the same `EditUndo2`-from-harness flake —
+this run surfaced as "sketch survived 40 presses" rather than the earlier
+`DeleteSelection2 failed` text; `undoapi` remains the authoritative
+undo check (ALL PASSED). Unit tests: **303 passed**.
+
 
 
 ## Round 2 — 2026-10-11 (ticket #19, round 2)
