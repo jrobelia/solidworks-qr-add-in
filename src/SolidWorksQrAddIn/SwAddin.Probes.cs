@@ -147,24 +147,17 @@ namespace SolidWorksQrAddIn
 
         /// <summary>
         /// The pane's error-correction selector, probed: parse the picked
-        /// level and apply it through the session setter like every other
-        /// field probe. An unrecognised level never reaches the session.
+        /// level through <see cref="QrEccLevels"/> and apply it through the
+        /// session setter like every other field probe. An unrecognised
+        /// level never reaches the session.
         /// </summary>
         public string SetQrEccProbe(string level)
         {
             var session = ReadySession;
             if (session == null)
                 return NotConnectedError;
-            QRCodeGenerator.ECCLevel ecc;
-            switch ((level ?? string.Empty).Trim().ToUpperInvariant())
-            {
-                case "L": ecc = QRCodeGenerator.ECCLevel.L; break;
-                case "M": ecc = QRCodeGenerator.ECCLevel.M; break;
-                case "Q": ecc = QRCodeGenerator.ECCLevel.Q; break;
-                case "H": ecc = QRCodeGenerator.ECCLevel.H; break;
-                default:
-                    return $"ERROR unknown ECC level '{level}' — expected L, M, Q or H.";
-            }
+            if (!QrEccLevels.TryParse(level, out QRCodeGenerator.ECCLevel ecc))
+                return $"ERROR unknown ECC level '{level}' — expected L, M, Q or H.";
             return Describe(session.SetEccLevel(ecc));
         }
 

@@ -4,11 +4,13 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using QRCoder;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
+using SolidWorksQrAddIn.Core.Payload;
 using SolidWorksQrAddIn.Core.Preview;
 using SolidWorksQrAddIn.Core.Registration;
 using SolidWorks.Interop.sldworks;
@@ -113,6 +115,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "units", StringComparison.OrdinalIgnoreCase))
                 return UnitsMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "xsettings", StringComparison.OrdinalIgnoreCase))
+                return XsettingsMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -6282,6 +6287,634 @@ namespace SolidWorksQrAddIn.LiveProbe
         }
 
         // ---------------- plumbing ----------------
+
+        // =====================================================================
+        // `xsettings` — spec-11 extended-settings live gates (ticket #28).
+        //
+        // One create driven through the pane probes at NON-DEFAULT settings —
+        // the WiFi preset's fields composing the literal payload, ECC H,
+        // inverted polarity — verified module-identically on the landed block
+        // instance (definition census + exploded 1:1 contour match), then the
+        // insertion-guard floor on a denser payload at the same settings.
+        // Refuses to run while ANY SolidWorks process exists — an occupied
+        // seat can be an interactive session the probe must never touch.
+        // =====================================================================
+
+        /// <summary>The size ladder the guard-floor phase replays (mm).</summary>
+        private static readonly double[] GuardLadderMm = { 25.0, 40.0, 60.0, 80.0, 120.0, 160.0 };
+
+        private static int XsettingsMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(
+                        System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            const double growth = QrSketchSession.InitialGrowthFractionPerSide;
+            const QRCodeGenerator.ECCLevel gateEcc = QRCodeGenerator.ECCLevel.H;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+            // ---- module-side expectations — every live verdict is computed, never guessed ----
+            var wifiFields = new Dictionary<string, string>
+            {
+                ["ssid"] = "GATE-NET-28",
+                ["security"] = "wpa",
+                ["password"] = "probe-pass-28",
+                ["hidden"] = "true",
+            };
+            var compose = PayloadComposer.Compose("wifi", wifiFields);
+            if (!compose.Succeeded)
+            {
+                Console.WriteLine("# FATAL: module cannot compose the WiFi gate fields: " +
+                    compose.Error!.Message);
+                return 1;
+            }
+            string wifiContent = compose.Content!;
+            Console.WriteLine($"# spec-11 live gates — WiFi fields -> '{wifiContent}'");
+
+            // The interim payload while the 'hidden' field is still at its
+            // default — the probes see this content between the field edits.
+            string interimContent = PayloadComposer.Compose("wifi", new Dictionary<string, string>
+            {
+                ["ssid"] = wifiFields["ssid"],
+                ["security"] = wifiFields["security"],
+                ["password"] = wifiFields["password"],
+            }).Content!;
+            Console.WriteLine($"#   interim (hidden default) -> '{interimContent}'");
+
+            if (!SmallestAccepted(wifiContent, gateEcc, invert: true, growth,
+                    out double gateSizeMm, out var gateSketch))
+            {
+                Console.WriteLine("# FATAL: WiFi @ H+invert clears the guard at no tried size");
+                return 1;
+            }
+            var expectedGate = gateSketch!;
+            var interim25 = Verdict(interimContent, QrSketchSession.InitialSizeMm,
+                growth, QRCodeGenerator.ECCLevel.M, invert: false);
+            var interimGate = Verdict(interimContent, gateSizeMm,
+                growth, QRCodeGenerator.ECCLevel.M, invert: false);
+            var fullAtM = Verdict(wifiContent, gateSizeMm,
+                growth, QRCodeGenerator.ECCLevel.M, invert: false);
+            Console.WriteLine($"# gate request: {gateSizeMm}mm ECC=H invert=true " +
+                $"N={expectedGate.Info.CellCount} M={expectedGate.Info.MatrixCellCount} " +
+                $"contours={expectedGate.Info.ContourCount} segs={expectedGate.Info.SegmentCount} " +
+                $"keepOut={expectedGate.Info.MatrixCellCount * expectedGate.Info.PitchMm:F3}mm " +
+                $"minEdge={expectedGate.Info.MinEdgeMm:F4}mm minGap={expectedGate.Info.MinLightGapMm:F4}mm");
+            Console.WriteLine($"# interim verdicts: interim@M/25mm -> {VerdictName(interim25)}; " +
+                $"interim@M/{gateSizeMm}mm -> {VerdictName(interimGate)}; " +
+                $"wifi@M/{gateSizeMm}mm -> {VerdictName(fullAtM)}");
+
+            string sigInv = QrPictureRenderer.Render(expectedGate,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+            var normalGate = Verdict(wifiContent, gateSizeMm, growth, gateEcc, invert: false);
+            string sigNorm = normalGate.Succeeded
+                ? QrPictureRenderer.Render(normalGate.Sketch!,
+                    QrSketchSession.PreviewPixelsAcross).Signature()
+                : "(no-normal-picture)";
+
+            // ---- the denser payload: refused below the floor, accepted above it ----
+            string denseContent = "";
+            double denseRefused = 0, denseAccepted = 0;
+            QrSketch? denseSketch = null;
+            string refusedKind = "";
+            foreach (var (tag, content) in PerfPayloads.Where(p => p.tag != "short"))
+            {
+                var rungs = RungVerdicts(content, gateEcc, invert: true, growth);
+                Console.WriteLine($"# rung table '{tag}' ({content.Length} chars @H+invert): " +
+                    string.Join(" ", rungs.Select(r => $"{r.size:g}mm:{VerdictName(r.result)}")));
+                var refused = rungs.Where(r => !r.result.Succeeded).Select(r => r.size).ToList();
+                var accepted = rungs.Where(r => r.result.Succeeded).ToList();
+                double smallestOk = accepted.Count > 0 ? accepted.Min(r => r.size) : 0;
+                if (refused.Count > 0 && accepted.Count > 0 && refused.Max() < smallestOk &&
+                    rungs.Any(r => !r.result.Succeeded &&
+                        r.result.Error!.Kind == QrSketchErrorKind.BelowInsertionLimit))
+                {
+                    denseContent = content;
+                    denseRefused = refused.Max();
+                    denseAccepted = smallestOk;
+                    denseSketch = accepted.First(r => r.size == smallestOk).result.Sketch;
+                    refusedKind = rungs.First(r => r.size == denseRefused)
+                        .result.Error!.Kind.ToString();
+                    break;
+                }
+            }
+            if (denseSketch == null)
+            {
+                Console.WriteLine("# FATAL: no perf payload offers a refused + accepted rung — " +
+                    "the floor gate cannot be exercised");
+                return 1;
+            }
+            var denseAtGate = Verdict(denseContent, gateSizeMm, growth, gateEcc, invert: true);
+            Console.WriteLine($"# dense payload: refused <={denseRefused:g}mm ({refusedKind}), " +
+                $"accepted {denseAccepted:g}mm (N={denseSketch.Info.CellCount}); " +
+                $"at gate size -> {VerdictName(denseAtGate)}");
+
+            // The module half is done — an occupied seat still gets the full
+            // expectation printout above before the refusal lands here.
+            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
+            {
+                Console.WriteLine("# FATAL: extended-settings verification requires SolidWorks " +
+                    "closed — a SLDWORKS.exe process is already running. Refusing to attach; " +
+                    "the probe never mutates or kills an occupied seat.");
+                return 1;
+            }
+
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                // ---- the answering build must expose the spec-11 probe surface ----
+                var probe = TryGetProbe(sw);
+                if (!ProbeHasExtendedSettings(probe))
+                {
+                    string local = Path.Combine(
+                        System.Environment.GetFolderPath(
+                            System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    foreach (var p in new[]
+                             {
+                                 dllPath, local,
+                                 @"C:\Program Files\SolidWorks QR Add-In\SolidWorksQrAddIn.dll",
+                             })
+                        try { sw.UnloadAddIn(p); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                }
+                Check(ProbeHasExtendedSettings(probe),
+                    "the answering build exposes the spec-11 probe surface " +
+                    "(preset=/ecc=/invert= in WindowStateProbe)");
+                if (!ProbeHasExtendedSettings(probe)) return 1;
+                Check(probe!.AddinStateProbe().StartsWith("CONNECTED"),
+                    "add-in connected", probe.AddinStateProbe());
+
+                string opened = probe.OpenQrWindowProbe();
+                Check(opened.Contains("open=True") && opened.Contains("windows=1"),
+                    "pane opened through the command entry — the surface the gate drives", opened);
+                string fresh = probe.WindowStateProbe();
+                Check(fresh.Contains("preset=raw") && fresh.Contains("ecc=M") &&
+                      fresh.Contains("invert=False"),
+                    "a fresh session starts on default settings (raw / ECC M / dark-on-light)", fresh);
+
+                // ---------- negative plumbing — refusals name the offender ----------
+                string badEcc = probe.SetQrEccProbe("bogus");
+                Check(badEcc.StartsWith("ERROR") && badEcc.Contains("unknown ECC level"),
+                    "an unrecognised ECC level never reaches the session", badEcc);
+                string badType = probe.SetQrContentTypeProbe("bogus");
+                Check(badType.StartsWith("INVALID") && badType.Contains("InvalidPayload"),
+                    "an unknown content-type id is refused as InvalidPayload", badType);
+                Check(probe.WindowStateProbe().Contains("preset=raw"),
+                    "the refused type leaves the current selection in force",
+                    probe.WindowStateProbe());
+                string badField = probe.SetQrPresetFieldProbe("nonesuch", "x");
+                Check(badField.StartsWith("INVALID") && badField.Contains("nonesuch"),
+                    "an undeclared preset field is refused by name", badField);
+
+                // ---------- the WiFi preset driven field by field ----------
+                string pick = probe.SetQrContentTypeProbe("wifi");
+                Check(pick.StartsWith("INVALID") && pick.Contains("InvalidPayload"),
+                    "the WiFi preset opens invalid — required fields cannot compose yet", pick);
+                Check(probe.PreviewSignatureProbe() == "NO-PICTURE",
+                    "no picture while the preset fields cannot compose",
+                    probe.PreviewSignatureProbe());
+                Check(probe.WindowStateProbe().Contains("preset=wifi"),
+                    "preset=wifi selected", probe.WindowStateProbe());
+
+                string s1 = probe.SetQrPresetFieldProbe("ssid", wifiFields["ssid"]);
+                Check(s1.StartsWith("INVALID") && s1.Contains("InvalidPayload"),
+                    "ssid alone still misses the secured-network password", s1);
+                string s2 = probe.SetQrPresetFieldProbe("security", wifiFields["security"]);
+                Check(s2.StartsWith("INVALID") && s2.Contains("InvalidPayload"),
+                    "the security choice alone still misses the password", s2);
+                string s3 = probe.SetQrPresetFieldProbe("password", wifiFields["password"]);
+                Check(ResponseMatchesVerdict(s3, interim25),
+                    "the composed payload is judged at the CURRENT size — " +
+                    $"the live verdict matches the module ({VerdictName(interim25)})", s3);
+
+                string sz = probe.SetQrSizeProbe(gateSizeMm.ToString(inv));
+                Check(ResponseMatchesVerdict(sz, interimGate),
+                    $"size {gateSizeMm:g}mm revalidates the composed payload — " +
+                    $"live verdict matches the module ({VerdictName(interimGate)})", sz);
+                string s4 = probe.SetQrPresetFieldProbe("hidden", wifiFields["hidden"]);
+                Check(ResponseMatchesVerdict(s4, fullAtM),
+                    "the boolean hidden-network field composes too — " +
+                    $"live verdict matches the module ({VerdictName(fullAtM)})", s4);
+
+                // ---------- verbatim rule + remembered fields ----------
+                string manual = probe.SetQrContentProbe(PayloadA);
+                Check(manual.StartsWith("VALID") &&
+                      probe.WindowStateProbe().Contains("preset=raw"),
+                    "a manual content edit reverts the content type to raw",
+                    $"{manual} | {probe.WindowStateProbe()}");
+                string repick = probe.SetQrContentTypeProbe("wifi");
+                Check(ResponseMatchesVerdict(repick, fullAtM),
+                    "re-picking the preset recomposes the REMEMBERED fields — " +
+                    $"the payload survives a raw detour ({VerdictName(fullAtM)})", repick);
+
+                // ---------- the non-default settings land ----------
+                string eccH = probe.SetQrEccProbe("h");   // lowercase — the parser is case-insensitive
+                Check(eccH.StartsWith("VALID") &&
+                      eccH.Contains($"cells={expectedGate.Info.CellCount}"),
+                    "ECC 'h' re-encodes the payload at level H (denser matrix)", eccH);
+                string invOn = probe.SetQrInvertProbe(true);
+                Check(invOn.StartsWith("VALID") &&
+                      invOn.Contains($"contours={expectedGate.Info.ContourCount}"),
+                    "invert=true emits the light cells — the contour census " +
+                    "matches the module's inverted output", invOn);
+
+                string gate = probe.WindowStateProbe();
+                Check(gate.Contains("preset=wifi") && gate.Contains("ecc=H") &&
+                      gate.Contains("invert=True"),
+                    "the session reports the non-default request end-to-end", gate);
+                Check(gate.Contains("viewEcc=H") && gate.Contains("viewInvert=True"),
+                    "the rendered pane controls follow the session's settings (view sync)", gate);
+                string pic = probe.PreviewSignatureProbe();
+                Check(pic.Contains($"sha={sigInv}"),
+                    "the live preview renders exactly the module's inverted+H picture", pic);
+                Check(!pic.Contains($"sha={sigNorm}"),
+                    "the inverted preview differs from the same request at normal polarity",
+                    $"inv={sigInv} norm={sigNorm}");
+
+                // ---------- the spec gate: ONE create at the non-default settings ----------
+                string template = sw.GetUserPreferenceStringValue(
+                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                Check(File.Exists(template), "default part template exists", template);
+                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                Check(doc != null, "gate part document created");
+                if (doc == null) return 1;
+                string sketchName = "";
+                try
+                {
+                    var ext = (IModelDocExtension)doc.Extension;
+                    var mgr = (ISketchManager)doc.SketchManager;
+
+                    doc.ClearSelection2(true);
+                    Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault),
+                        "Front Plane selected for the non-default create");
+                    string cr = probe.CreateQrFromWindowProbe();
+                    Check(cr.StartsWith("OK"),
+                        "the spec-11 gate create succeeds: WiFi payload @ ECC H, inverted", cr);
+                    sketchName = cr.StartsWith("OK") && cr.Split(' ').Length > 1
+                        ? cr.Split(' ')[1] : "";
+                    var sketch = mgr.ActiveSketch as ISketch;
+                    Check(sketch != null, "the created sketch is left open in edit mode");
+                    if (sketch != null)
+                    {
+                        VerifyXsettingsBlock(sketch, expectedGate, "wifi@H+invert");
+                        mgr.InsertSketch(false);
+                        Check(mgr.ActiveSketch == null, "the gate sketch exits edit mode");
+                        // The committed feature is re-entered and exploded —
+                        // the module-identical 1:1 contour check then runs in
+                        // real sketch coordinates (the blockqr explode gate).
+                        VerifyExplodedModuleIdentical(doc, ext, mgr, sketchName,
+                            expectedGate, "wifi@H+invert");
+                    }
+
+                    // ---------- the insertion-guard floor on a denser payload ----------
+                    string dense = probe.SetQrContentProbe(denseContent);
+                    Check(ResponseMatchesVerdict(dense, denseAtGate),
+                        "the dense payload revalidates at the live settings — " +
+                        $"live verdict matches the module ({VerdictName(denseAtGate)})", dense);
+                    Check(probe.WindowStateProbe().Contains("preset=raw"),
+                        "the manual content edit reverted the preset to raw",
+                        probe.WindowStateProbe());
+
+                    // The refused rung first — the floor must say NO before it says YES.
+                    string rsz = probe.SetQrSizeProbe(denseRefused.ToString(inv));
+                    Check(rsz.StartsWith("INVALID") && rsz.Contains(refusedKind),
+                        $"the dense payload reports {refusedKind} at {denseRefused:g}mm — " +
+                        "the live refusal matches the module's rung table", rsz);
+                    int featsBefore = FindSketchFeatureNames(doc).Count;
+                    string refused = probe.CreateQrFromWindowProbe();
+                    Check(refused.StartsWith("ERROR"),
+                        $"create REFUSES the below-floor request at {denseRefused:g}mm", refused);
+                    Check(FindSketchFeatureNames(doc).Count == featsBefore &&
+                          mgr.ActiveSketch == null,
+                        "the refused create touched neither the feature tree " +
+                        "nor the sketch-edit state");
+
+                    string asz = probe.SetQrSizeProbe(denseAccepted.ToString(inv));
+                    Check(asz.StartsWith("VALID") &&
+                          asz.Contains($"cells={denseSketch.Info.CellCount}"),
+                        $"the cleared rung accepts the dense payload ({denseAccepted:g}mm)", asz);
+                    doc.ClearSelection2(true);
+                    Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault),
+                        "Front Plane re-selected for the dense create");
+                    string dc = probe.CreateQrFromWindowProbe();
+                    Check(dc.StartsWith("OK"),
+                        "the denser-payload create lands at the cleared size", dc);
+                    var dsk = mgr.ActiveSketch as ISketch;
+                    if (dsk != null)
+                    {
+                        VerifyXsettingsBlock(dsk, denseSketch, "dense@H+invert");
+                        mgr.InsertSketch(false);
+                        Check(mgr.ActiveSketch == null, "the dense sketch exits edit mode");
+                    }
+                    Check(FindSketchFeatureNames(doc).Count == featsBefore + 1 &&
+                          (sketchName.Length == 0 || FindSketchFeature(doc, sketchName) != null),
+                        "the earlier QR sketch is untouched by the dense create",
+                        $"sketches=[{string.Join(", ", FindSketchFeatureNames(doc))}]");
+
+                    string after = probe.WindowStateProbe();
+                    Check(after.Contains("ecc=H") && after.Contains("invert=True"),
+                        "the non-default settings persist across creates", after);
+                }
+                finally
+                {
+                    try { sw.CloseDoc(doc.GetTitle()); } catch { }
+                }
+
+                try { sw.UnloadAddIn(dllPath); } catch { }
+                Console.WriteLine(_failures == 0
+                    ? "# XSETTINGS ALL CHECKS PASSED"
+                    : $"# {_failures} check(s) failed");
+                return _failures == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// The spec-11 discriminator: only a build carrying the extended-
+        /// settings probes reports preset=/ecc=/invert= in WindowStateProbe.
+        /// A stale registered build either lacks the member (throws) or
+        /// reports a state string without the fields.
+        /// </summary>
+        private static bool ProbeHasExtendedSettings(IAddInProbe? probe)
+        {
+            if (probe == null) { Console.WriteLine("# no add-in object present"); return false; }
+            try
+            {
+                string state = probe.WindowStateProbe();
+                Console.WriteLine($"# discriminator WindowStateProbe -> {state}");
+                return state.Contains("preset=") && state.Contains("ecc=") &&
+                       state.Contains("invert=");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# discriminator WindowStateProbe -> {ex.GetType().Name} " +
+                    "(the answering build predates spec-11)");
+                return false;
+            }
+        }
+
+        /// <summary>The module's verdict on one request — what the live session must answer.</summary>
+        private static QrSketchResult Verdict(
+            string content, double sizeMm, double growthFraction,
+            QRCodeGenerator.ECCLevel ecc, bool invert) =>
+            QrSketchGenerator.Generate(new QrSketchRequest(content, sizeMm, growthFraction)
+            { EccLevel = ecc, Invert = invert });
+
+        /// <summary>One-line form of a verdict, for rung-table dumps and check details.</summary>
+        private static string VerdictName(QrSketchResult result) =>
+            result.Succeeded
+                ? $"VALID cells={result.Sketch!.Info.CellCount}"
+                : $"INVALID {result.Error!.Kind}";
+
+        /// <summary>Does a live probe answer reproduce the module's verdict for the same request?</summary>
+        private static bool ResponseMatchesVerdict(string response, QrSketchResult verdict) =>
+            verdict.Succeeded
+                ? response.StartsWith("VALID") &&
+                  response.Contains($"cells={verdict.Sketch!.Info.CellCount}")
+                : response.StartsWith("INVALID") &&
+                  response.Contains(verdict.Error!.Kind.ToString());
+
+        /// <summary>The module's verdict at every ladder rung — the table the live run replays.</summary>
+        private static List<(double size, QrSketchResult result)> RungVerdicts(
+            string content, QRCodeGenerator.ECCLevel ecc, bool invert, double growth) =>
+            GuardLadderMm.Select(s => (s, Verdict(content, s, growth, ecc, invert))).ToList();
+
+        /// <summary>The smallest ladder rung the module accepts, plus its expected sketch.</summary>
+        private static bool SmallestAccepted(
+            string content, QRCodeGenerator.ECCLevel ecc, bool invert, double growth,
+            out double sizeMm, out QrSketch? sketch)
+        {
+            var ok = RungVerdicts(content, ecc, invert, growth)
+                .FirstOrDefault(r => r.result.Succeeded);
+            sizeMm = ok.size;
+            sketch = ok.result?.Sketch;
+            return sketch != null;
+        }
+
+        /// <summary>A construction square's side length, mm — measured on its module vertices.</summary>
+        private static double SquareSideMm(QrSketch expected, QrSquareRole role)
+        {
+            var sq = expected.ConstructionSquares.FirstOrDefault(s => s.Role == role);
+            if (sq == null || sq.Vertices.Count == 0) return -1;
+            return (sq.Vertices.Max(v => v.X) - sq.Vertices.Min(v => v.X)) * 1000.0;
+        }
+
+        /// <summary>Overall (W,H) span of the module's emitted contour edges, metres.</summary>
+        private static (double W, double H) ModuleEdgesSpan(QrSketch expected)
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            foreach (var e in expected.Edges)
+            {
+                minX = Math.Min(minX, Math.Min(e.Start.X, e.End.X));
+                maxX = Math.Max(maxX, Math.Max(e.Start.X, e.End.X));
+                minY = Math.Min(minY, Math.Min(e.Start.Y, e.End.Y));
+                maxY = Math.Max(maxY, Math.Max(e.Start.Y, e.End.Y));
+            }
+            return (maxX - minX, maxY - minY);
+        }
+
+        /// <summary>
+        /// The block-level census for a spec-11 create. The def sketch reports
+        /// an OFFSET frame (the consexp finding), so the frame-independent
+        /// truths are checked: one instance at Scale 1, no enumerable host
+        /// segments, the def folding the module's edges plus the QR and
+        /// keep-out construction squares at real size, the material span
+        /// matching the module's emitted extent (the POLARITY check — under
+        /// invert the field spans the whole working matrix, distinctly wider
+        /// than the QR square), and a 1:1 edge-length census against the
+        /// module's contour edges.
+        /// </summary>
+        private static void VerifyXsettingsBlock(ISketch sketch, QrSketch expected, string tag)
+        {
+            int instCount = sketch.GetSketchBlockInstanceCount();
+            Check(instCount == 1, $"one block instance carries the QR ({tag})", $"count={instCount}");
+            var inst = instCount > 0
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            Check(inst != null, $"the block instance is readable ({tag})", inst?.Name ?? "null");
+            if (inst == null) return;
+            Check(Math.Abs(inst.Scale - 1.0) < 1e-6,
+                $"instance Scale is 1 — the definition carries the real size ({tag})",
+                $"Scale={inst.Scale:F4} Angle={inst.Angle:F3}");
+            var ipos = inst.InstancePosition?.ArrayData as double[];
+            Check(ipos != null && Math.Abs(ipos[0]) < 1e-9 && Math.Abs(ipos[1]) < 1e-9,
+                $"instance sits at the sketch origin ({tag})",
+                ipos != null ? $"({ipos[0] * 1000:F3},{ipos[1] * 1000:F3}) mm" : "null");
+
+            var hostSegs = SketchLineSpans(sketch);
+            Check(hostSegs.Count == 0,
+                $"the host sketch carries NO enumerable segments — " +
+                $"everything rides the block ({tag})", $"hostSegs={hostSegs.Count}");
+
+            ISketchBlockDefinition? blkDef = null;
+            try { blkDef = inst.Definition as ISketchBlockDefinition; }
+            catch (Exception ex) { Console.WriteLine($"#   Definition threw {ex.GetType().Name}"); }
+            Check(blkDef != null, $"the block definition is reachable ({tag})");
+            var defSketch = blkDef?.GetSketch() as ISketch;
+            var defSegs = defSketch == null ? new List<SegSpan>() : SketchLineSpans(defSketch);
+            var defCons = defSegs.Where(s => s.Construction).ToList();
+            var material = defSegs.Where(s => !s.Construction).ToList();
+            Check(defSegs.Count == expected.Info.SegmentCount + 8 && defCons.Count == 8,
+                $"the def folds the module's contours PLUS the two construction squares ({tag})",
+                $"defSegs={defSegs.Count} construction={defCons.Count} " +
+                $"expected={expected.Info.SegmentCount}+8");
+
+            double qrSide = SquareSideMm(expected, QrSquareRole.QrSquare) / 1000.0;
+            double keepSide = SquareSideMm(expected, QrSquareRole.KeepOutSquare) / 1000.0;
+            var shortCons = defCons.Where(s => Math.Abs(SegLen(s) - qrSide) < 2e-5).ToList();
+            var longCons = defCons.Where(s => Math.Abs(SegLen(s) - keepSide) < 2e-5).ToList();
+            Check(shortCons.Count == 4 && longCons.Count == 4,
+                $"def construction segs = the QR square ({qrSide * 1000:F3}mm) and the " +
+                $"keep-out square ({keepSide * 1000:F3}mm) at real size ({tag})",
+                $"short={shortCons.Count}/4 long={longCons.Count}/4 " +
+                $"lens=[{string.Join(", ", defCons.Select(s => (SegLen(s) * 1000).ToString("F4")))}]");
+
+            var cc = SegsBboxCentre(defSegs);
+            var qc = SegsBboxCentre(defCons);
+            Check(Math.Abs(cc.x - qc.x) < 1e-9 && Math.Abs(cc.y - qc.y) < 1e-9,
+                $"def construction squares centred on the QR content ({tag})",
+                $"content=({cc.x:F6},{cc.y:F6}) squares=({qc.x:F6},{qc.y:F6})");
+
+            var (exW, exH) = ModuleEdgesSpan(expected);
+            var (matW, matH) = SegsBbox(material);
+            Check(Math.Abs(matW - exW) < 2e-5 && Math.Abs(matH - exH) < 2e-5,
+                $"emitted polarity: def material span matches the module's emitted extent ({tag})",
+                $"def=({matW * 1000:F3},{matH * 1000:F3})mm " +
+                $"module=({exW * 1000:F3},{exH * 1000:F3})mm " +
+                $"({(expected.Info.Inverted ? "inverted field = keep-out extent"
+                                          : "dark cells = grown outline")})");
+            if (expected.Info.Inverted)
+                Check(matW > qrSide + 1e-4,
+                    $"the inverted field's material span exceeds the QR square — " +
+                    $"light cells emitted, not dark ({tag})",
+                    $"material={matW * 1000:F3}mm qrSquare={qrSide * 1000:F3}mm");
+
+            // Module-identical edge census: the sorted def material lengths
+            // must equal the module's contour edge lengths 1:1 — every edge
+            // accounted for, frame-independent.
+            var defLens = material.Select(SegLen).OrderBy(v => v).ToList();
+            var modLens = expected.Edges.Select(e => Math.Sqrt(
+                    Math.Pow(e.End.X - e.Start.X, 2) + Math.Pow(e.End.Y - e.Start.Y, 2)))
+                .OrderBy(v => v).ToList();
+            double maxErr = defLens.Count == modLens.Count
+                ? defLens.Zip(modLens, (a, b) => Math.Abs(a - b)).DefaultIfEmpty(0).Max()
+                : -1;
+            Check(defLens.Count == modLens.Count && maxErr >= 0 && maxErr < 5e-7,
+                $"def material edges match the module's contour edges 1:1 by length ({tag})",
+                $"count={defLens.Count}/{modLens.Count} " +
+                $"maxLenErr={(maxErr < 0 ? -1 : maxErr * 1000):F6}mm");
+        }
+
+        /// <summary>
+        /// Re-enters the committed sketch feature and explodes its block
+        /// instance — the established blockqr verification route — then checks
+        /// the exploded HOST lines against the module 1:1 in real sketch
+        /// coordinates: material segment count, the two construction squares
+        /// flagged, and every material contour matching a module contour's
+        /// bounding box exactly (positions, not just lengths).
+        /// </summary>
+        private static void VerifyExplodedModuleIdentical(
+            IModelDoc2 doc, IModelDocExtension ext, ISketchManager mgr,
+            string sketchName, QrSketch expected, string tag)
+        {
+            doc.ClearSelection2(true);
+            bool reentered = ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            Check(reentered, $"the committed QR sketch re-selects for exploded verification ({tag})");
+            if (!reentered) return;
+            mgr.InsertSketch(true);
+            var bk = mgr.ActiveSketch as ISketch;
+            Check(bk != null && bk.GetSketchBlockInstanceCount() == 1,
+                $"the committed feature still carries its ONE block instance ({tag})");
+            if (bk == null || bk.GetSketchBlockInstanceCount() == 0) return;
+
+            var bi = bk.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+            bool exploded = false;
+            try { mgr.ExplodeSketchBlockInstance((SketchBlockInstance)bi!); exploded = true; }
+            catch (Exception ex) { Console.WriteLine($"#   explode threw {ex.GetType().Name}"); }
+            Check(exploded, $"ExplodeSketchBlockInstance executes ({tag})");
+            if (!exploded) { mgr.InsertSketch(false); return; }
+            Check(bk.GetSketchBlockInstanceCount() == 0,
+                $"explode removes the block instance ({tag})");
+
+            var rawAll = SketchLineSpans(bk);
+            var raw = rawAll.Where(s => !s.Construction).ToList();
+            Check(raw.Count == expected.Info.SegmentCount,
+                $"exploded material segments match the module's edge count ({tag})",
+                $"raw={raw.Count} expected={expected.Info.SegmentCount}");
+            Check(rawAll.Count(s => s.Construction) == 8,
+                $"explode returns the squares as construction-flagged host lines ({tag})",
+                $"cons={rawAll.Count(s => s.Construction)} of {rawAll.Count}");
+
+            object? rawContours = null;
+            try { rawContours = bk.GetSketchContours(); } catch { }
+            var nativeAll = rawContours is object[] arr
+                ? arr.Cast<ISketchContour>().ToList() : new List<ISketchContour>();
+            var materialNative = nativeAll.Where(ContourIsMaterial).ToList();
+            int regions = -1;
+            try { regions = bk.GetSketchRegionCount(); } catch { }
+            Console.WriteLine($"#   exploded census: contours total={nativeAll.Count} " +
+                $"material={materialNative.Count} regions={regions}");
+            const double tol = 1e-9;
+            var nativeBoxes = materialNative.Select(NativeBBox).ToList();
+            var used = new bool[nativeBoxes.Count];
+            int matched = 0;
+            foreach (var mc in expected.Contours)
+            {
+                var mb = ModuleBBox(mc);
+                int hit = -1;
+                for (var i = 0; i < nativeBoxes.Count; i++)
+                    if (!used[i] && BBoxEquals(mb, nativeBoxes[i], tol)) { hit = i; break; }
+                if (hit >= 0) { used[hit] = true; matched++; }
+            }
+            Check(matched == expected.Contours.Count &&
+                  materialNative.Count == expected.Contours.Count,
+                $"every exploded contour matches a module contour bbox 1:1 ({tag})",
+                $"matched={matched} nativeMaterial={materialNative.Count} " +
+                $"nativeTotal={nativeAll.Count} expected={expected.Contours.Count}");
+            mgr.InsertSketch(false);
+            doc.ClearSelection2(true);
+        }
+
+        /// <summary>A contour counts as material when any of its segments is non-construction.</summary>
+        private static bool ContourIsMaterial(ISketchContour c)
+        {
+            foreach (var so in (object[])c.GetSketchSegments())
+                if (so is ISketchLine l &&
+                    !((l as ISketchSegment)?.ConstructionGeometry ?? false))
+                    return true;
+            return false;
+        }
 
         private static ISldWorks? AttachOrLaunch(string progId)
         {

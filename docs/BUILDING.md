@@ -174,7 +174,22 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
 ```
+
+The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
+extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
+`SetQrEccProbe`, `SetQrInvertProbe`) through the pane path, performs one create
+with a non-default preset + ECC level + inverted polarity, verifies the landed
+block instance module-identically (definition census plus an exploded 1:1
+contour-bounding-box match), and replays the insertion-guard floor on a denser
+payload at the same settings (a refused rung first, then the cleared rung's
+create). Like `units` it **refuses to run while any `SLDWORKS.exe` process
+exists** — an occupied seat can be an interactive session it must never
+mutate — and it prints its module-side expectations (composed payload, rung
+table, accepted size) before that refusal so a blocked run still shows what
+the live half would check. Gate results are recorded in
+`docs/XSETTINGS-GATES.md`.
 
 The `units` mode uses a session-free instance and checks the native document
 watcher plus the actual pane's rendered size label, input, and cell-size value.
