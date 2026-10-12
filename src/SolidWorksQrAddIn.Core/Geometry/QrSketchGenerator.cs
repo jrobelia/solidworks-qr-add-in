@@ -31,10 +31,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      endpoints stay bit-identical — centred on the origin, matrix row 0
     ///      at +y so the QR is upright rather than mirrored.
     ///
-    /// The result carries the sized contour set PLUS (ADR 0001/0002/0003): the
-    /// same contours unit-proportioned (grown outline = 1×1, the block-
-    /// definition space) and the QR square and keep-out square as unit-space
-    /// construction geometry that folds into the block definition.
+    /// The result carries the grown, unioned contours at the requested size
+    /// plus the QR square and keep-out square as construction squares in the
+    /// same sketch-space metres (ADR 0002/0003): the host normalizes all of
+    /// it into the unit-proportioned block definition at insertion, flagging
+    /// the squares construction so they fold in without feeding a profile.
     ///
     /// Contains no SolidWorks objects.
     /// </summary>
@@ -239,14 +240,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 regions.Add(ConvertRegion(gr, contours,
                     p => ToMetres(p, mPerUnit, gridCentre)));
 
-            // The same contour model unit-proportioned: the grown QR outline
-            // spans exactly 1×1 — the block-definition space (ADR 0001).
             double grownUnits = n * (double)u + 2 * g;
-            var unitRegions = new List<QrRegion>(gridRegions.Count);
-            var unitContours = new List<QrContour>(flatPaths.Count);
-            foreach (var gr in gridRegions)
-                unitRegions.Add(ConvertRegion(gr, unitContours,
-                    p => ToUnit(p, grownUnits, gridCentre)));
 
             // Actual smallest delivered edge (integer units → mm).
             long minEdgeUnits = long.MaxValue;
@@ -281,27 +275,28 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount);
 
-            // ---------- construction squares (unit block-definition space) ----------
-            // The squares live INSIDE the block definition as construction
+            // ---------- construction squares (sketch-space metres) ----------
+            // The squares ride INSIDE the block definition as construction
             // geometry (ADR 0003): they scale and move with the instance, so
             // the footprint and the four-cell quiet zone track live — the
             // host-square + dimension/equation machinery of rounds 2–3 is
             // abandoned (BLOCK-GATES.md: no public route can bind host
             // geometry to instance-projected edges or read instance Scale).
-            // Coordinates are the same unit space as `Unit`: the QR square
-            // bounds the grown outline — literally ±0.5 — and the keep-out
-            // square is the working-matrix boundary M·u/(N·u+2g) of that
-            // span (ADR 0002, not "4 cells outside the QR square").
-            double keepOutHalf = 0.5 * m * u / grownUnits;
+            // They emit in the same sketch-space metres at the requested
+            // size as the contours: the QR square IS the grown outline —
+            // ±S/2 — so its staged span is the insertion's authoritative
+            // size even when the dark cells never reach the outline; the
+            // keep-out square is the working-matrix boundary M·u·mmPerUnit
+            // per side (ADR 0002, not "4 cells outside the QR square").
+            double grownHalfM = grownUnits * mPerUnit / 2.0;
+            double matrixHalfM = m * (double)u * mPerUnit / 2.0;
             var squares = new List<QrConstructionSquare>(2)
             {
-                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(0.5)),
-                new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(keepOutHalf)),
+                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(grownHalfM)),
+                new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(matrixHalfM)),
             };
 
-            return QrSketchResult.Ok(new QrSketch(
-                regions, contours, new QrContourSet(unitRegions, unitContours),
-                squares, info));
+            return QrSketchResult.Ok(new QrSketch(regions, contours, squares, info));
         }
 
         private static SketchPoint2[] SquareVertices(double half) =>
@@ -365,16 +360,6 @@ namespace SolidWorksQrAddIn.Core.Geometry
             new SketchPoint2(
                 (p.X - gridCentre) * mPerUnit,
                 (gridCentre - p.Y) * mPerUnit);
-
-        /// <summary>
-        /// The unit-proportioned map: divide by the grown-extent grid width
-        /// (rather than multiply by a reciprocal) so the outline lands on
-        /// exactly ±0.5 — the block definition is drawn at literal unit size.
-        /// </summary>
-        private static SketchPoint2 ToUnit(Point64 p, double grownUnits, double gridCentre) =>
-            new SketchPoint2(
-                (p.X - gridCentre) / grownUnits,
-                (gridCentre - p.Y) / grownUnits);
 
         private static QrContour ToContour(
             Path64 path, bool isHole, Func<Point64, SketchPoint2> map)

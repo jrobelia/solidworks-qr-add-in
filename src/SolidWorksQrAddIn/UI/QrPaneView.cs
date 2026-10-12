@@ -147,8 +147,9 @@ namespace SolidWorksQrAddIn.UI
             {
                 IsReadOnly = true,
                 ToolTip = "The QR module (cell) pitch in the document's length " +
-                          "unit — size ÷ matrix width. Read-only; it follows " +
-                          "the fields above.",
+                          "unit — p = S/(N + 2r′): the final size divided by " +
+                          "the cell count plus twice the per-side growth " +
+                          "fraction. Read-only; it follows the fields above.",
             };
             panel.Children.Add(_cellSize);
 

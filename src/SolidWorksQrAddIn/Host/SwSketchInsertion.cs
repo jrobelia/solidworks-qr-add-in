@@ -29,11 +29,9 @@ namespace SolidWorksQrAddIn.Host
         private readonly IMathUtility? _math;
         private readonly bool _undoRecording;
         private readonly SketchManagerFlagSnapshot _previousFlags;
-        private readonly List<(double X1, double Y1, double X2, double Y2)> _buffered =
-            new List<(double, double, double, double)>();
+        private readonly List<SketchEdge> _buffered = new List<SketchEdge>();
         private readonly List<QrConstructionSquare> _stagedSquares =
             new List<QrConstructionSquare>();
-        private double _appliedScale = 1.0;
         private bool _committed;
         private bool _aborted;
         private bool _flagsRestored;
@@ -87,7 +85,7 @@ namespace SolidWorksQrAddIn.Host
         /// Nothing is drawn yet — the session buffers the staged edges and
         /// realizes them at <see cref="KeepOpen"/>: the QR lands as ONE
         /// sketch block instance whose definition is drawn unit-proportioned
-        /// (1 × 1 document unit) and whose Scale reads the staged span in
+        /// (1 × 1 document unit) and whose Scale reads the requested size in
         /// document units — the PropertyManager scale field IS the QR's
         /// resize handle (spec #10).
         /// </summary>
@@ -95,17 +93,18 @@ namespace SolidWorksQrAddIn.Host
         {
             if (_committed || _aborted)
                 throw new SketchInsertionException("The insertion session is already finished.");
-            _buffered.Add((x1, y1, x2, y2));
+            _buffered.Add(new SketchEdge(new SketchPoint2(x1, y1), new SketchPoint2(x2, y2)));
         }
 
         /// <summary>
         /// Stages the model's construction squares — the QR square and the
-        /// keep-out square in unit block-definition space — for commit-time
-        /// emission INSIDE the block definition (ADR 0003). Nothing is drawn
-        /// yet: <see cref="KeepOpen"/> draws them into the same definition as
-        /// the contours, flagged construction, BEFORE the selection fold
-        /// that forms the block — the squares then scale and move with the
-        /// instance with no host-side constraints, dimensions, or equations.
+        /// keep-out square in sketch-space metres at the requested size —
+        /// for commit-time emission INSIDE the block definition (ADR 0003).
+        /// Nothing is drawn yet: <see cref="KeepOpen"/> normalizes them into
+        /// the same definition as the contours, flagged construction, BEFORE
+        /// the selection fold that forms the block — the squares then scale
+        /// and move with the instance with no host-side constraints,
+        /// dimensions, or equations.
         /// </summary>
         public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
         {
@@ -134,18 +133,21 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// The buffered-edge → block-instance realization (spec #10), run
+        /// The staged-geometry → block-instance realization (spec #10), run
         /// inside the open sketch edit:
-        ///   1. the staged span IS the requested size — the instance Scale
-        ///      is that span expressed in the document's own length unit;
+        ///   1. the instance Scale IS the requested size — the span of the
+        ///      staged contour edges and the staged QR square (the grown
+        ///      outline itself), expressed in the document's own length
+        ///      unit;
         ///   2. the definition is drawn unit-proportioned — every staged
-        ///      contour edge ÷ the scale, so the QR content spans exactly
-        ///      one document unit;
-        ///   3. the staged construction squares are drawn at their unit
-        ///      coordinates and flagged construction — they ride INTO the
-        ///      block definition (ADR 0003), so the QR footprint and the
-        ///      four-cell quiet-zone boundary scale and move with the
-        ///      instance, and construction geometry never feeds a profile;
+        ///      contour edge ÷ the scale, so the QR content lands inside a
+        ///      definition spanning exactly one document unit;
+        ///   3. the staged construction squares are drawn through the same
+        ///      ÷scale normalization and flagged construction — they ride
+        ///      INTO the block definition (ADR 0003), so the QR footprint
+        ///      and the four-cell quiet-zone boundary scale and move with
+        ///      the instance, and construction geometry never feeds a
+        ///      profile;
         ///   4. the by-object selection converts ONLY those drawn lines —
         ///      contours and squares alike — into the definition and its
         ///      first instance (scale 1 at the origin);
@@ -160,45 +162,33 @@ namespace SolidWorksQrAddIn.Host
         /// </summary>
         private void RealizeAsBlockInstance()
         {
-            double scaleDocUnits = BufferedSpan() / DocLengthUnits.Of(_doc).MetresPerUnit;
+            // 1. The instance Scale IS the requested size: the staged span
+            //    (contour edges + the QR square, the grown outline itself)
+            //    in the document's own length unit — a host fact read once,
+            //    since the normalization below needs it too.
+            var docUnit = DocLengthUnits.Of(_doc);
+            double scaleDocUnits = StagedSpan() / docUnit.MetresPerUnit;
             if (scaleDocUnits <= 0.0)
                 throw new SketchInsertionException(
-                    "The staged QR contours span zero — no block definition can be formed.");
+                    "The staged QR outline spans zero — no block definition can be formed.");
 
-            // 1. Draw the definition: staged edges ÷ scale = unit-proportioned
+            // 2. Draw the definition: staged edges ÷ scale = unit-proportioned
             //    (one document unit across). These are ordinary sketch lines
             //    until the block-make step swallows them into the block.
-            var drawn = new List<ISketchSegment>(_buffered.Count);
+            var drawn = new List<ISketchSegment>(_buffered.Count + 8);
             for (var i = 0; i < _buffered.Count; i++)
             {
                 var e = _buffered[i];
-                try
-                {
-                    var segment = _mgr.CreateLine(
-                        e.X1 / scaleDocUnits, e.Y1 / scaleDocUnits, 0.0,
-                        e.X2 / scaleDocUnits, e.Y2 / scaleDocUnits, 0.0) as ISketchSegment;
-                    if (segment == null)
-                        throw new SketchInsertionException(
-                            $"CreateLine returned no segment while drawing the block definition " +
-                            $"(line {i + 1} of {_buffered.Count}).");
-                    drawn.Add(segment);
-                }
-                catch (SketchInsertionException) { throw; }
-                catch (Exception ex)
-                {
-                    throw new SketchInsertionException(
-                        $"CreateLine failed while drawing the block definition " +
-                        $"(line {i + 1} of {_buffered.Count}): {ex.Message}", ex);
-                }
+                drawn.Add(DrawDefEdge(
+                    e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
+                    e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits,
+                    "block definition", $"line {i + 1} of {_buffered.Count}"));
             }
 
-            // 2. The staged construction squares — unit space, like the
-            //    contours after their ÷scale normalization — drawn at the
-            //    document-unit size (a def unit is one document unit) and
-            //    construction-flagged, so they land in the block's selection
-            //    fold below and become definition content that tracks the
-            //    instance's transforms.
-            double metresPerUnit = DocLengthUnits.Of(_doc).MetresPerUnit;
+            // 3. The staged construction squares — same ÷scale normalization
+            //    as the contours, then construction-flagged, so they land in
+            //    the block's selection fold below and become definition
+            //    content that tracks the instance's transforms.
             var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
@@ -206,25 +196,21 @@ namespace SolidWorksQrAddIn.Host
                 foreach (var e in square.Edges)
                 {
                     squareIndex++;
-                    try
-                    {
-                        var segment = _mgr.CreateLine(
-                            e.Start.X * metresPerUnit, e.Start.Y * metresPerUnit, 0.0,
-                            e.End.X * metresPerUnit, e.End.Y * metresPerUnit, 0.0) as ISketchSegment;
-                        if (segment == null)
-                            throw new SketchInsertionException(
-                                $"CreateLine returned no segment while drawing the {label} " +
-                                $"(edge {squareIndex}).");
-                        try { segment.ConstructionGeometry = true; } catch { }
-                        drawn.Add(segment);
-                    }
-                    catch (SketchInsertionException) { throw; }
+                    var segment = DrawDefEdge(
+                        e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
+                        e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits,
+                        label, $"edge {squareIndex}");
+                    // A swallowed flag failure would land the square as SOLID
+                    // definition geometry — profile content that feeds
+                    // extrudes. Propagate honestly: the abort path owns it.
+                    try { segment.ConstructionGeometry = true; }
                     catch (Exception ex)
                     {
                         throw new SketchInsertionException(
-                            $"CreateLine failed while drawing the {label} " +
-                            $"(edge {squareIndex}): {ex.Message}", ex);
+                            $"The construction-geometry flag could not be applied to the " +
+                            $"{label} (edge {squareIndex}): {ex.Message}", ex);
                     }
+                    drawn.Add(segment);
                 }
             }
 
@@ -232,7 +218,7 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     "The document exposed no extension/math interface — the QR block could not be formed.");
 
-            // 2. Select exactly what this session drew — BY OBJECT, not
+            // 4. Select exactly what this session drew — BY OBJECT, not
             //    SelectAll. Measured live (undo-callback reinsert, round-1
             //    blockqr gate): inside the API undo object's redo the blanket
             //    select-all delivered an empty selection and
@@ -269,7 +255,7 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     "MakeSketchBlockFromSelected formed no block definition.");
 
-            // 3. The make leaves instance #1 in the sketch at scale 1 — set
+            // 5. The make leaves instance #1 in the sketch at scale 1 — set
             //    its Scale to the document-unit size so the PropertyManager
             //    field reads as the QR size (verified settable live, spike Q2).
             try
@@ -284,7 +270,6 @@ namespace SolidWorksQrAddIn.Host
                     ?? throw new SketchInsertionException(
                         "The block instance could not be read back.");
                 instance.Scale = scaleDocUnits;
-                _appliedScale = scaleDocUnits;
             }
             catch (SketchInsertionException) { throw; }
             catch (Exception ex)
@@ -294,20 +279,58 @@ namespace SolidWorksQrAddIn.Host
             }
         }
 
+        /// <summary>
+        /// One CreateLine + error wrap for the definition draw — shared by
+        /// the contour loop and the square loop so both normalize the same
+        /// way (÷ the instance scale) and fail the same way.
+        /// </summary>
+        private ISketchSegment DrawDefEdge(
+            double x1, double y1, double x2, double y2, string what, string which)
+        {
+            try
+            {
+                var segment = _mgr.CreateLine(x1, y1, 0.0, x2, y2, 0.0) as ISketchSegment;
+                if (segment == null)
+                    throw new SketchInsertionException(
+                        $"CreateLine returned no segment while drawing the {what} ({which}).");
+                return segment;
+            }
+            catch (SketchInsertionException) { throw; }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"CreateLine failed while drawing the {what} ({which}): {ex.Message}", ex);
+            }
+        }
 
-        /// <summary>The staged outline span (max of the x/y extents), metres.</summary>
-        private double BufferedSpan()
+        /// <summary>
+        /// The staged outline span (max of the x/y extents), metres — the
+        /// buffered contour edges PLUS the staged QR square, which IS the
+        /// grown outline. With it staged the span is the requested size even
+        /// when the dark cells never reach the outline — the block Scale
+        /// stays authoritative for any matrix. The keep-out square is not
+        /// extent evidence: it deliberately spans the wider working-matrix
+        /// boundary.
+        /// </summary>
+        private double StagedSpan()
         {
             double minX = double.MaxValue, maxX = double.MinValue;
             double minY = double.MaxValue, maxY = double.MinValue;
             foreach (var e in _buffered)
-            {
-                minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-                minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
-                maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
-            }
+                Include(e);
+            foreach (var square in _stagedSquares)
+                if (square.Role == QrSquareRole.QrSquare)
+                    foreach (var e in square.Edges)
+                        Include(e);
             return Math.Max(maxX - minX, maxY - minY);
+
+            void Include(SketchEdge e)
+            {
+                minX = Math.Min(minX, Math.Min(e.Start.X, e.End.X));
+                maxX = Math.Max(maxX, Math.Max(e.Start.X, e.End.X));
+                minY = Math.Min(minY, Math.Min(e.Start.Y, e.End.Y));
+                maxY = Math.Max(maxY, Math.Max(e.Start.Y, e.End.Y));
+            }
         }
 
         public CleanupOutcome Abort()

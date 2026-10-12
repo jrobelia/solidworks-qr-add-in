@@ -22,14 +22,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public bool IsHole { get; }
 
         /// <summary>The contour's edges; the final edge closes the loop.</summary>
-        public IEnumerable<SketchEdge> Edges
-        {
-            get
-            {
-                for (var i = 0; i < Vertices.Count; i++)
-                    yield return new SketchEdge(Vertices[i], Vertices[(i + 1) % Vertices.Count]);
-            }
-        }
+        public IEnumerable<SketchEdge> Edges => SketchClosedLoop.Edges(Vertices);
     }
 
     /// <summary>A hole loop inside a filled region, plus any filled islands nested in it.</summary>
@@ -127,36 +120,6 @@ namespace SolidWorksQrAddIn.Core.Geometry
     }
 
     /// <summary>
-    /// A complete contour hierarchy — nested regions, the flat contour list,
-    /// the edge enumeration — expressed in one coordinate space.
-    /// </summary>
-    public sealed class QrContourSet
-    {
-        public QrContourSet(IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours)
-        {
-            Regions = regions;
-            Contours = contours;
-        }
-
-        /// <summary>Top-level filled regions (disjoint dark areas of the QR pattern).</summary>
-        public IReadOnlyList<QrRegion> Regions { get; }
-
-        /// <summary>Every contour — region outlines, hole loops, island outlines — flat.</summary>
-        public IReadOnlyList<QrContour> Contours { get; }
-
-        /// <summary>All contour edges in insertion order.</summary>
-        public IEnumerable<SketchEdge> Edges
-        {
-            get
-            {
-                foreach (var contour in Contours)
-                    foreach (var edge in contour.Edges)
-                        yield return edge;
-            }
-        }
-    }
-
-    /// <summary>
     /// The validated geometry the host inserts: nested filled regions plus a
     /// flat contour list in insertion order. Contains no SolidWorks objects.
     /// </summary>
@@ -164,13 +127,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     {
         public QrSketch(
             IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
-            QrContourSet unit,
             IReadOnlyList<QrConstructionSquare> constructionSquares,
             QrSketchInfo info)
         {
             Regions = regions;
             Contours = contours;
-            Unit = unit;
             ConstructionSquares = constructionSquares;
             Info = info;
         }
@@ -185,20 +146,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public IReadOnlyList<QrContour> Contours { get; }
 
         /// <summary>
-        /// The same contour model normalized so the grown QR outline spans
-        /// exactly 1×1 — the block-definition space (ADR 0001: definition drawn
-        /// at unit size, instance Scale = requested size). Same
-        /// <see cref="SketchPoint2"/> space as the sized set; the host applies
-        /// the document's length-unit conversion at insertion.
-        /// </summary>
-        public QrContourSet Unit { get; }
-
-        /// <summary>
-        /// The QR square and keep-out square in unit block-definition space —
-        /// construction geometry that rides INSIDE the block definition (ADR
-        /// 0003) so the footprint and the four-cell quiet-zone boundary scale
-        /// and move with the instance. Never cuttable profile and never part
-        /// of <see cref="Contours"/>.
+        /// The QR square and keep-out square in the same sketch-space metres
+        /// at the requested size — construction geometry the host normalizes
+        /// INTO the block definition (ADR 0003), so the footprint and the
+        /// four-cell quiet-zone boundary scale and move with the instance.
+        /// The QR square IS the grown outline — its span is the insertion's
+        /// authoritative size measurement. Never cuttable profile and never
+        /// part of <see cref="Contours"/>.
         /// </summary>
         public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
 

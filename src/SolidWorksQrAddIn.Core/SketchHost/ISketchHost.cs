@@ -137,7 +137,7 @@ namespace SolidWorksQrAddIn.Core.Hosting
     ///  - <see cref="AddLine"/> STAGES one contour edge at its final size in
     ///    sketch space; the host may buffer edges and realize them at commit
     ///    (the adapters draw them unit-proportioned inside one sketch block
-    ///    instance whose Scale reads the staged span in document units —
+    ///    instance whose Scale reads the requested size in document units —
     ///    spec #10 — so nothing lands as raw segments until
     ///    <see cref="KeepOpen"/>).
     ///  - <see cref="AddConstructionSquares"/> STAGES the definition-internal
@@ -172,16 +172,16 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         /// <summary>
         /// Stages the model's construction squares — the QR square and the
-        /// keep-out square — for commit-time emission INSIDE the block
-        /// definition (ADR 0003). Like <see cref="AddLine"/> this only
-        /// stages: <see cref="KeepOpen"/> draws the squares into the same
-        /// unit-proportioned definition space as the contours, flagged
-        /// construction, BEFORE the selection fold that forms the block —
-        /// so the footprint and the quiet-zone boundary are definition
-        /// content that scales and moves with the instance, with no
-        /// host-side constraints, dimensions, or equations. A null or empty
-        /// list stages nothing. Throws <see cref="SketchInsertionException"/>
-        /// on failure.
+        /// keep-out square in sketch-space metres at the requested size —
+        /// for commit-time emission INSIDE the block definition (ADR 0003).
+        /// Like <see cref="AddLine"/> this only stages: <see cref="KeepOpen"/>
+        /// normalizes the squares into the same unit-proportioned definition
+        /// space as the contours, flagged construction, BEFORE the selection
+        /// fold that forms the block — so the footprint and the quiet-zone
+        /// boundary are definition content that scales and moves with the
+        /// instance, with no host-side constraints, dimensions, or
+        /// equations. A null or empty list stages nothing. Throws
+        /// <see cref="SketchInsertionException"/> on failure.
         /// </summary>
         void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares);
 

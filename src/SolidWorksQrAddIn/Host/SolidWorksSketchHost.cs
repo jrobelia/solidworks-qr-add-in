@@ -171,16 +171,6 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// The shared "enter edit mode on the current selection + open a
-        /// session" pipeline — the user create path
-        /// (<paramref name="recordUndo"/>=true wraps it in the best-effort
-        /// recording scope) and the undo object's redo reinsert
-        /// (<paramref name="recordUndo"/>=false — the step IS the undo
-        /// object, a recording inside it would only be refused again).
-        /// Also captures the selected support object (datum-plane feature or
-        /// face entity) for the undo object's redo path.
-        /// </summary>
-        /// <summary>
         /// The app's math utility, or null when it cannot be obtained — the
         /// insertion's block step needs it for MathPoint insertion points and
         /// fails honestly when it is missing.
@@ -195,6 +185,16 @@ namespace SolidWorksQrAddIn.Host
             }
         }
 
+        /// <summary>
+        /// The shared "enter edit mode on the current selection + open a
+        /// session" pipeline — the user create path
+        /// (<paramref name="recordUndo"/>=true wraps it in the best-effort
+        /// recording scope) and the undo object's redo reinsert
+        /// (<paramref name="recordUndo"/>=false — the step IS the undo
+        /// object, a recording inside it would only be refused again).
+        /// Also captures the selected support object (datum-plane feature or
+        /// face entity) for the undo object's redo path.
+        /// </summary>
         internal static SwSketchInsertion BeginOnSelectedSupport(
             IModelDoc2 doc, bool recordUndo, IMathUtility? math,
             out object? capturedSupport)

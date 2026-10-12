@@ -9,8 +9,8 @@ namespace SolidWorksQrAddIn.Tests
     /// <summary>
     /// Spec #10 / ticket #17, reworked by ADR 0003 — the QR construction
     /// square lives INSIDE the block definition: the grown QR-cell extent
-    /// drawn as construction geometry in unit definition space, folded into
-    /// the definition with the contours so it tracks the instance's Scale
+    /// staged in sketch-space metres and normalized into the definition
+    /// with the contours so it tracks the instance's Scale
     /// and moves with no constraints, dimensions, or equations. The
     /// keep-out square is <see cref="QrKeepOutSquareTests"/>' subject; this
     /// file covers the QR square, the shared fold mechanics, and the
@@ -57,6 +57,10 @@ namespace SolidWorksQrAddIn.Tests
         private static QrConstructionSquare ModelQrSquare() =>
             Expected.ConstructionSquares.Single(s => s.Role == QrSquareRole.QrSquare);
 
+        /// <summary>The model's QR square half-extent in sketch-space metres (±S/2).</summary>
+        private static double ModelQrHalfM() =>
+            ModelQrSquare().Vertices.Max(v => System.Math.Abs(v.X));
+
         [Fact]
         public void The_qr_square_lives_inside_the_block_definition_as_construction_geometry()
         {
@@ -70,15 +74,15 @@ namespace SolidWorksQrAddIn.Tests
 
             // The definition carries BOTH folds: contours plus eight
             // construction edges (two squares). The QR square is the
-            // smaller one — the unit box, ±0.5·unit = ±0.0005 m in a mm doc.
+            // smaller one — the unit box, the model's sized half ÷ Scale.
             Assert.Equal(8, def.ConstructionEdges.Count);
             var minExtent = def.ConstructionEdges.Min(Extent);
             var qrEdges = def.ConstructionEdges.Where(e => Extent(e) == minExtent).ToList();
             Assert.Equal(4, qrEdges.Count);
             Assert.All(def.ConstructionEdges, e => Assert.True(e.Construction));
-            Assert.All(qrEdges, e => Assert.Equal(0.0005, Extent(e), 9));
+            Assert.All(qrEdges, e => Assert.Equal(ModelQrHalfM() / SizeMm, Extent(e), 9));
             Assert.All(qrEdges, e => Assert.Equal(
-                0.0005,
+                ModelQrHalfM() / SizeMm,
                 System.Math.Max(System.Math.Abs(e.X2 - e.X1),
                                 System.Math.Abs(e.Y2 - e.Y1)) / 2.0,
                 9));
@@ -165,6 +169,27 @@ namespace SolidWorksQrAddIn.Tests
                 sketch.EffectiveSegments.Count());
             Assert.DoesNotContain(sketch.ProfileSegments, e => e.Construction);
             Assert.Equal(8, sketch.EffectiveSegments.Count(e => e.Construction));
+        }
+
+        [Fact]
+        public void A_construction_flag_failure_removes_the_whole_sketch_block_included()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            // The flag write on the segment fails — a swallowed failure
+            // would land the square as SOLID def geometry feeding extrude
+            // profiles, so the commit must abort instead.
+            host.FailSquareFlag = true;
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("construction", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Single(doc.Sketches);
+            Assert.Same(userSketch, doc.Sketches[0]);
+            Assert.Empty(doc.Sketches.SelectMany(s => s.BlockInstances));
         }
 
         [Fact]

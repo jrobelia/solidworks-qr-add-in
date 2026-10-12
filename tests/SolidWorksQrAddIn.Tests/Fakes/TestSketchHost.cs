@@ -35,9 +35,10 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>
         /// Construction geometry — reference/clearance lines, never part of a
         /// cuttable profile. Inside a block definition the flag rides with
-        /// the segment exactly like the real API's ConstructionGeometry.
+        /// the segment exactly like the real API's ConstructionGeometry —
+        /// and like that setter it is applied after the line exists.
         /// </summary>
-        public bool Construction { get; }
+        public bool Construction { get; set; }
     }
 
     /// <summary>An in-memory sketch: a named feature holding its segments.</summary>
@@ -429,6 +430,15 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// </summary>
         public bool FailSquareDraw { get; set; }
 
+        /// <summary>
+        /// When true, the construction-flag write on the first staged
+        /// square edge fails — models an ISketchSegment.ConstructionGeometry
+        /// setter that throws. The edge was drawn (solid), then the flag
+        /// could not be applied; the commit must abort honestly rather
+        /// than leave the square as profile geometry.
+        /// </summary>
+        public bool FailSquareFlag { get; set; }
+
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
@@ -665,12 +675,12 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>
         /// Stages the model's construction squares — QR square and keep-out
-        /// square in unit block-definition space — for commit-time emission
-        /// INSIDE the block definition (ADR 0003). Nothing lands yet:
-        /// <see cref="KeepOpen"/> draws them into the same definition fold
-        /// as the contours, flagged construction — they then track the
-        /// instance's Scale and moves with no constraints, dims, or
-        /// equations anywhere.
+        /// square in sketch-space metres at the requested size — for
+        /// commit-time emission INSIDE the block definition (ADR 0003).
+        /// Nothing lands yet: <see cref="KeepOpen"/> normalizes them into
+        /// the same definition fold as the contours, flagged construction —
+        /// they then track the instance's Scale and moves with no
+        /// constraints, dims, or equations anywhere.
         /// </summary>
         public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
         {
@@ -695,20 +705,23 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         }
 
         /// <summary>
-        /// The buffered-edge → block-instance realization the native adapter
-        /// performs inside the open sketch edit:
-        ///   1. the staged span IS the requested size — the instance Scale is
-        ///      that span expressed in document units;
-        ///   2. the definition is drawn unit-proportioned (every edge divided
-        ///      by the scale, so the def spans exactly one document unit);
-        ///   3. select-all converts the drawn lines into the definition and
+        /// The staged-geometry → block-instance realization the native
+        /// adapter performs inside the open sketch edit:
+        ///   1. the instance Scale IS the requested size — the span of the
+        ///      staged contour edges and the staged QR square (the grown
+        ///      outline itself) expressed in document units;
+        ///   2. the definition is drawn unit-proportioned (every edge
+        ///      divided by the scale, so the def spans one document unit);
+        ///   3. the staged squares draw through the same ÷scale
+        ///      normalization, then take the construction flag;
+        ///   4. select-all converts the drawn lines into the definition and
         ///      its first instance (scale 1 at the origin);
-        ///   4. the instance's Scale is set to the document-unit size — the
+        ///   5. the instance's Scale is set to the document-unit size — the
         ///      PropertyManager field then reads as the size.
         /// </summary>
         private void RealizeAsBlockInstance()
         {
-            double scaleDocUnits = BufferedSpan() / _doc.MetresPerLengthUnit;
+            double scaleDocUnits = StagedSpan() / _doc.MetresPerLengthUnit;
 
             // Definition draw stage — rescaled edges land as ordinary sketch
             // lines first (the conversion step below swallows them).
@@ -723,9 +736,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     e.X2 / scaleDocUnits, e.Y2 / scaleDocUnits));
             }
 
-            // The staged construction squares drawn at the document-unit
-            // size, construction-flagged — the same fold swallows them into
-            // the definition, where they track the instance's transforms.
+            // The staged construction squares through the same ÷scale
+            // normalization, then construction-flagged — the same fold
+            // swallows them into the definition, where they track the
+            // instance's transforms. The flag write is its own stage: a
+            // failure leaves a solid line the commit must refuse.
             var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
@@ -735,12 +750,14 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     if (_host.FailSquareDraw && squareIndex == 1)
                         throw new SketchInsertionException(
                             "CreateLine returned no segment while drawing the construction square.");
-                    _sketch.Segments.Add(new FakeLine(
-                        e.Start.X * _doc.MetresPerLengthUnit,
-                        e.Start.Y * _doc.MetresPerLengthUnit,
-                        e.End.X * _doc.MetresPerLengthUnit,
-                        e.End.Y * _doc.MetresPerLengthUnit,
-                        construction: true));
+                    var line = new FakeLine(
+                        e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
+                        e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits);
+                    _sketch.Segments.Add(line);
+                    if (_host.FailSquareFlag && squareIndex == 1)
+                        throw new SketchInsertionException(
+                            "The construction-geometry flag could not be applied to the square's edge.");
+                    line.Construction = true;
                 }
             }
 
@@ -768,19 +785,32 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             instance.Scale = scaleDocUnits;
         }
 
-        /// <summary>The staged outline span (max of the x/y extents), metres.</summary>
-        private double BufferedSpan()
+        /// <summary>
+        /// The staged outline span (max of the x/y extents), metres — the
+        /// buffered contour edges PLUS the staged QR square, which IS the
+        /// grown outline, so the span is the requested size even when the
+        /// dark cells never reach it. The keep-out square is excluded: it
+        /// deliberately spans the wider working-matrix boundary.
+        /// </summary>
+        private double StagedSpan()
         {
             double minX = double.MaxValue, maxX = double.MinValue;
             double minY = double.MaxValue, maxY = double.MinValue;
             foreach (var e in _buffered)
-            {
-                minX = Math.Min(minX, Math.Min(e.X1, e.X2));
-                maxX = Math.Max(maxX, Math.Max(e.X1, e.X2));
-                minY = Math.Min(minY, Math.Min(e.Y1, e.Y2));
-                maxY = Math.Max(maxY, Math.Max(e.Y1, e.Y2));
-            }
+                Include(e.X1, e.Y1, e.X2, e.Y2);
+            foreach (var square in _stagedSquares)
+                if (square.Role == QrSquareRole.QrSquare)
+                    foreach (var e in square.Edges)
+                        Include(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
             return Math.Max(maxX - minX, maxY - minY);
+
+            void Include(double x1, double y1, double x2, double y2)
+            {
+                minX = Math.Min(minX, Math.Min(x1, x2));
+                maxX = Math.Max(maxX, Math.Max(x1, x2));
+                minY = Math.Min(minY, Math.Min(y1, y2));
+                maxY = Math.Max(maxY, Math.Max(y1, y2));
+            }
         }
 
         public CleanupOutcome Abort()

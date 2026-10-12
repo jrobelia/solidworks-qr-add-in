@@ -80,7 +80,7 @@ namespace SolidWorksQrAddIn.Host
         private int _sketchFeatureId;
         private string _undoName = "";
         private object? _support;         // IFeature (datum plane) or IEntity (face)
-        private double[]? _edges;         // flat x1,y1,x2,y2, sketch-space metres
+        private IReadOnlyList<SketchEdge>? _edges;   // staged contour edges, sketch-space metres
         private IReadOnlyList<QrConstructionSquare>? _constructionSquares;
         private IMathUtility? _math;      // block insertion points for the redo
         private bool _undone;
@@ -99,16 +99,7 @@ namespace SolidWorksQrAddIn.Host
             try { _sketchFeatureId = sketch.GetID(); }
             catch { _sketchFeatureId = 0; }
             _support = support;
-            var edges = registration.Edges;
-            var flat = new double[edges.Count * 4];
-            for (var i = 0; i < edges.Count; i++)
-            {
-                flat[i * 4 + 0] = edges[i].Start.X;
-                flat[i * 4 + 1] = edges[i].Start.Y;
-                flat[i * 4 + 2] = edges[i].End.X;
-                flat[i * 4 + 3] = edges[i].End.Y;
-            }
-            _edges = flat;
+            _edges = registration.Edges;
         }
 
         /// <summary>SolidWorks undo/redo callback — must never throw back.</summary>
@@ -263,8 +254,8 @@ namespace SolidWorksQrAddIn.Host
 
             try
             {
-                for (var i = 0; i + 3 < edges.Length; i += 4)
-                    insertion.AddLine(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+                foreach (var e in edges)
+                    insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
                 // Re-stage the construction squares too — the redo rebuilds
                 // the whole definition: contours and squares alike.
                 if (_constructionSquares != null)

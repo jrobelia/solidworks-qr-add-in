@@ -23,6 +23,14 @@ namespace SolidWorksQrAddIn.Tests
         private static readonly QrSketch Expected =
             QrSketchGenerator.Generate(Content, SizeMm, Growth).Sketch!;
 
+        private static bool[,] Cells(int n, params (int row, int col)[] dark)
+        {
+            var cells = new bool[n, n];
+            foreach (var (row, col) in dark)
+                cells[row, col] = true;
+            return cells;
+        }
+
         private static TestSketchHost HostWithSelectedPlane()
         {
             var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
@@ -44,6 +52,53 @@ namespace SolidWorksQrAddIn.Tests
             // raw contour segments of its own.
             Assert.Empty(sketch.Segments);
             Assert.Same(instance.Definition, Assert.Single(host.Document.BlockDefinitions));
+        }
+
+        [Fact]
+        public void A_matrix_without_border_cells_still_scales_the_instance_to_the_requested_size()
+        {
+            var host = HostWithSelectedPlane();
+
+            // One interior cell: its grown contour spans ~(u+2g)·p — far
+            // less than the requested outline. A span measured over the
+            // contour edges alone would under-report the size; the staged
+            // QR square IS the grown outline and keeps the Scale honest.
+            var sketch = QrSketchGenerator.GenerateFromCells(
+                Cells(3, (1, 1)), SizeMm, Growth).Sketch!;
+            double halfM = SizeMm / 2.0 / 1000.0;
+            Assert.True(sketch.Edges.Max(e =>
+                System.Math.Max(System.Math.Abs(e.Start.X), System.Math.Abs(e.End.X))) < halfM,
+                "fixture must not reach the grown outline — the degenerate case");
+
+            var insertion = host.BeginSketchInsertion();
+            foreach (var e in sketch.Edges)
+                insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+            insertion.AddConstructionSquares(sketch.ConstructionSquares);
+            insertion.KeepOpen();
+            insertion.Dispose();
+
+            var instance = Assert.Single(host.Document!.Sketches.Single().BlockInstances);
+            Assert.Equal(SizeMm, instance.Scale, 9);
+            // …and the QR square really renders at ±S/2 — the grown outline
+            // the cell content sits inside, exactly as the model intends.
+            var qrSquareExtent = instance.EffectiveEdges
+                .Where(e => e.Construction)
+                .SelectMany(e => new[] { e.X1, e.Y1, e.X2, e.Y2 })
+                .Select(System.Math.Abs).Min();
+            Assert.Equal(halfM, qrSquareExtent, 9);
+        }
+
+        [Fact]
+        public void The_success_message_describes_the_block_instance_not_raw_segments()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            // The committed sketch holds ONE block instance and no raw
+            // segments of its own — the message must describe that world.
+            Assert.Contains("block", result.Message, System.StringComparison.OrdinalIgnoreCase);
         }
 
         [Fact]
@@ -85,12 +140,13 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(-0.0005, xs.Min(), 12);
             Assert.Equal(0.0005, ys.Max(), 12);
             Assert.Equal(-0.0005, ys.Min(), 12);
-            // …and it matches the model's unit set scaled to document units.
-            var unit = Expected.Unit.Edges.ToList();
-            for (var i = 0; i < unit.Count; i++)
+            // …and it matches the model's sized contours ÷ the instance
+            // scale — the def's unit-proportioned space (one mm doc unit).
+            var expected = Expected.Edges.ToList();
+            for (var i = 0; i < expected.Count; i++)
             {
-                Assert.Equal(unit[i].Start.X * 0.001, def.Contours[i].X1, 12);
-                Assert.Equal(unit[i].Start.Y * 0.001, def.Contours[i].Y1, 12);
+                Assert.Equal(expected[i].Start.X / SizeMm, def.Contours[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y / SizeMm, def.Contours[i].Y1, 12);
             }
         }
 

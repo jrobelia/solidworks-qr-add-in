@@ -25,13 +25,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
     /// <summary>
     /// One construction square that rides INSIDE the QR sketch block
-    /// definition (ADR 0003): four corner vertices in unit block-definition
-    /// space — the same space <see cref="QrSketch.Unit"/> contours use, where
-    /// the grown QR outline spans exactly 1×1 — closed-loop convention like
-    /// <see cref="QrContour"/> (the last vertex connects back to the first).
-    /// Always construction geometry inside the definition, so it scales and
-    /// moves with the block instance, renders as a dashed bounds/clearance
-    /// marker, and never feeds an extrude profile.
+    /// definition (ADR 0003): four corner vertices in sketch-space metres
+    /// at the requested size — the same space <see cref="QrSketch.Contours"/>
+    /// uses — closed-loop convention like <see cref="QrContour"/> (the last
+    /// vertex connects back to the first). The host normalizes the square
+    /// into the unit-proportioned definition alongside the contours and
+    /// flags it construction, so it scales and moves with the block
+    /// instance, renders as a dashed bounds/clearance marker, and never
+    /// feeds an extrude profile. The QR square IS the grown outline — its
+    /// span is the insertion's authoritative size measurement; the
+    /// keep-out square deliberately exceeds it.
     /// </summary>
     public sealed class QrConstructionSquare
     {
@@ -45,23 +48,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public QrSquareRole Role { get; }
 
         /// <summary>
-        /// The four corner vertices in unit block-definition space — NOT
-        /// sketch metres; the host draws them unscaled so the definition
-        /// carries the squares and the instance projects them.
+        /// The four corner vertices in sketch-space metres at the requested
+        /// size — NOT normalized; the host divides by the block scale to
+        /// land the square inside the unit-proportioned definition.
         /// </summary>
         public IReadOnlyList<SketchPoint2> Vertices { get; }
 
-        /// <summary>Always true — squares emit as construction geometry.</summary>
-        public bool IsConstruction => true;
-
         /// <summary>The square's four edges; the final edge closes the loop.</summary>
-        public IEnumerable<SketchEdge> Edges
-        {
-            get
-            {
-                for (var i = 0; i < Vertices.Count; i++)
-                    yield return new SketchEdge(Vertices[i], Vertices[(i + 1) % Vertices.Count]);
-            }
-        }
+        public IEnumerable<SketchEdge> Edges => SketchClosedLoop.Edges(Vertices);
     }
 }
