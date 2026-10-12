@@ -33,7 +33,11 @@ namespace SolidWorksQrAddIn.Core.Preview
         /// <summary>Physical size of one pixel — the picture is square.</summary>
         public double MmPerPixel { get; }
 
-        /// <summary>Blank white margin around the grown QR extents, in mm (4 cells).</summary>
+        /// <summary>
+        /// Margin around the grown QR extents, in mm (4 cells) — blank white
+        /// in normal mode; under invert the emitted field fills it out to the
+        /// matrix edge, leaving only the per-side growth as a white frame.
+        /// </summary>
         public double MarginMm { get; }
 
         public bool IsDark(int x, int y) => Pixels[y * WidthPixels + x] == 0;

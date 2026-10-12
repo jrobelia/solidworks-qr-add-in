@@ -11,8 +11,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   1. Integer-grid floor: topology runs on a normalized grid of
     ///      <see cref="GridUnitsPerCell"/> units per cell. Clipper2's integer
     ///      imprecision is ±1 unit, so every feature — grown-cell edges and
-    ///      the light channels between them, i.e. min(2g, U−2g) grid units for
-    ///      per-side growth g — must span at least
+    ///      the channels of the un-emitted polarity between them, i.e.
+    ///      min(2g, U−2g) grid units for per-side growth g in either polarity
+    ///      — must span at least
     ///      <see cref="MinGridFeatureUnits"/> units (1000× the noise floor).
     ///
     ///   2. Physical floor: the smallest possible delivered feature,

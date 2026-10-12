@@ -117,6 +117,7 @@ namespace SolidWorksQrAddIn
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
+                  $"invert={_session.Invert} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -141,6 +142,9 @@ namespace SolidWorksQrAddIn
 
         public string SetQrGrowthProbe(string growthText) =>
             FieldProbe(s => s.SetGrowthText(growthText));
+
+        public string SetQrInvertProbe(bool invert) =>
+            FieldProbe(s => s.SetInvert(invert));
 
         private static string Describe(QrSketchResult result)
         {

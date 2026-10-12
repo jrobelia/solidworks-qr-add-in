@@ -34,6 +34,11 @@ moment it is resolved in discussion, not before.
   returns the literal payload or an error naming the bad field, and the
   pane enumerates `PayloadComposer.Presets` (id, display name, ordered
   field descriptors) to build preset inputs — never per-preset UI.
+- **Polarity / invert** — which working-matrix cells emit contours: dark
+  cells normally (black code on a light field); the LIGHT cells under
+  `invert` — a white code on a dark field bounded by the keep-out square,
+  for marking/engraving (ADR 0002). The same contour result feeds the
+  preview — no second renderer.
 
 ## SolidWorks
 
