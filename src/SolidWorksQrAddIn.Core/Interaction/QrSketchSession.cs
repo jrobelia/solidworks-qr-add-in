@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
@@ -57,15 +58,29 @@ namespace SolidWorksQrAddIn.Core.Interaction
         public const int PreviewPixelsAcross = 240;
 
         /// <summary>
-        /// The pane's static note (spec #10, amended by ADR 0004): the
-        /// created QR is one block instance drawn at the requested size —
-        /// resize is an edit of the block's Scale factor, not a re-create;
-        /// extrusion picks cell regions or works off the exploded block.
+        /// The pane's static note about the inserted artifact (spec #10,
+        /// amended by ADR 0004): the created QR is one block instance drawn
+        /// at the requested size — resize is an edit of the block's Scale
+        /// factor, not a re-create; extrusion works off the sketch or the
+        /// exploded block.
         /// </summary>
         public const string ResizeNote =
-            "The QR is created as one sketch block instance — to resize it, " +
-            "edit the block's Scale property (a factor: 2 doubles the size). " +
-            "To extrude it, pick inside a cell region or explode the block.";
+            "Inserted as one sketch block instance — drag to move it, or " +
+            "edit the block's Scale property to resize (a factor: 2 doubles " +
+            "the size). To extrude, select the sketch and run Extrude, or " +
+            "explode the block and pick regions inside cells.";
+
+        /// <summary>
+        /// The pane's static note about the quiet zone: the keep-out square
+        /// marks the light margin scanners need around the code. It is
+        /// construction geometry inside the block — never part of an
+        /// extrusion profile.
+        /// </summary>
+        public const string QuietZoneNote =
+            "The sketch carries two construction squares: the grown QR " +
+            "outline and the keep-out square, which bounds the 4-cell quiet " +
+            "zone scanners need around the code. Keep other geometry clear " +
+            "of it — the squares never join an extrusion profile.";
 
         private const string PromptText = "Enter the text or URL to encode.";
 
@@ -79,6 +94,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         private readonly Func<IQrSketchWindow> _windowFactory;
         private readonly Func<ISketchHost>? _hostProvider;
+        private readonly IHostStateWatcher? _hostWatcher;
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
         private string _content = string.Empty;
@@ -87,23 +103,38 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QrSketchResult? _current;
+        private QrSketchInfo? _info;
+        private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
 
         /// <param name="windowFactory">Builds the surface the session drives.</param>
         /// <param name="hostProvider">
         /// Optional fresh-host factory the session consults ONLY for the
-        /// document's length unit when it formats the cell-size readout —
-        /// display state, never an insertion route (creates still take the
-        /// host per call). Null or a host that cannot be read leaves the
-        /// readout in millimetres, honestly labelled.
+        /// document's length unit when it formats the cell-size readout and
+        /// info lines — display state, never an insertion route (creates
+        /// still take the host per call). Null or a host that cannot be read
+        /// leaves the readout in millimetres, honestly labelled.
+        /// </param>
+        /// <param name="hostWatcher">
+        /// Optional host-state change source (active-document switch, length
+        /// unit edit). Each <see cref="IHostStateWatcher.Changed"/> event
+        /// re-formats the unit-dependent readouts — the document's units
+        /// land live without any field edit and without polling.
         /// </param>
         public QrSketchSession(
-            Func<IQrSketchWindow> windowFactory, Func<ISketchHost>? hostProvider = null)
+            Func<IQrSketchWindow> windowFactory, Func<ISketchHost>? hostProvider = null,
+            IHostStateWatcher? hostWatcher = null)
         {
             _windowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
             _hostProvider = hostProvider;
+            _hostWatcher = hostWatcher;
+            if (_hostWatcher != null)
+                _hostWatcher.Changed += OnHostStateChanged;
             StatusText = PromptText;
             CellSizeReadout = string.Empty;
         }
+
+        /// <summary>Host state changed behind the UI's back — refresh the unit-dependent display.</summary>
+        private void OnHostStateChanged() => RefreshInfo();
 
         // ---------------- inputs → geometry → picture ----------------
 
@@ -143,12 +174,42 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// enforces — e.g. "1.187 mm". Empty whenever the current inputs are
         /// invalid: a stale readout must never describe an unusable request.
         /// The unit is the host document's own length unit, re-read on every
-        /// regeneration through the injected host provider.
+        /// regeneration and <see cref="RefreshInfo"/> through the injected
+        /// host provider.
         /// </summary>
         public string CellSizeReadout { get; private set; }
 
+        /// <summary>
+        /// The pane's info section — label/value rows describing the current
+        /// request (size, matrix, quiet zone, encoding) with dimensions in
+        /// the document's length unit. Empty whenever the current inputs are
+        /// invalid: stale facts must never describe an unusable request.
+        /// Rebuilt on every regeneration and by <see cref="RefreshInfo"/>.
+        /// </summary>
+        public IReadOnlyList<QrInfoLine> InfoLines => _infoLines;
+
         /// <summary>True when the current inputs produced insertable geometry.</summary>
         public bool HasValidRequest => _current?.Succeeded == true;
+
+        /// <summary>
+        /// Re-formats the cell-size readout and info lines against the
+        /// document's CURRENT length unit — no regeneration, only display.
+        /// The pane calls this on a light timer and when it is shown, so a
+        /// document-unit change or document switch lands live even when the
+        /// engineer has not edited a field. Best-effort: a host that cannot
+        /// be read leaves the last formatting in place.
+        /// </summary>
+        public void RefreshInfo()
+        {
+            if (_info == null)
+                return;
+            var lines = BuildInfoLines(_info, _content, out string cellSize);
+            if (cellSize == CellSizeReadout && LinesEqual(lines, _infoLines))
+                return;
+            CellSizeReadout = cellSize;
+            _infoLines = lines;
+            NotifyWindow();
+        }
 
         /// <summary>
         /// Records <paramref name="content"/> verbatim and re-validates the
@@ -207,36 +268,75 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (_current.Succeeded)
             {
                 var sketch = _current.Sketch!;
+                _info = sketch.Info;
                 Picture = QrPictureRenderer.Render(sketch, PreviewPixelsAcross);
-                // Plain status only — the window budget is
-                // content/size/growth/picture/Create; no version, cell-count
-                // or footprint readouts belong in the UI (spec). The cell
-                // size is a separate read-only readout, not status text.
-                StatusText = "Ready — select Create Sketch.";
-                CellSizeReadout = FormatCellSize(sketch.Info.PitchMm);
+                // The status stays a one-liner — facts about the QR live in
+                // the info section (InfoLines), not in status text.
+                StatusText = "Ready — click Create Sketch to insert.";
+                _infoLines = BuildInfoLines(_info, _content, out string cellSize);
+                CellSizeReadout = cellSize;
             }
             else
             {
+                _info = null;
                 Picture = null;
                 StatusText = _current.Error!.Message;
                 CellSizeReadout = string.Empty;
+                _infoLines = Array.Empty<QrInfoLine>();
             }
             NotifyWindow();
             return _current;
         }
 
         /// <summary>
-        /// The module pitch expressed in the document's length unit. The unit
-        /// is host state — the injected provider is re-asked on every
-        /// regeneration so a document switch lands in the readout live. A
-        /// missing/failed provider shows millimetres: the pitch genuinely IS
-        /// that many millimetres, so the label stays honest.
+        /// The info-section rows for the current request. Dimensions are
+        /// shown in the document's length unit; the QR outline also carries
+        /// its millimetre source because that is what the size field means.
         /// </summary>
-        private string FormatCellSize(double pitchMm)
+        private IReadOnlyList<QrInfoLine> BuildInfoLines(
+            QrSketchInfo info, string content, out string cellSize)
         {
             var unit = ReadLengthUnit();
-            double pitchDocUnits = pitchMm / 1000.0 / unit.MetresPerUnit;
-            return pitchDocUnits.ToString("G4", CultureInfo.InvariantCulture) + " " + unit.Symbol;
+            string FormatMm(double mm) =>
+                (mm / 1000.0 / unit.MetresPerUnit).ToString("G4", CultureInfo.InvariantCulture)
+                + " " + unit.Symbol;
+
+            cellSize = FormatMm(info.PitchMm);
+            var outline = FormatMm(info.FinalSizeMm);
+            if (unit.MetresPerUnit != HostLengthUnit.Millimetres.MetresPerUnit)
+                outline = info.FinalSizeMm.ToString("G4", CultureInfo.InvariantCulture) + " mm (" + outline + ")";
+
+            var lines = new List<QrInfoLine>
+            {
+                new QrInfoLine("QR outline", outline),
+                new QrInfoLine(
+                    "Footprint (incl. quiet zone)",
+                    FormatMm(info.MatrixCellCount * info.PitchMm)),
+                new QrInfoLine(
+                    "Matrix",
+                    info.CellCount + " × " + info.CellCount + " data cells (" +
+                    info.MatrixCellCount + " × " + info.MatrixCellCount + " incl. quiet zone)"),
+                new QrInfoLine("Cell pitch", cellSize),
+                new QrInfoLine(
+                    "Quiet zone",
+                    QrSketchInfo.QuietZoneCellsPerSide + " cells (" +
+                    FormatMm(QrSketchInfo.QuietZoneCellsPerSide * info.PitchMm) + ") per side"),
+                new QrInfoLine(
+                    "QR code",
+                    "V" + info.Version + " · ECC M · " + content.Length +
+                    (content.Length == 1 ? " character" : " characters")),
+            };
+            return lines;
+        }
+
+        private static bool LinesEqual(IReadOnlyList<QrInfoLine> a, IReadOnlyList<QrInfoLine> b)
+        {
+            if (a.Count != b.Count)
+                return false;
+            for (int i = 0; i < a.Count; i++)
+                if (a[i].Label != b[i].Label || a[i].Value != b[i].Value)
+                    return false;
+            return true;
         }
 
         private HostLengthUnit ReadLengthUnit()
@@ -433,6 +533,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>Disconnect path: close the window and drop every reference to it.</summary>
         public void Release()
         {
+            if (_hostWatcher != null)
+                try { _hostWatcher.Changed -= OnHostStateChanged; } catch { }
             var window = _window;
             _window = null;
             if (window == null) return;

@@ -176,11 +176,10 @@ namespace SolidWorksQrAddIn.Tests
 
             session.SetContent(PayloadA);
 
-            // The window budget is content/size/growth/picture/Create — the
-            // status must not smuggle in QR-version, cell-count or size
-            // readouts (spec: no additional size readouts).
+            // The status is a one-liner — QR facts (version, cell counts,
+            // sizes) live in the info section (InfoLines), not status text.
             Assert.True(session.HasValidRequest);
-            Assert.Equal("Ready — select Create Sketch.", session.StatusText);
+            Assert.Equal("Ready — click Create Sketch to insert.", session.StatusText);
             Assert.DoesNotContain("version", session.StatusText,
                 System.StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("cell", session.StatusText,

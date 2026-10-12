@@ -18,7 +18,7 @@ namespace SolidWorksQrAddIn.Tests
         private const string Content = "SW-QR-MVP";
 
         private static (QrSketchSession session, List<FakeQrWindow> windows) NewSession(
-            TestSketchHost? host = null)
+            TestSketchHost? host = null, TestHostStateWatcher? watcher = null)
         {
             var windows = new List<FakeQrWindow>();
             var session = new QrSketchSession(
@@ -28,7 +28,8 @@ namespace SolidWorksQrAddIn.Tests
                     windows.Add(w);
                     return w;
                 },
-                host == null ? (System.Func<Core.Hosting.ISketchHost>?)null : () => host);
+                host == null ? (System.Func<Core.Hosting.ISketchHost>?)null : () => host,
+                watcher);
             return (session, windows);
         }
 
@@ -141,6 +142,96 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains("Scale", QrSketchSession.ResizeNote);
             Assert.Contains("block", QrSketchSession.ResizeNote,
                 System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void The_quiet_zone_note_names_the_keep_out_square_and_the_margin()
+        {
+            Assert.Contains("quiet zone", QrSketchSession.QuietZoneNote,
+                System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("keep-out", QrSketchSession.QuietZoneNote,
+                System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("never", QrSketchSession.QuietZoneNote);
+        }
+
+        // ---------------- info section ----------------
+        // Label/value rows the pane renders as plain text (never boxes) —
+        // the session formats every value, in the document's length unit,
+        // so a unit edit or document switch is a re-read, not a re-derive.
+
+        private static string InfoValue(QrSketchSession session, string label)
+        {
+            foreach (var line in session.InfoLines)
+                if (line.Label == label)
+                    return line.Value;
+            throw new System.Exception($"no info line labelled '{label}'");
+        }
+
+        [Fact]
+        public void The_info_section_describes_the_current_request()
+        {
+            var host = HostWithSelectedPlane();
+            var (session, _) = NewSession(host);
+
+            session.SetContent(Content);
+
+            // "SW-QR-MVP" → version 1 (N=21, M=29): outline 25 mm, pitch
+            // 25/21.06 = 1.187 mm, quiet zone 4 cells = 4.748 mm per side,
+            // footprint 29·p = 34.43 mm.
+            Assert.Equal("25 mm", InfoValue(session, "QR outline"));
+            Assert.Equal("34.43 mm", InfoValue(session, "Footprint (incl. quiet zone)"));
+            Assert.Equal("21 × 21 data cells (29 × 29 incl. quiet zone)",
+                InfoValue(session, "Matrix"));
+            Assert.Equal("1.187 mm", InfoValue(session, "Cell pitch"));
+            Assert.Equal("4 cells (4.748 mm) per side", InfoValue(session, "Quiet zone"));
+            Assert.Equal("V1 · ECC M · 9 characters", InfoValue(session, "QR code"));
+        }
+
+        [Fact]
+        public void A_unit_change_event_reformats_the_info_without_a_field_edit()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            Assert.Equal("1.187 mm", session.CellSizeReadout);
+
+            // The engineer switches the document to inches behind the pane's
+            // back — the watcher event, not a field edit, re-reads the unit.
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            watcher.RaiseChanged();
+
+            Assert.Equal("0.04674 in", session.CellSizeReadout);
+            Assert.Equal("0.04674 in", InfoValue(session, "Cell pitch"));
+            // The outline keeps its millimetre source (that is what the size
+            // field means) with the document-unit equivalent alongside.
+            Assert.Equal("25 mm (0.9843 in)", InfoValue(session, "QR outline"));
+        }
+
+        [Fact]
+        public void Release_unsubscribes_the_session_from_host_state_changes()
+        {
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(HostWithSelectedPlane(), watcher);
+            Assert.Equal(1, watcher.SubscriberCount);
+
+            session.Release();
+
+            Assert.Equal(0, watcher.SubscriberCount);
+        }
+
+        [Fact]
+        public void Invalid_input_clears_the_info_section()
+        {
+            var host = HostWithSelectedPlane();
+            var (session, _) = NewSession(host);
+            session.SetContent(Content);
+            Assert.NotEmpty(session.InfoLines);
+
+            session.SetContent("");
+
+            Assert.Empty(session.InfoLines);
         }
     }
 }

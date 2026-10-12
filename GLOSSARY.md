@@ -20,12 +20,13 @@ moment it is resolved in discussion, not before.
   profile.
 - **Cell pitch** — centre-to-centre spacing of QR modules:
   `finalSize / (dataCells + 2 × growthFraction)`.
-- **Size readout** — the numeric size surfaces are the pane's cell-size
-  readout and the block instance's PropertyManager **Scale** field, which
-  reads as a resize FACTOR of the created size (ADR 0004). No sketch
-  dimensions are emitted (ADR 0003 superseded the earlier
-  driven/equation-linked dimension plan — host-side dims cannot observe
-  instance Scale).
+- **Size readout** — the numeric size surfaces are the pane's info section
+  (cell pitch, footprint, quiet-zone width — shown in the document's
+  length unit, refreshed on unit/doc change events) and the block
+  instance's PropertyManager **Scale** field, which reads as a resize
+  FACTOR of the created size (ADR 0004). No sketch dimensions are emitted
+  (ADR 0003 superseded the earlier driven/equation-linked dimension plan —
+  host-side dims cannot observe instance Scale).
 - **Payload preset** — a `PayloadGenerator` template (Url, WiFi, vCard…)
   that formats fields into the exact string encoded; the content shown is
   always the literal final payload, editable verbatim.
