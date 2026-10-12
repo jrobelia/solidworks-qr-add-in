@@ -30,6 +30,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>Union output failed validation (zero area, zero-length edges,
         /// self-intersection, or a residual corner-only contact).</summary>
         InvalidGeometry,
+
+        /// <summary>The selected content-type preset's fields could not be
+        /// composed into a payload — a required field is missing or a field
+        /// holds a value its preset cannot encode.</summary>
+        InvalidPayload,
     }
 
     /// <summary>An actionable generation failure — what is wrong and what to change.</summary>

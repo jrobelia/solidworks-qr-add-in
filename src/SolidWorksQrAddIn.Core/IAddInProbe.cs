@@ -60,8 +60,10 @@ namespace SolidWorksQrAddIn.Core
         /// <summary>
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
-        /// size=&lt;text&gt; growth=&lt;text&gt;" — size/growth are the field
-        /// texts exactly as shown (initially 25 and 3).
+        /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; unit=&lt;sym&gt;
+        /// cell=&lt;text&gt; ..." — size/growth are the field texts exactly
+        /// as shown (initially 25 and 3); preset is the content-type id
+        /// (initially "raw").
         /// </summary>
         string WindowStateProbe();
 
@@ -85,6 +87,24 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrGrowthProbe(string growthText);
+
+        /// <summary>
+        /// Picks the content-type preset exactly like the pane's dropdown:
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;" —
+        /// an unknown id or a preset whose required fields are missing
+        /// reports "INVALID InvalidPayload ...".
+        /// </summary>
+        string SetQrContentTypeProbe(string presetId);
+
+        /// <summary>
+        /// Writes one preset field exactly like the pane's preset inputs —
+        /// the literal text for text kinds, the option Value for Choice,
+        /// "true"/"false" for Boolean. The composed payload lands in the
+        /// content box verbatim: "VALID ..." or
+        /// "INVALID InvalidPayload &lt;message naming the bad field&gt;".
+        /// </summary>
+        string SetQrPresetFieldProbe(string key, string value);
 
         /// <summary>
         /// The Create Sketch button, probed: builds a fresh host adapter and

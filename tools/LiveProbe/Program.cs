@@ -6376,6 +6376,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrContentProbe(string content) => Invoke("SetQrContentProbe", content);
             public string SetQrSizeProbe(string sizeText) => Invoke("SetQrSizeProbe", sizeText);
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
+            public string SetQrContentTypeProbe(string presetId) => Invoke("SetQrContentTypeProbe", presetId);
+            public string SetQrPresetFieldProbe(string key, string value) => Invoke("SetQrPresetFieldProbe", key, value);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");
             public string UndoArrangementProbe(int arrangement) => Invoke("UndoArrangementProbe", arrangement);
             public string UndoRedoQrProbe() => Invoke("UndoRedoQrProbe");

@@ -33,7 +33,10 @@ moment it is resolved in discussion, not before.
   `PayloadComposer` module (Core) owns them all: `compose(presetId, fields)`
   returns the literal payload or an error naming the bad field, and the
   pane enumerates `PayloadComposer.Presets` (id, display name, ordered
-  field descriptors) to build preset inputs — never per-preset UI.
+  field descriptors) to build preset inputs — never per-preset UI. In the
+  session, a direct payload-box edit is a Raw/typed edit — the content
+  type reverts to Raw — while entered field values are remembered per
+  preset, so re-picking a type recomposes its fields.
 
 ## SolidWorks
 

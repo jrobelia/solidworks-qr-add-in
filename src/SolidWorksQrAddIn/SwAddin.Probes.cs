@@ -117,6 +117,7 @@ namespace SolidWorksQrAddIn
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
+                  $"preset={_session.ContentPresetId} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -141,6 +142,12 @@ namespace SolidWorksQrAddIn
 
         public string SetQrGrowthProbe(string growthText) =>
             FieldProbe(s => s.SetGrowthText(growthText));
+
+        public string SetQrContentTypeProbe(string presetId) =>
+            FieldProbe(s => s.SetContentType(presetId));
+
+        public string SetQrPresetFieldProbe(string key, string value) =>
+            FieldProbe(s => s.SetPresetField(key, value));
 
         private static string Describe(QrSketchResult result)
         {
