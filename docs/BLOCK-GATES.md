@@ -6,12 +6,15 @@
 **Driver (interactive, engineer-reported):** with the unit-proportioned
 definition (`Scale = 25` carrying the size), selecting the QR sketch and
 clicking Extrude produced SolidWorks' "doubly nested contour" prompt and
-no cell region could be picked — the interactive contour engine cannot
-resolve ~0.034 mm def-space cells. Control experiment: **explode the
-add-in's block, re-make a block from the same geometry by hand (real-size
-def, `Scale = 1`) → the sketch extrudes normally.** The fix is to emit
-that shape: definition at the staged size, instance at `Scale = 1`; the
-PM Scale field is now a resize factor.
+no cell region could be picked. Control experiments: **explode the
+add-in's block and re-make a block by hand (real-size def, `Scale = 1`)
+→ extrudes; and on the same pre-fix sketch, `Scale → 1` alone →
+extrudes.** The mechanism is `Scale ≠ 1` — the interactive contour
+engine refuses a scaled instance's regions. The fix is to emit the
+user-made-block shape: definition at the staged size, instance at
+`Scale = 1`; the PM Scale field is now a resize factor (and any later
+Scale edit to ≠1 re-breaks interactive picking — explode or re-insert
+then).
 
 Updated `blockqr` gates (`Program.cs`):
 

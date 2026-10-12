@@ -16,14 +16,16 @@ squares track Scale/drag.
 Interactive use then showed what the harness could not: selecting the
 committed sketch and clicking Extrude produced SolidWorks'
 "**doubly nested contour**" prompt, and no region inside the block could
-be picked — the interactive contour engine does not resolve the ~0.034 mm
-cells inside the unit-size definition. Block-internal entities were
-already known to be locked against entity picks; the decisive experiment
-was the engineer's own: **explode the add-in's block, re-make a block
-from the same geometry (Tools > Blocks > Make), and the sketch extrudes
-normally.** A user-made block is definition at real size + instance
-`Scale = 1` — the unit-tiny definition is the property that made our
-block different.
+be picked. Block-internal entities were already known to be locked
+against entity picks; the decisive experiments were the engineer's own:
+
+- **Explode the add-in's block, re-make a block from the same geometry
+  (Tools > Blocks > Make) → the sketch extrudes normally.** A user-made
+  block is definition at real size + instance `Scale = 1`.
+- **On a pre-fix sketch, setting `Scale = 1` (shrinking the rendered QR
+  to 1 mm) also restores extrusion** — isolating the variable: the
+  interactive contour engine refuses a scaled instance's regions
+  (`Scale ≠ 1`), not a small definition per se.
 
 ## Decision
 
@@ -42,6 +44,10 @@ block different.
 
 - The interactive extrude path is restored to what a user-made block
   does: region-pick inside a cell, or explode → select-all → extrude.
+- **Caveat, same mechanism:** a later `Scale` edit to anything ≠ 1
+  re-breaks interactive region-picking (the picker's refusal follows the
+  scale, not the def size). After resizing, extrude via explode, or
+  re-insert at the new size instead.
 - "Edit Scale to resize" survives, now in ratio units — slightly less
   direct than typing the mm size (the ADR 0001 readout elegance), which
   is the accepted cost of an extrudable sketch.

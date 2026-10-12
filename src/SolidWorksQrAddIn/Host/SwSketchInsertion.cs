@@ -152,12 +152,13 @@ namespace SolidWorksQrAddIn.Host
         ///      FACTOR of the created size, not a size readout.
         /// ADR 0004: an earlier design drew the def unit-proportioned
         /// (1 doc unit) and carried the size on instance Scale — SolidWorks'
-        /// interactive contour picker could not resolve the tiny def-space
-        /// cells and refused extrusion ("doubly nested contour"). A block
-        /// the user makes by hand is always real-size + Scale 1 and
-        /// extrudes normally — matching that shape restores the interactive
-        /// extrude path while keeping every block property (move/scale as a
-        /// unit, def-internal squares, clean explode).
+        /// interactive contour picker refuses a scaled instance's regions
+        /// entirely ("doubly nested contour"); engineer-verified that the
+        /// same block at Scale 1 extrudes normally. A block the user makes
+        /// by hand is always real-size + Scale 1 — matching that shape
+        /// restores the interactive extrude path while keeping every block
+        /// property (move/scale as a unit, def-internal squares, clean
+        /// explode).
         /// Live-verified (consexp, docs/BLOCK-GATES.md round 4): construction
         /// segments inside a block definition render on the instance, track
         /// Scale edits and drags, keep the construction flag through explode,

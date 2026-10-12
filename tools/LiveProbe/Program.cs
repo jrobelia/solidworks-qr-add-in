@@ -2064,8 +2064,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (inst == null) return;
             Check(Math.Abs(inst.Scale - 1.0) < 1e-6,
                 "instance Scale is 1 — the definition carries the real 25 mm " +
-                "size (ADR 0004: unit-def + Scale=size broke the interactive " +
-                "contour picker)",
+                "size (ADR 0004: the interactive contour picker refuses a " +
+                "scaled instance's regions)",
                 $"Scale={inst.Scale:F4} Scale2={inst.Scale2:F4} Angle={inst.Angle:F3}");
             var ipos = inst.InstancePosition?.ArrayData as double[];
             Check(ipos != null && Math.Abs(ipos[0]) < 1e-9 && Math.Abs(ipos[1]) < 1e-9,
