@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using QRCoder;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -23,7 +24,10 @@ namespace SolidWorksQrAddIn.UI
     ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
     ///     <see cref="QrSketchSession.SetGrowthText"/>) — DEBOUNCED, so a
     ///     burst of keystrokes coalesces into one regeneration instead of
-    ///     regenerating a dense QR synchronously per keystroke,
+    ///     regenerating a dense QR synchronously per keystroke — and the
+    ///     error-correction selector straight into
+    ///     <see cref="QrSketchSession.SetEccLevel"/>, a discrete pick that
+    ///     needs no debounce,
     ///   - blits <see cref="QrSketchSession.Picture"/> (a Gray8 raster) into an
     ///     Image via BitmapSource.Create — the same grown contour result that
     ///     sketch insertion consumes,
@@ -55,6 +59,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _sizeLabel;
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
+        private readonly ComboBox _eccBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
         private readonly Grid _infoGrid;
@@ -116,6 +121,20 @@ namespace SolidWorksQrAddIn.UI
                           "The QR code size stays fixed.",
             };
             panel.Children.Add(_growthBox);
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Error correction:",
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _eccBox = new ComboBox
+            {
+                ItemsSource = new[] { "L", "M", "Q", "H" },
+                ToolTip = "QR error-correction level. A higher level survives more " +
+                          "damage but packs more cells into the same size — " +
+                          "H is densest, L lightest. M is the default.",
+            };
+            panel.Children.Add(_eccBox);
 
             var frame = new Border
             {
@@ -198,6 +217,17 @@ namespace SolidWorksQrAddIn.UI
             _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
             _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
             _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
+            // A dropdown pick is discrete — there is nothing to debounce, so
+            // the level lands in the session immediately.
+            _eccBox.SelectionChanged += (_, __) =>
+            {
+                if (_suppressFieldEvents || _eccBox.SelectedItem == null)
+                    return;
+                _session.SetEccLevel(
+                    (QRCodeGenerator.ECCLevel)Enum.Parse(
+                        typeof(QRCodeGenerator.ECCLevel),
+                        (string)_eccBox.SelectedItem));
+            };
 
             // Unit-change refresh is event-driven through the session's
             // host-state watcher (ActiveDocChangeNotify + UnitsChangeNotify);
@@ -214,6 +244,7 @@ namespace SolidWorksQrAddIn.UI
                 _contentBox.Text = _session.Content;
                 _sizeBox.Text = _session.SizeText;
                 _growthBox.Text = _session.GrowthText;
+                _eccBox.SelectedItem = _session.EccLevel.ToString();
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -242,6 +273,8 @@ namespace SolidWorksQrAddIn.UI
                     _sizeBox.Text = _session.SizeText;
                 if (!_growthDirty && _growthBox.Text != _session.GrowthText)
                     _growthBox.Text = _session.GrowthText;
+                if (!Equals(_eccBox.SelectedItem, _session.EccLevel.ToString()))
+                    _eccBox.SelectedItem = _session.EccLevel.ToString();
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -367,7 +400,8 @@ namespace SolidWorksQrAddIn.UI
                 var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
-                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText}";
+                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} " +
+                       $"viewCell={cellText} viewEcc={_eccBox.SelectedItem}";
             }
         }
 

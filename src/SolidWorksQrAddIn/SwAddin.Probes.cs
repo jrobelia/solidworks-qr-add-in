@@ -1,4 +1,5 @@
 using System;
+using QRCoder;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
@@ -117,6 +118,7 @@ namespace SolidWorksQrAddIn
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
+                  $"ecc={_session.EccLevel} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -141,6 +143,29 @@ namespace SolidWorksQrAddIn
 
         public string SetQrGrowthProbe(string growthText) =>
             FieldProbe(s => s.SetGrowthText(growthText));
+
+        /// <summary>
+        /// The pane's error-correction selector, probed: parse the picked
+        /// level and apply it through the session setter like every other
+        /// field probe. An unrecognised level never reaches the session.
+        /// </summary>
+        public string SetQrEccProbe(string level)
+        {
+            var session = ReadySession;
+            if (session == null)
+                return NotConnectedError;
+            QRCodeGenerator.ECCLevel ecc;
+            switch ((level ?? string.Empty).Trim().ToUpperInvariant())
+            {
+                case "L": ecc = QRCodeGenerator.ECCLevel.L; break;
+                case "M": ecc = QRCodeGenerator.ECCLevel.M; break;
+                case "Q": ecc = QRCodeGenerator.ECCLevel.Q; break;
+                case "H": ecc = QRCodeGenerator.ECCLevel.H; break;
+                default:
+                    return $"ERROR unknown ECC level '{level}' — expected L, M, Q or H.";
+            }
+            return Describe(session.SetEccLevel(ecc));
+        }
 
         private static string Describe(QrSketchResult result)
         {

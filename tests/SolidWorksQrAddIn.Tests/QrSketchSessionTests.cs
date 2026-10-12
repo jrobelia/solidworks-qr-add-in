@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Interaction;
@@ -188,6 +189,70 @@ namespace SolidWorksQrAddIn.Tests
                 System.StringComparison.OrdinalIgnoreCase);
         }
 
+        // ---------------- error-correction level ----------------
+
+        [Fact]
+        public void The_ecc_level_defaults_to_M()
+        {
+            var (session, _) = NewSession();
+
+            Assert.Equal(QRCodeGenerator.ECCLevel.M, session.EccLevel);
+        }
+
+        [Fact]
+        public void SetEccLevel_revalidates_the_whole_request()
+        {
+            var (session, _) = NewSession();
+            session.SetContent("SW-QR-MVP12"); // version 1 (N=21) at M
+
+            var result = session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal(2, session.CurrentResult!.Sketch!.Info.Version);
+            Assert.Equal(25, session.CurrentResult.Sketch.Info.CellCount);
+            Assert.NotNull(session.Picture);
+        }
+
+        [Fact]
+        public void An_ecc_change_syncs_the_open_window()
+        {
+            var (session, windows) = NewSession();
+            session.OpenOrFocusWindow();
+            var before = windows[0].SyncCount;
+
+            session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+
+            Assert.True(windows[0].SyncCount > before);
+        }
+
+        [Fact]
+        public void A_level_change_can_make_a_too_long_payload_fit()
+        {
+            var (session, _) = NewSession();
+            var refused = session.SetContent(new string('A', 4000));
+            Assert.Equal(QrSketchErrorKind.PayloadTooLong, refused.Error!.Kind);
+            Assert.Contains("error correction M", session.StatusText);
+
+            var result = session.SetEccLevel(QRCodeGenerator.ECCLevel.L);
+
+            Assert.True(result.Error?.Kind != QrSketchErrorKind.PayloadTooLong,
+                $"the payload should stop being a capacity refusal at L, got {result.Error?.Kind}");
+        }
+
+        [Fact]
+        public void SetEccLevel_keeps_an_invalid_request_invalid()
+        {
+            var (session, _) = NewSession();
+            session.SetContent("");
+
+            var result = session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(QrSketchErrorKind.EmptyContent, result.Error!.Kind);
+            Assert.Null(session.Picture);
+            Assert.False(session.HasValidRequest);
+        }
+
         // ---------------- create sketch ----------------
 
         [Fact]
@@ -318,6 +383,59 @@ namespace SolidWorksQrAddIn.Tests
             Assert.False(second.Succeeded);
             Assert.Contains("sketch", second.Message, System.StringComparison.OrdinalIgnoreCase);
             Assert.Single(host.Document!.Sketches); // nothing added to the open sketch
+        }
+
+        [Fact]
+        public void Create_inserts_the_geometry_at_the_session_ecc_level()
+        {
+            var (session, _) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.SetContent("SW-QR-MVP12"); // version 1 (N=21) at M, version 2 (N=25) at H
+            session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+
+            var result = session.CreateSketch(host);
+
+            Assert.True(result.Succeeded, result.Message);
+            var expected = QrSketchGenerator.Generate(new QrSketchRequest(
+                "SW-QR-MVP12",
+                QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide)
+            {
+                EccLevel = QRCodeGenerator.ECCLevel.H,
+            }).Sketch!;
+            Assert.Equal(expected.Info.SegmentCount,
+                host.Document!.Sketches.Single().ProfileSegments.Count());
+        }
+
+        [Fact]
+        public void The_ecc_level_applies_to_future_creates_only()
+        {
+            var (session, _) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.SetContent("SW-QR-MVP12");
+            session.CreateSketch(host);
+            host.Document!.ActiveSketch = null; // engineer exits the QR sketch
+
+            session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+            var second = session.CreateSketch(host);
+
+            Assert.True(second.Succeeded, second.Message);
+            Assert.Equal(2, host.Document.Sketches.Count);
+            var atM = QrSketchGenerator.Generate("SW-QR-MVP12",
+                QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
+            var atH = QrSketchGenerator.Generate(new QrSketchRequest("SW-QR-MVP12",
+                QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide)
+            {
+                EccLevel = QRCodeGenerator.ECCLevel.H,
+            }).Sketch!;
+            // The first sketch keeps the level it was created with —
+            // settings reach future creates, never existing sketches.
+            Assert.Equal(atM.Info.SegmentCount,
+                host.Document.Sketches[0].ProfileSegments.Count());
+            Assert.Equal(atH.Info.SegmentCount,
+                host.Document.Sketches[1].ProfileSegments.Count());
         }
 
         [Fact]
