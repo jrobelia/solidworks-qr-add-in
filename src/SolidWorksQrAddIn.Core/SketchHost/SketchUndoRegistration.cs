@@ -8,7 +8,7 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// a committed insertion just produced — the step's display name, the
     /// created sketch feature's name, and the STAGED model: the contour
     /// edges in sketch-space metres at the final size plus the construction
-    /// squares in unit block-definition space. A redo re-stages all of it
+    /// squares in the same metre space. A redo re-stages all of it
     /// through the same buffered insertion session — block instance,
     /// squares included.
     /// Contains no SolidWorks objects; the host binds it to its own

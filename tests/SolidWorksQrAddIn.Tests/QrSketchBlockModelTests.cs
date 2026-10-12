@@ -5,13 +5,17 @@ using Xunit;
 namespace SolidWorksQrAddIn.Tests
 {
     /// <summary>
-    /// The block-instance-era half of the generator result (spec #10, ADR 0001/0002):
-    /// the working matrix carries the fixed 4-cell light quiet zone, the result
-    /// emits the QR square and keep-out square as construction geometry plus a
-    /// dimension spec, and a unit-proportioned contour set rides alongside the
-    /// sized one. Assertions stay on the returned model — never pipeline internals.
+    /// The block-instance-era half of the generator result (spec #10, ADR
+    /// 0002/0003): the working matrix carries the fixed 4-cell light quiet
+    /// zone, and the result emits the sized contour set plus the QR square
+    /// and keep-out square as construction squares in the same sketch-space
+    /// metres — no dimensions (ADR 0003 deleted the dimension spec), no
+    /// separate unit model (the host re-normalizes the sized set into the
+    /// block definition; the sized contours are the single transport and
+    /// the preview source). Assertions stay on the returned model — never
+    /// pipeline internals.
     /// </summary>
-    public class QrSketchUnitModelTests
+    public class QrSketchBlockModelTests
     {
         private const double SizeMm = 25.0;
         private const double Growth = 0.03;
@@ -90,44 +94,40 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(contour.Vertices.Min(v => v.Y) > -half);
         }
 
-        // ---------- construction squares + dimension spec ----------
+        // ---------- construction squares (no dimensions — ADR 0003) ----------
 
         [Fact]
-        public void Qr_square_is_the_unit_box_in_definition_space()
+        public void Qr_square_is_the_grown_outline_in_sketch_metres()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
             var qrSquare = Assert.Single(sketch.ConstructionSquares,
                 s => s.Role == QrSquareRole.QrSquare);
-            Assert.True(qrSquare.IsConstruction);
 
-            // ADR 0003: the square lives INSIDE the block definition, in the
-            // same unit space as the Unit contours — the grown QR-cell extent
-            // reads exactly ±0.5 there; the instance Scale projects it to ±S/2.
+            // The square is the grown QR-cell extent at the requested size:
+            // ±S/2 in sketch-space metres, staged exactly like the contours —
+            // its span is the insertion's authoritative size measurement.
             Assert.Equal(4, qrSquare.Vertices.Count);
-            Assert.Equal(0.5, qrSquare.Vertices.Max(v => v.X), 9);
-            Assert.Equal(-0.5, qrSquare.Vertices.Min(v => v.X), 9);
-            Assert.Equal(0.5, qrSquare.Vertices.Max(v => v.Y), 9);
-            Assert.Equal(-0.5, qrSquare.Vertices.Min(v => v.Y), 9);
+            Assert.Equal(0.0125, qrSquare.Vertices.Max(v => v.X), 9);
+            Assert.Equal(-0.0125, qrSquare.Vertices.Min(v => v.X), 9);
+            Assert.Equal(0.0125, qrSquare.Vertices.Max(v => v.Y), 9);
+            Assert.Equal(-0.0125, qrSquare.Vertices.Min(v => v.Y), 9);
             Assert.Equal(4, qrSquare.Edges.Count());
         }
 
         [Fact]
-        public void Keep_out_square_is_the_working_matrix_boundary_in_unit_space()
+        public void Keep_out_square_is_the_working_matrix_boundary_in_metres()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
             var keepOut = Assert.Single(sketch.ConstructionSquares,
                 s => s.Role == QrSquareRole.KeepOutSquare);
-            Assert.True(keepOut.IsConstruction);
 
             // ADR 0002: the working-matrix boundary — (N+8) cell pitches per
-            // side at the requested size. In unit definition space the
-            // requested size is 1.0, so the square reads (N+8)·pitch/S per
-            // side — the same square the instance projects to the physical
-            // matrix boundary at Scale=S.
-            double expectedSide =
-                sketch.Info.MatrixCellCount * sketch.Info.PitchMm / sketch.Info.FinalSizeMm;
+            // side at the requested size, in the same sketch-space metres as
+            // the contours. The host's def normalization shrinks it to the
+            // unit-matrix boundary inside the block.
+            double expectedSide = sketch.Info.MatrixCellCount * sketch.Info.PitchMm / 1000.0;
             double side = keepOut.Vertices.Max(v => v.X) - keepOut.Vertices.Min(v => v.X);
             Assert.Equal(expectedSide, side, 9);
             Assert.Equal(expectedSide,
@@ -165,7 +165,7 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Squares_are_definition_geometry_no_dimensions_are_emitted()
+        public void Squares_are_closed_loops_no_dimensions_are_emitted()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
@@ -174,63 +174,65 @@ namespace SolidWorksQrAddIn.Tests
             // model carries squares only — the size surfaces are the block PM
             // Scale field and the pane readout, never sketch dimensions.
             Assert.Equal(2, sketch.ConstructionSquares.Count);
-            Assert.All(sketch.ConstructionSquares, s => Assert.True(s.IsConstruction));
-        }
-
-        // ---------- unit-proportioned contours alongside the sized set ----------
-
-        [Fact]
-        public void Unit_contours_span_exactly_one_unit_at_the_grown_outline()
-        {
-            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
-
-            // The block-definition space: the grown QR outline reads 1×1 —
-            // finder cells reach all four grown edges, so the extreme
-            // coordinates are exactly ±0.5 (the host converts to document
-            // units later).
-            var xs = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
-            var ys = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.Y).ToList();
-            Assert.Equal(0.5, xs.Max());
-            Assert.Equal(-0.5, xs.Min());
-            Assert.Equal(0.5, ys.Max());
-            Assert.Equal(-0.5, ys.Min());
-        }
-
-        [Fact]
-        public void Unit_contours_preserve_the_sized_contour_structure()
-        {
-            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
-
-            // Same model, second coordinate space: identical contour list,
-            // hole flags and vertex counts — nothing re-shaped.
-            Assert.Equal(sketch.Contours.Count, sketch.Unit.Contours.Count);
-            Assert.Equal(sketch.Regions.Count, sketch.Unit.Regions.Count);
-            for (var i = 0; i < sketch.Contours.Count; i++)
+            foreach (var square in sketch.ConstructionSquares)
             {
-                Assert.Equal(sketch.Contours[i].IsHole, sketch.Unit.Contours[i].IsHole);
-                Assert.Equal(sketch.Contours[i].Vertices.Count,
-                    sketch.Unit.Contours[i].Vertices.Count);
+                // A square is one closed loop: four vertices, four edges, the
+                // last edge closing back to the first vertex.
+                Assert.Equal(4, square.Vertices.Count);
+                var edges = square.Edges.ToList();
+                Assert.Equal(4, edges.Count);
+                Assert.Equal(square.Vertices[0].X, edges[3].End.X);
+                Assert.Equal(square.Vertices[0].Y, edges[3].End.Y);
             }
-
-            // Nesting preserved: at least one ring→hole→island survives.
-            int nestedRings = sketch.Unit.Regions.Count(r =>
-                r.Holes.Any(h => h.Islands.Count > 0));
-            Assert.True(nestedRings >= 1, "unit regions must keep hole/island nesting");
         }
 
+        // ---------- the sized contour set: structure + edge enumeration ----------
+
         [Fact]
-        public void Unit_contours_are_centred_and_keep_axis_aligned_shared_endpoints()
+        public void Sized_contours_reach_the_grown_outline_on_every_side()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
-            foreach (var contour in sketch.Unit.Contours)
+            // For a real QR the finder cells reach all four grown edges: the
+            // contour set itself spans the requested outline — the same
+            // extents the QR square marks.
+            var xs = sketch.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
+            var ys = sketch.Contours.SelectMany(c => c.Vertices).Select(v => v.Y).ToList();
+            Assert.Equal(0.0125, xs.Max(), 9);
+            Assert.Equal(-0.0125, xs.Min(), 9);
+            Assert.Equal(0.0125, ys.Max(), 9);
+            Assert.Equal(-0.0125, ys.Min(), 9);
+        }
+
+        [Fact]
+        public void Sized_contours_preserve_ring_hole_island_nesting()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            // The structure the sketch must reproduce: every contour in the
+            // flat list is a region outline, a hole loop, or an island.
+            Assert.Equal(sketch.Regions.Sum(r =>
+                    1 + r.Holes.Count + r.Holes.Sum(h => h.Islands.Count)),
+                sketch.Contours.Count);
+            Assert.Contains(sketch.Contours, c => c.IsHole);
+            int nestedRings = sketch.Regions.Count(r =>
+                r.Holes.Any(h => h.Islands.Count > 0));
+            Assert.True(nestedRings >= 1, "the flat set must keep ring→hole→island nesting");
+        }
+
+        [Fact]
+        public void Sized_contours_are_centred_and_keep_axis_aligned_shared_endpoints()
+        {
+            var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            foreach (var contour in sketch.Contours)
             {
                 var edges = contour.Edges.ToList();
                 Assert.Equal(contour.Vertices.Count, edges.Count);
                 for (var i = 0; i < edges.Count; i++)
                 {
-                    // Same affine guarantee as the sized set: shared endpoints
-                    // are bit-identical and every edge is axis-aligned.
+                    // Shared endpoints are bit-identical — the affine map
+                    // preserves the closed loops the sketch needs.
                     var end = edges[i].End;
                     var nextStart = edges[(i + 1) % edges.Count].Start;
                     Assert.Equal(nextStart.X, end.X);
@@ -238,40 +240,18 @@ namespace SolidWorksQrAddIn.Tests
                 }
                 foreach (var e in edges)
                     Assert.True(e.Start.X == e.End.X || e.Start.Y == e.End.Y,
-                        "unit contour edges must be axis-aligned");
+                        "contour edges must be axis-aligned");
             }
         }
 
         [Fact]
-        public void Sized_and_unit_contours_emit_side_by_side()
-        {
-            // Expand-contract: today's sized metre-space contours are still
-            // there, unchanged — the unit set rides alongside, never replaces.
-            var sketch = QrSketchGenerator.GenerateFromCells(
-                Cells(3, (0, 0), (1, 1), (2, 2)), SizeMm, Growth).Sketch!;
-
-            double half = SizeMm / 2.0 / 1000.0;
-            var sizedXs = sketch.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
-            var unitXs = sketch.Unit.Contours.SelectMany(c => c.Vertices).Select(v => v.X).ToList();
-            Assert.True(sizedXs.Max() <= half, "sized set stays inside the grown extent");
-            Assert.True(unitXs.Max() <= 0.5, "unit set stays inside the unit outline");
-
-            // The two sets tell the same shape at two scales: unit = sized / S.
-            double sizeM = SizeMm / 1000.0;
-            var sizedVertex = sketch.Contours[0].Vertices[0];
-            var unitVertex = sketch.Unit.Contours[0].Vertices[0];
-            Assert.Equal(unitVertex.X, sizedVertex.X / sizeM, 12);
-            Assert.Equal(unitVertex.Y, sizedVertex.Y / sizeM, 12);
-        }
-
-        [Fact]
-        public void Unit_edges_enumerate_every_contour_edge()
+        public void Edges_enumerate_every_contour_edge_in_insertion_order()
         {
             var sketch = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
 
-            int expected = sketch.Unit.Contours.Sum(c => c.Vertices.Count);
-            Assert.Equal(expected, sketch.Unit.Edges.Count());
-            Assert.Equal(sketch.Info.SegmentCount, sketch.Unit.Edges.Count());
+            int expected = sketch.Contours.Sum(c => c.Vertices.Count);
+            Assert.Equal(expected, sketch.Edges.Count());
+            Assert.Equal(sketch.Info.SegmentCount, sketch.Edges.Count());
         }
     }
 }

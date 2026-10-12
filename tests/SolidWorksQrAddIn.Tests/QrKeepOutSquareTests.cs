@@ -9,8 +9,8 @@ namespace SolidWorksQrAddIn.Tests
     /// <summary>
     /// Spec #10 / ticket #18, reworked by ADR 0003 — the keep-out square is
     /// the working-matrix boundary ((N+8)·pitch per side, ADR 0002) drawn as
-    /// construction geometry INSIDE the block definition, in the same unit
-    /// space as the contours. It needs no constraints, dims, or equations:
+    /// construction geometry INSIDE the block definition, staged in the same
+    /// sketch-space metres as the contours. It needs no constraints, dims, or equations:
     /// folded into the definition it inherits the instance transform, so
     /// the four-cell quiet zone tracks every Scale edit and every drag for
     /// free. Assertions stay on the fake host's world state — the
@@ -59,7 +59,7 @@ namespace SolidWorksQrAddIn.Tests
             return def.ConstructionEdges.Where(e => Extent(e) == max).ToList();
         }
 
-        /// <summary>The model's keep-out square half-extent in unit space.</summary>
+        /// <summary>The model's keep-out square half-extent in sketch-space metres.</summary>
         private static double ModelKeepOutHalf() =>
             Expected.ConstructionSquares.Single(s => s.Role == QrSquareRole.KeepOutSquare)
                 .Vertices.Max(v => System.Math.Max(System.Math.Abs(v.X), System.Math.Abs(v.Y)));
@@ -81,9 +81,9 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(4, keepOut.Count);
             Assert.All(keepOut, e => Assert.True(e.Construction));
 
-            // Unit-space extent: the model's keep-out half × one document
-            // unit in metres — strictly outside the unit QR box (±0.5).
-            double expectedHalfM = ModelKeepOutHalf() * 0.001;
+            // Def-space extent: the model's sized keep-out half ÷ the
+            // instance scale — strictly outside the unit QR box (±0.5 mm).
+            double expectedHalfM = ModelKeepOutHalf() / SizeMm;
             Assert.All(keepOut, e => Assert.Equal(expectedHalfM, Extent(e), 9));
             Assert.True(expectedHalfM > 0.0005);
         }
@@ -97,11 +97,12 @@ namespace SolidWorksQrAddIn.Tests
             var sketch = host.Document!.Sketches.Single();
             var instance = sketch.BlockInstances.Single();
 
-            // Rendered extent = unit half-extent × Scale — the working
-            // matrix boundary in metres.
+            // Rendered extent = the model's sized half-extent (the block
+            // projects def×Scale; def = sized÷Scale) — the working matrix
+            // boundary in metres.
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             double keepOutHalf = cons.Max(Extent);
-            Assert.Equal(ModelKeepOutHalf() * 0.001 * SizeMm, keepOutHalf, 9);
+            Assert.Equal(ModelKeepOutHalf(), keepOutHalf, 9);
             // …and strictly outside the grown QR extent (±S/2).
             Assert.True(keepOutHalf > SizeMm / 2.0 / 1000.0);
         }
@@ -139,11 +140,11 @@ namespace SolidWorksQrAddIn.Tests
             // exists anywhere to do it.
             instance.Scale = SizeMm / 2.0;
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
-            Assert.Equal(ModelKeepOutHalf() * 0.001 * SizeMm / 2.0, cons.Max(Extent), 9);
+            Assert.Equal(ModelKeepOutHalf() / 2.0, cons.Max(Extent), 9);
 
             instance.Scale = SizeMm * 2.0;
             cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
-            Assert.Equal(ModelKeepOutHalf() * 0.001 * SizeMm * 2.0, cons.Max(Extent), 9);
+            Assert.Equal(ModelKeepOutHalf() * 2.0, cons.Max(Extent), 9);
         }
 
         [Fact]
