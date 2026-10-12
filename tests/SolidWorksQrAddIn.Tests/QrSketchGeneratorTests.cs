@@ -1,4 +1,5 @@
 using System.Linq;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Geometry;
 using Xunit;
 
@@ -340,6 +341,116 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.False(result.Succeeded);
             Assert.Equal(QrSketchErrorKind.InvalidGeometry, result.Error!.Kind);
+        }
+
+        // ---------- error-correction level ----------
+
+        [Fact]
+        public void The_request_defaults_to_error_correction_M()
+        {
+            // M is the historical behaviour — the request must default to it
+            // so the selector-free entry points change nothing.
+            var request = new QrSketchRequest("SW-QR-MVP", SizeMm, Growth);
+
+            Assert.Equal(QRCodeGenerator.ECCLevel.M, request.EccLevel);
+        }
+
+        [Fact]
+        public void The_default_request_produces_the_same_geometry_as_before()
+        {
+            // The convenience entry point is the request at its defaults —
+            // the encoded matrix must be byte-identical, not just similar.
+            var expected = QrSketchGenerator.Generate("SW-QR-MVP", SizeMm, Growth).Sketch!;
+
+            var actual = QrSketchGenerator
+                .Generate(new QrSketchRequest("SW-QR-MVP", SizeMm, Growth)).Sketch!;
+
+            Assert.Equal(expected.Info.Version, actual.Info.Version);
+            Assert.Equal(expected.Info.SegmentCount, actual.Info.SegmentCount);
+            var expectedEdges = expected.Edges.ToList();
+            var actualEdges = actual.Edges.ToList();
+            Assert.Equal(expectedEdges.Count, actualEdges.Count);
+            for (var i = 0; i < expectedEdges.Count; i++)
+            {
+                Assert.Equal(expectedEdges[i].Start.X, actualEdges[i].Start.X);
+                Assert.Equal(expectedEdges[i].Start.Y, actualEdges[i].Start.Y);
+                Assert.Equal(expectedEdges[i].End.X, actualEdges[i].End.X);
+                Assert.Equal(expectedEdges[i].End.Y, actualEdges[i].End.Y);
+            }
+        }
+
+        [Fact]
+        public void A_denser_ecc_level_changes_the_encoded_matrix()
+        {
+            // "SW-QR-MVP12" is 11 alphanumeric characters: ECC L still fits
+            // QR version 1 (N=21) while H needs version 2 (N=25) — the level
+            // on the request is what chooses the matrix, nothing else.
+            var light = QrSketchGenerator.Generate(new QrSketchRequest(
+                "SW-QR-MVP12", SizeMm, Growth) { EccLevel = QRCodeGenerator.ECCLevel.L });
+            var dense = QrSketchGenerator.Generate(new QrSketchRequest(
+                "SW-QR-MVP12", SizeMm, Growth) { EccLevel = QRCodeGenerator.ECCLevel.H });
+
+            Assert.True(light.Succeeded, light.Error?.Message);
+            Assert.True(dense.Succeeded, dense.Error?.Message);
+            Assert.Equal(1, light.Sketch!.Info.Version);
+            Assert.Equal(21, light.Sketch.Info.CellCount);
+            Assert.Equal(2, dense.Sketch!.Info.Version);
+            Assert.Equal(25, dense.Sketch.Info.CellCount);
+        }
+
+        [Fact]
+        public void A_payload_too_long_for_one_level_can_still_encode_at_a_lighter_one()
+        {
+            // 4000 alphanumeric characters exceed the version-40 capacity at
+            // M but not at L — the level on the request must actually reach
+            // the encoder. (At 25 mm the dense L matrix then trips the
+            // insertion guard instead; what matters here is that it is not a
+            // CAPACITY refusal.)
+            var request = new QrSketchRequest(new string('A', 4000), SizeMm, Growth);
+
+            request.EccLevel = QRCodeGenerator.ECCLevel.M;
+            var atM = QrSketchGenerator.Generate(request);
+            Assert.False(atM.Succeeded);
+            Assert.Equal(QrSketchErrorKind.PayloadTooLong, atM.Error!.Kind);
+
+            request.EccLevel = QRCodeGenerator.ECCLevel.L;
+            var atL = QrSketchGenerator.Generate(request);
+            Assert.True(atL.Error?.Kind != QrSketchErrorKind.PayloadTooLong,
+                $"the encoder should accept the payload at L, got {atL.Error?.Kind}");
+        }
+
+        [Theory]
+        [InlineData(QRCodeGenerator.ECCLevel.M)]
+        [InlineData(QRCodeGenerator.ECCLevel.H)]
+        public void The_capacity_error_names_the_level_in_force(QRCodeGenerator.ECCLevel level)
+        {
+            var request = new QrSketchRequest(new string('A', 4000), SizeMm, Growth)
+            {
+                EccLevel = level,
+            };
+
+            var result = QrSketchGenerator.Generate(request);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(QrSketchErrorKind.PayloadTooLong, result.Error!.Kind);
+            Assert.Contains($"error correction {level}", result.Error.Message);
+        }
+
+        [Theory]
+        [InlineData(QRCodeGenerator.ECCLevel.L)]
+        [InlineData(QRCodeGenerator.ECCLevel.M)]
+        [InlineData(QRCodeGenerator.ECCLevel.Q)]
+        [InlineData(QRCodeGenerator.ECCLevel.H)]
+        public void The_insertion_guard_applies_at_every_level(QRCodeGenerator.ECCLevel level)
+        {
+            // A 5 mm request is below the recorded insertion guard whatever
+            // the level — denser matrices are not exempt.
+            var request = new QrSketchRequest("SW-QR-MVP", 5.0, Growth) { EccLevel = level };
+
+            var result = QrSketchGenerator.Generate(request);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(QrSketchErrorKind.BelowInsertionLimit, result.Error!.Kind);
         }
 
         private static (double minX, double maxX, double minY, double maxY) BBox(QrContour c) =>

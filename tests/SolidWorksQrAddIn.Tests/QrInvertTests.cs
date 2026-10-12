@@ -133,7 +133,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var normal = QrSketchGenerator.Generate(PayloadA, SizeMm, Growth).Sketch!;
             var inverted = QrSketchGenerator.Generate(
-                PayloadA, SizeMm, Growth, invert: true).Sketch!;
+                new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true }).Sketch!;
 
             Assert.True(inverted.Info.Inverted);
             var field = Assert.Single(inverted.Regions);
@@ -172,7 +172,7 @@ namespace SolidWorksQrAddIn.Tests
             // diagonal necks — the same smallest-feature math, the same
             // recorded floor.
             var inverted = QrSketchGenerator.Generate(
-                PayloadA, SizeMm, Growth, invert: true).Sketch!;
+                new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true }).Sketch!;
 
             Assert.True(inverted.Info.MinEdgeMm >= QrInsertionGuard.MinInsertableFeatureMm,
                 $"min edge {inverted.Info.MinEdgeMm} mm");
@@ -185,7 +185,8 @@ namespace SolidWorksQrAddIn.Tests
         {
             // 5 mm at 3% growth puts the smallest feature below 0.05 mm in
             // either polarity — refused, never silently substituted.
-            var result = QrSketchGenerator.Generate(PayloadA, 5.0, Growth, invert: true);
+            var result = QrSketchGenerator.Generate(
+                new QrSketchRequest(PayloadA, 5.0, Growth) { Invert = true });
 
             Assert.False(result.Succeeded);
             Assert.Equal(QrSketchErrorKind.BelowInsertionLimit, result.Error!.Kind);
@@ -245,10 +246,10 @@ namespace SolidWorksQrAddIn.Tests
             // Preview parity: the session's picture IS a direct render of the
             // inverted module result — identical signature.
             var expected = QrPictureRenderer.Render(
-                QrSketchGenerator.Generate(PayloadA,
+                QrSketchGenerator.Generate(new QrSketchRequest(PayloadA,
                     QrSketchSession.InitialSizeMm,
-                    QrSketchSession.InitialGrowthFractionPerSide,
-                    invert: true).Sketch!,
+                    QrSketchSession.InitialGrowthFractionPerSide)
+                { Invert = true }).Sketch!,
                 QrSketchSession.PreviewPixelsAcross).Signature();
             Assert.Equal(expected, session.Picture!.Signature());
             Assert.NotEqual(normalSignature, session.Picture!.Signature());
@@ -285,10 +286,10 @@ namespace SolidWorksQrAddIn.Tests
             session.SetContent(PayloadA);
             Assert.True(session.HasValidRequest);
             var expected = QrPictureRenderer.Render(
-                QrSketchGenerator.Generate(PayloadA,
+                QrSketchGenerator.Generate(new QrSketchRequest(PayloadA,
                     QrSketchSession.InitialSizeMm,
-                    QrSketchSession.InitialGrowthFractionPerSide,
-                    invert: true).Sketch!,
+                    QrSketchSession.InitialGrowthFractionPerSide)
+                { Invert = true }).Sketch!,
                 QrSketchSession.PreviewPixelsAcross).Signature();
             Assert.Equal(expected, session.Picture!.Signature());
         }
@@ -319,10 +320,10 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
-            var expected = QrSketchGenerator.Generate(PayloadA,
+            var expected = QrSketchGenerator.Generate(new QrSketchRequest(PayloadA,
                 QrSketchSession.InitialSizeMm,
-                QrSketchSession.InitialGrowthFractionPerSide,
-                invert: true).Sketch!;
+                QrSketchSession.InitialGrowthFractionPerSide)
+            { Invert = true }).Sketch!;
             Assert.Equal(expected.Info.SegmentCount, sketch.ProfileSegments.Count());
         }
 
@@ -342,10 +343,10 @@ namespace SolidWorksQrAddIn.Tests
             var result = session.CreateSketch(host);
 
             Assert.True(result.Succeeded, result.Message);
-            var expected = QrSketchGenerator.Generate(PayloadA,
+            var expected = QrSketchGenerator.Generate(new QrSketchRequest(PayloadA,
                 QrSketchSession.InitialSizeMm,
-                QrSketchSession.InitialGrowthFractionPerSide,
-                invert: true).Sketch!;
+                QrSketchSession.InitialGrowthFractionPerSide)
+            { Invert = true }).Sketch!;
             Assert.Equal(expected.Info.SegmentCount,
                 host.Document.Sketches[1].ProfileSegments.Count());
             Assert.Equal(normalSegs, host.Document.Sketches[0].ProfileSegments.Count());
@@ -358,12 +359,12 @@ namespace SolidWorksQrAddIn.Tests
             var host = HostWithSelectedPlane();
 
             var result = new CreateQrSketchCommand().Execute(
-                host, PayloadA, SizeMm, Growth, invert: true);
+                host, new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true });
 
             Assert.True(result.Succeeded, result.Message);
             var sketch = host.Document!.Sketches.Single();
             var expected = QrSketchGenerator.Generate(
-                PayloadA, SizeMm, Growth, invert: true).Sketch!;
+                new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true }).Sketch!;
             var effective = sketch.ProfileSegments.ToList();
             Assert.Equal(expected.Info.SegmentCount, effective.Count);
             var expectedEdges = expected.Edges.ToList();
@@ -385,7 +386,9 @@ namespace SolidWorksQrAddIn.Tests
             var normal = QrPictureRenderer.Render(
                 QrSketchGenerator.Generate(PayloadA, SizeMm, Growth).Sketch!, Pixels);
             var inverted = QrPictureRenderer.Render(
-                QrSketchGenerator.Generate(PayloadA, SizeMm, Growth, invert: true).Sketch!, Pixels);
+                QrSketchGenerator.Generate(
+                    new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true }).Sketch!,
+                Pixels);
 
             Assert.Equal(normal.MmPerPixel, inverted.MmPerPixel, 12);
             Assert.True(inverted.DarkPixelCount > 2 * normal.DarkPixelCount,
@@ -397,7 +400,7 @@ namespace SolidWorksQrAddIn.Tests
         public void The_inverted_picture_fills_the_quiet_zone_and_leaves_dark_cells_unmarked()
         {
             var sketch = QrSketchGenerator.Generate(
-                PayloadA, SizeMm, Growth, invert: true).Sketch!;
+                new QrSketchRequest(PayloadA, SizeMm, Growth) { Invert = true }).Sketch!;
             var pic = QrPictureRenderer.Render(sketch, Pixels);
             double p = sketch.Info.PitchMm;
 

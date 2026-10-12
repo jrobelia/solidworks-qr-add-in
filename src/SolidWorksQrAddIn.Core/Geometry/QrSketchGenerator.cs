@@ -12,7 +12,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// nesting and size info out — or one actionable error.
     ///
     /// Pipeline (spec "Geometry generation"; matrix model per ADR 0002):
-    ///   1. encode exactly — standard QR, automatic version, ECC M;
+    ///   1. encode exactly — standard QR, automatic version, the request's
+    ///      error-correction level (L/M/Q/H, default M);
     ///   2. the working matrix is the encoder's full (N+8)×(N+8) matrix —
     ///      N×N data cells plus the fixed 4-cell light quiet zone per side;
     ///   3. pitch p = S/(N + 2r′), grown-cell pitch on a normalized integer
@@ -44,20 +45,27 @@ namespace SolidWorksQrAddIn.Core.Geometry
     public static class QrSketchGenerator
     {
         /// <summary>
-        /// Encodes <paramref name="content"/> exactly (standard QR, automatic
-        /// version selection, error correction M) and generates the grown,
-        /// unioned contour set at <paramref name="sizeMm"/> final outline width.
+        /// The request at its defaults: encodes <paramref name="content"/>
+        /// exactly (standard QR, automatic version selection, error
+        /// correction M, normal polarity) at <paramref name="sizeMm"/> final
+        /// outline width.
         /// </summary>
-        /// <param name="invert">
-        /// Output polarity (ADR 0002): false emits the dark cells — black code
-        /// on a light field; true emits the LIGHT cells of the whole working
-        /// matrix — a dark field with the code left unmarked, bounded at the
-        /// matrix edge, for marking/engraving workflows.
-        /// </param>
-        public static QrSketchResult Generate(
-            string content, double sizeMm, double growthFractionPerSide, bool invert = false)
+        public static QrSketchResult Generate(string content, double sizeMm, double growthFractionPerSide) =>
+            Generate(new QrSketchRequest(content, sizeMm, growthFractionPerSide));
+
+        /// <summary>
+        /// Encodes <see cref="QrSketchRequest.Content"/> exactly (standard QR,
+        /// automatic version selection, the request's
+        /// <see cref="QrSketchRequest.EccLevel"/>) and generates the grown,
+        /// unioned contour set at <see cref="QrSketchRequest.SizeMm"/> final
+        /// outline width, emitting the polarity
+        /// <see cref="QrSketchRequest.Invert"/> selects (ADR 0002).
+        /// </summary>
+        public static QrSketchResult Generate(QrSketchRequest request)
         {
-            if (string.IsNullOrEmpty(content))
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+            if (string.IsNullOrEmpty(request.Content))
                 return QrSketchResult.Fail(QrSketchErrorKind.EmptyContent,
                     "QR content is empty. Enter the text or URL to encode.");
 
@@ -66,7 +74,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             try
             {
                 using (var generator = new QRCodeGenerator())
-                using (var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M))
+                using (var data = generator.CreateQrCode(request.Content, request.EccLevel))
                 {
                     // ModuleMatrix IS the working matrix (ADR 0002): N×N data
                     // cells plus the standard 4-cell light quiet zone on every
@@ -86,8 +94,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
             catch (QRCoder.Exceptions.DataTooLongException ex)
             {
                 return QrSketchResult.Fail(QrSketchErrorKind.PayloadTooLong,
-                    $"The content does not fit in a standard QR code at error correction M: {ex.Message} " +
-                    "Shorten the text or URL.");
+                    $"The content does not fit in a standard QR code at error correction " +
+                    $"{request.EccLevel}: {ex.Message} Shorten the text or URL, or pick a " +
+                    "lighter error-correction level.");
             }
             catch (Exception ex)
             {
@@ -96,7 +105,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
-                sizeMm, growthFractionPerSide, version, invert);
+                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert);
         }
 
         /// <summary>

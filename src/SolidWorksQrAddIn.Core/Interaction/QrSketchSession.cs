@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
@@ -13,9 +14,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
     /// headlessly testable core. Owns three things:
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
-    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/> and
-    ///      <see cref="SetInvert"/> store
-    ///      each edit EXACTLY as entered (no trimming or replacing rejected
+    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/>,
+    ///      <see cref="SetEccLevel"/> and <see cref="SetInvert"/> store each
+    ///      edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
     ///      input clears the picture — a stale preview must never look like a
@@ -104,6 +105,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
+        private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
         private bool _invert;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
@@ -174,6 +176,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// growth text holds no usable value.
         /// </summary>
         public double? RequestedGrowthFractionPerSide => _growthFraction;
+
+        /// <summary>
+        /// The error-correction level in force — L/M/Q/H, default M. A
+        /// discrete selector value rather than a parsed text field, so it is
+        /// always usable: there is no invalid state.
+        /// </summary>
+        public QRCodeGenerator.ECCLevel EccLevel => _eccLevel;
 
         /// <summary>
         /// The output polarity in force (ADR 0002): false emits the dark
@@ -298,6 +307,18 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// Records the error-correction level and re-validates the whole
+        /// request — the level is part of the encoding, so a denser choice
+        /// rebuilds the matrix, the picture, and the info lines just like a
+        /// content edit.
+        /// </summary>
+        public QrSketchResult SetEccLevel(QRCodeGenerator.ECCLevel eccLevel)
+        {
+            _eccLevel = eccLevel;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// Flips the output polarity and re-validates the whole request: with
         /// <paramref name="invert"/> the emitted contours are the working
         /// matrix's light cells — a dark field with the code left unmarked —
@@ -310,6 +331,18 @@ namespace SolidWorksQrAddIn.Core.Interaction
             _invert = invert;
             return Regenerate();
         }
+
+        /// <summary>
+        /// The request the CURRENT inputs describe — the one the generator
+        /// and the create command both consume, so a create can never encode
+        /// different settings than the preview showed.
+        /// </summary>
+        private QrSketchRequest CurrentRequest(double sizeMm, double growthFraction) =>
+            new QrSketchRequest(_content, sizeMm, growthFraction)
+            {
+                EccLevel = _eccLevel,
+                Invert = _invert,
+            };
 
         private QrSketchResult Regenerate()
         {
@@ -330,7 +363,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
-                _current = QrSketchGenerator.Generate(_content, sizeMm, growthFraction, _invert);
+                _current = QrSketchGenerator.Generate(CurrentRequest(sizeMm, growthFraction));
             }
 
             if (_current.Succeeded)
@@ -385,7 +418,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     FormatMm(QrSketchInfo.QuietZoneCellsPerSide * info.PitchMm) + ") per side"),
                 new QrInfoLine(
                     "Encoding",
-                    "Version " + info.Version + " · ECC M · " + content.Length +
+                    "Version " + info.Version + " · ECC " + _eccLevel + " · " + content.Length +
                     (content.Length == 1 ? " character" : " characters")),
                 new QrInfoLine(
                     "Polarity",
@@ -538,15 +571,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (!_current.Succeeded)
                 return CommandResult.Failure(_current.Error!.Message);
 
-            // _current.Succeeded ⇒ both fields parsed — these are exactly the
-            // values the current result was generated and validated with.
+            // _current.Succeeded ⇒ both fields parsed — the request is exactly
+            // the one the current result was generated and validated with.
             // The window/command boundary must never let a host exception
             // escape toward SolidWorks — a failure result is the contract.
             CommandResult result;
             try
             {
                 result = _command.Execute(
-                    host, _content, _sizeMm!.Value, _growthFraction!.Value, _invert);
+                    host, CurrentRequest(_sizeMm!.Value, _growthFraction!.Value));
             }
             catch (Exception ex)
             {

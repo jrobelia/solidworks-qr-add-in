@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Tests.Fakes;
@@ -185,6 +186,23 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal("1.187 mm", InfoValue(session, "Cell size"));
             Assert.Equal("4 cells (4.748 mm) per side", InfoValue(session, "Quiet zone"));
             Assert.Equal("Version 1 · ECC M · 9 characters", InfoValue(session, "Encoding"));
+        }
+
+        [Fact]
+        public void The_encoding_line_names_the_ecc_level_in_force()
+        {
+            var host = HostWithSelectedPlane();
+            var (session, _) = NewSession(host);
+            // "SW-QR-MVP12" encodes at version 1 (N=21) at M but needs
+            // version 2 (N=25) at H — the line reports both facts of the
+            // CURRENT request.
+            session.SetContent("SW-QR-MVP12");
+
+            Assert.Equal("Version 1 · ECC M · 11 characters", InfoValue(session, "Encoding"));
+
+            session.SetEccLevel(QRCodeGenerator.ECCLevel.H);
+
+            Assert.Equal("Version 2 · ECC H · 11 characters", InfoValue(session, "Encoding"));
         }
 
         [Fact]

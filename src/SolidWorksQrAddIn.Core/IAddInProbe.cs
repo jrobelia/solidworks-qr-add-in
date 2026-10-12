@@ -87,6 +87,16 @@ namespace SolidWorksQrAddIn.Core
         string SetQrGrowthProbe(string growthText);
 
         /// <summary>
+        /// Picks the error-correction level exactly like the pane's selector:
+        /// "L", "M", "Q" or "H" (case-insensitive). Returns
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;"
+        /// for the revalidated request, and "ERROR unknown ECC level …" for
+        /// anything outside the four levels.
+        /// </summary>
+        string SetQrEccProbe(string level);
+
+        /// <summary>
         /// Flips the output polarity exactly like the pane's invert checkbox:
         /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
