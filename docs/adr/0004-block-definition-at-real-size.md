@@ -23,9 +23,10 @@ against entity picks; the decisive experiments were the engineer's own:
   (Tools > Blocks > Make) → the sketch extrudes normally.** A user-made
   block is definition at real size + instance `Scale = 1`.
 - **On a pre-fix sketch, setting `Scale = 1` (shrinking the rendered QR
-  to 1 mm) also restores extrusion** — isolating the variable: the
-  interactive contour engine refuses a scaled instance's regions
-  (`Scale ≠ 1`), not a small definition per se.
+  to 1 mm) also restores extrusion** — the interactive picker refuses at
+  `Scale = 25`, not at `Scale = 1`. Whether intermediate factors (0.5,
+  1.6, 2 …) break picking was not isolated; `Scale = 1` is the only
+  verified-working non-trivial state.
 
 ## Decision
 
@@ -44,10 +45,11 @@ against entity picks; the decisive experiments were the engineer's own:
 
 - The interactive extrude path is restored to what a user-made block
   does: region-pick inside a cell, or explode → select-all → extrude.
-- **Caveat, same mechanism:** a later `Scale` edit to anything ≠ 1
-  re-breaks interactive region-picking (the picker's refusal follows the
-  scale, not the def size). After resizing, extrude via explode, or
-  re-insert at the new size instead.
+- **Caveat, same mechanism:** a later `Scale` edit may re-break
+  interactive region-picking — only `Scale = 1` is verified-working and
+  `Scale = 25` verified-broken; intermediate factors are untested. If
+  picking fails after a resize, explode, or re-insert at the new size
+  instead.
 - "Edit Scale to resize" survives, now in ratio units — slightly less
   direct than typing the mm size (the ADR 0001 readout elegance), which
   is the accepted cost of an extrudable sketch.

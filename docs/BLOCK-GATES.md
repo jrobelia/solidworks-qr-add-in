@@ -9,12 +9,12 @@ clicking Extrude produced SolidWorks' "doubly nested contour" prompt and
 no cell region could be picked. Control experiments: **explode the
 add-in's block and re-make a block by hand (real-size def, `Scale = 1`)
 → extrudes; and on the same pre-fix sketch, `Scale → 1` alone →
-extrudes.** The mechanism is `Scale ≠ 1` — the interactive contour
-engine refuses a scaled instance's regions. The fix is to emit the
-user-made-block shape: definition at the staged size, instance at
-`Scale = 1`; the PM Scale field is now a resize factor (and any later
-Scale edit to ≠1 re-breaks interactive picking — explode or re-insert
-then).
+extrudes.** Verified: broken at `Scale = 25`, working at `Scale = 1`;
+intermediate factors untested, so the safe claim is that `Scale = 1` is
+the known-good state. The fix is to emit the user-made-block shape:
+definition at the staged size, instance at `Scale = 1`; the PM Scale
+field is now a resize factor (a later Scale edit may re-break picking —
+explode or re-insert then).
 
 Updated `blockqr` gates (`Program.cs`):
 

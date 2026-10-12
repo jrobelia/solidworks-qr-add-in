@@ -151,14 +151,14 @@ namespace SolidWorksQrAddIn.Host
         ///   4. the instance stays at Scale 1 — its Scale field is a resize
         ///      FACTOR of the created size, not a size readout.
         /// ADR 0004: an earlier design drew the def unit-proportioned
-        /// (1 doc unit) and carried the size on instance Scale — SolidWorks'
-        /// interactive contour picker refuses a scaled instance's regions
-        /// entirely ("doubly nested contour"); engineer-verified that the
-        /// same block at Scale 1 extrudes normally. A block the user makes
-        /// by hand is always real-size + Scale 1 — matching that shape
-        /// restores the interactive extrude path while keeping every block
-        /// property (move/scale as a unit, def-internal squares, clean
-        /// explode).
+        /// (1 doc unit) and carried the size on instance Scale — at
+        /// Scale 25 SolidWorks' interactive contour picker refused the
+        /// sketch ("doubly nested contour"); engineer-verified the same
+        /// block extrudes at Scale 1 (intermediate factors untested). A
+        /// block the user makes by hand is always real-size + Scale 1 —
+        /// matching that shape restores the interactive extrude path
+        /// while keeping every block property (move/scale as a unit,
+        /// def-internal squares, clean explode).
         /// Live-verified (consexp, docs/BLOCK-GATES.md round 4): construction
         /// segments inside a block definition render on the instance, track
         /// Scale edits and drags, keep the construction flag through explode,
