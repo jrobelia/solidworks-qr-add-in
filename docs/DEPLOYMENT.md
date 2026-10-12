@@ -150,8 +150,34 @@ a bare file check would let 4.6/4.7 hosts through and fail mid-install.
    the add-in appear in the dialog, even though the per-user CLSID/CodeBase
    lets `LoadAddIn` and COM automation load it fine. To load per-session
    without admin, use **File → Open** on `SolidWorksQrAddIn.dll` (the Open
-   dialog has an "Add-Ins (*.dll)" filter). To appear in Tools → Add-Ins
-   durably, use the machine-wide (elevated) route below. Once loaded, the
+   dialog has an "Add-Ins (*.dll)" filter). For end-user installs, use the
+   machine-wide (elevated) route below.
+
+## Dev-machine setup (one-time elevated) — the supported dev workflow
+
+`scripts\register-addin-dev.ps1` registers the add-in **once, machine-wide,
+pointed at the dev deployment folder** — the same RegAsm step the installer
+runs, but with `CodeBase` at `%LOCALAPPDATA%\SolidWorksQrAddIn` instead of
+Program Files. It also clears any HKCU registration (which would otherwise
+shadow the machine one) and deletes stale HKLM keys an installer uninstall
+leaves behind. After it, the add-in is listed in Tools → Add-Ins, auto-loads,
+and the loaded build is always the dev folder's.
+
+The day-to-day code-change loop is then a single unelevated command — the
+registration never changes because the deployed path is stable:
+
+```powershell
+# close SolidWorks first (the registered DLL is file-mapped and locked)
+.\scripts\sync-dev-deploy.ps1     # pack-deploy + robocopy /MIR to the dev folder
+# restart SolidWorks
+```
+
+Testing the Inno installer against this setup is a bounded event, not a
+per-change tax: close SolidWorks, install (elevated — it repoints the HKLM
+keys to Program Files so the *installed* build is what loads), verify,
+uninstall, then re-run `register-addin-dev.ps1` once to repoint the machine
+keys back at the dev folder — including the stale `Classes\CLSID` keys the
+uninstaller leaves behind. Once loaded, the
    command appears as **QR Sketch → Create QR Sketch** on the menu, and the
    QR UI lives in a docked **QR Sketch task-pane tab** (created via
    `CreateTaskpaneView2`, hosting the WPF view through a WinForms

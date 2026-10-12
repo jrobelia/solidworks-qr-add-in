@@ -67,6 +67,18 @@ Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32"     'Class'         $Class
 Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32"     'Assembly'      $assemblyName
 Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32"     'RuntimeVersion' 'v4.0.30319'
 Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32"     'CodeBase'      $codebase
+
+# RegAsm also writes a versioned InprocServer32\{Version} subkey, which takes
+# precedence over the flat values above. RegAsm /u (e.g. an installer
+# uninstall) leaves that subkey behind but EMPTY, which then shadows the flat
+# CodeBase and activation fails. Mirror the values so re-registering here is
+# self-healing.
+$version = ([Reflection.AssemblyName]$assemblyName).Version.ToString()
+Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32\$version" 'Class'         $Class
+Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32\$version" 'Assembly'      $assemblyName
+Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32\$version" 'RuntimeVersion' 'v4.0.30319'
+Reg "SOFTWARE\Classes\CLSID\$Clsid\InprocServer32\$version" 'CodeBase'      $codebase
+
 Reg "SOFTWARE\Classes\CLSID\$Clsid\ProgId"             '(default)' $ProgId
 Reg "SOFTWARE\Classes\$ProgId"                          '(default)' $Title
 Reg "SOFTWARE\Classes\$ProgId\CLSID"                    '(default)' $Clsid

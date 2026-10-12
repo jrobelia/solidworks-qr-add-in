@@ -79,8 +79,16 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   bit-identical shared endpoints, nonzero-area closed contours), insertion-guard
   rejections (rounding growth, light-gap collapse, sub-0.05 mm features), input
   errors (empty content, non-finite/≤0 size, growth outside (0, 0.5), payload
-  beyond QR capacity at ECC M), and direct validator rejections (zero area,
-  zero-length edge, self-intersection, pinched + pair corner contacts).
+  beyond QR capacity — the error names the selected ECC level), and direct
+  validator rejections (zero area, zero-length edge, self-intersection,
+  pinched + pair corner contacts). Error correction (ticket 24): the request
+  carries the ECC level 1:1 onto `QRCodeGenerator.ECCLevel` (default M), the
+  same payload encodes denser at H than at L, and the insertion guard
+  applies at every level. Inverted
+  polarity (ticket 25, `QrInvertTests`): the emitted contours are the
+  working matrix's light cells — one field bounded at the matrix edge (the
+  keep-out square), the code left as shrunken pockets, the same insertion
+  guard.
 - **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
   no/other selection, already-editing sketch), insertion request through the
   test adapter, per-request geometry (explicit size/growth; byte-exact payload,
@@ -99,15 +107,45 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   the creation, never prior user work.
 - **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
   (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
-  orientation, material-area parity, deterministic signature.
+  orientation, material-area parity, deterministic signature — plus the
+  inverted field through the same render path (no second renderer).
 - **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
   clearing, exact content, size/growth field parsing (mm / % per side) with
-  useful errors and verbatim-kept rejected text, a plain Ready status with no
-  version/cell/size readouts, current-request insertion, fresh host
+  useful errors and verbatim-kept rejected text, the ECC selector
+  revalidating the whole request (default M; a lighter level can admit a
+  payload refused for capacity; creates encode the picked level 1:1 and
+  existing sketches keep theirs), invert toggle → regenerated inverted
+  request + picture + polarity info line, the content-type selection and
+  preset-field edits driving the same revalidation pipeline (the next two
+  bullets), a plain Ready status with no version/cell/size readouts,
+  current-request insertion, fresh host
   revalidation (no stale cross-document support), create blocked while
   editing, single-surface lifecycle (focus-or-recreate, close, release — the
   task-pane tab) and session→view sync of probe-driven edits via the
   `IQrSketchWindow` seam.
+- **Payload composer** (`PayloadComposerTests`, spec #11/ticket #26): the
+  eight phase-1 presets in dropdown order with unique field keys and
+  declared choice defaults, plus byte-exact payload literals per preset —
+  Raw passthrough (whitespace/line breaks verbatim; empty composes for
+  downstream validation), URL scheme defaulting, WIFI: escaping, the
+  hidden-network flag, the open-network password drop, required
+  ssid/password, tel:/sms:/mailto: URIs behind dialable-only number and
+  e-mail shape checks, the contact card in vCard 3.0/4.0/2.1 and MeCard
+  with the at-least-one-name rule, and geo:/Google-Maps links accepting
+  comma decimals inside their coordinate ranges. Failures are data, not
+  throws: every rejection returns an error naming the bad field (missing
+  required, invalid choice/boolean, unknown preset id).
+- **Content-type presets** (`QrContentPresetTests`, ticket #27 — the session
+  seam): picking a type exposes its field descriptors; field edits compose
+  the literal payload into the content box verbatim (picture + info lines
+  describe the composed text; choice/boolean values compose); a field set
+  that cannot compose fails openly — status naming the bad field, no
+  picture, create never touches the host, the error persists until fixed.
+  Plus the verbatim-edit rule (a manual content edit reverts to Raw),
+  entered fields remembered per preset across type switches, re-picking
+  Raw keeping the composed text as free content, undeclared field keys and
+  unknown preset ids refused with the selection kept, create inserting the
+  composed payload's geometry, and preset edits syncing the open window.
 - **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
   payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
   two-direction scaling, preserved ring→hole→island nesting, finite overlap
@@ -164,7 +202,22 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
 ```
+
+The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
+extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
+`SetQrEccProbe`, `SetQrInvertProbe`) through the pane path, performs one create
+with a non-default preset + ECC level + inverted polarity, verifies the landed
+block instance module-identically (definition census plus an exploded 1:1
+contour-bounding-box match), and replays the insertion-guard floor on a denser
+payload at the same settings (a refused rung first, then the cleared rung's
+create). Like `units` it **refuses to run while any `SLDWORKS.exe` process
+exists** — an occupied seat can be an interactive session it must never
+mutate — and it prints its module-side expectations (composed payload, rung
+table, accepted size) before that refusal so a blocked run still shows what
+the live half would check. Gate results are recorded in
+`docs/XSETTINGS-GATES.md`.
 
 The `units` mode uses a session-free instance and checks the native document
 watcher plus the actual pane's rendered size label, input, and cell-size value.
@@ -185,7 +238,8 @@ loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
-`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`,
+`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`, `SetQrEccProbe`,
+`SetQrInvertProbe`, `SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
 `CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
 `RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for

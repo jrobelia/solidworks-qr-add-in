@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
+using SolidWorksQrAddIn.Core.Payload;
 using SolidWorksQrAddIn.Core.Preview;
 
 namespace SolidWorksQrAddIn.Core.Interaction
@@ -13,8 +16,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
     /// headlessly testable core. Owns three things:
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
-    ///      <see cref="SetSizeText"/> and <see cref="SetGrowthText"/> store
-    ///      each edit EXACTLY as entered (no trimming or replacing rejected
+    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/>,
+    ///      <see cref="SetEccLevel"/> and <see cref="SetInvert"/> store each
+    ///      edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
     ///      input clears the picture — a stale preview must never look like a
@@ -25,6 +29,26 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      text is the percentage of cell width grown per side. Scaling is
     ///      uniform: growth changes preserve the entered outline size through
     ///      the cell-pitch recalculation p = S/(N + 2r).
+    ///
+    ///      The content type (spec #11, ticket #27): <see cref="SetContentType"/>
+    ///      selects a <see cref="PayloadComposer"/> preset — "raw" is the
+    ///      default and is today's single content box unchanged. Other presets
+    ///      expose fields (<see cref="CurrentPreset"/>); every field edit
+    ///      (<see cref="SetPresetField"/>) composes them through
+    ///      <see cref="PayloadComposer.Compose"/> and lands the literal
+    ///      payload in the content box — the same verbatim state a typed
+    ///      edit writes. A field set that cannot compose fails the request
+    ///      with the composer's message on the status line (and no picture);
+    ///      the box keeps its last text until the fields compose again —
+    ///      nothing malformed reaches the generator or the host.
+    ///
+    ///      THE VERBATIM RULE: a manual content edit while a preset is
+    ///      selected is treated exactly like a Raw/typed edit — the content
+    ///      box is authoritative free text, so the type reverts to Raw (the
+    ///      alternative — fields that no longer describe the box — would be
+    ///      a lie the next field edit silently wipes). Entered field values
+    ///      are remembered per preset: re-picking the type restores the
+    ///      fields and recomposes, overwriting the box with their payload.
     ///
     ///   2. Create. <see cref="CreateSketch"/> runs the insertion command with
     ///      the CURRENT inputs against a freshly-captured host state — the
@@ -99,10 +123,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private IQrSketchWindow? _window;
         private IQrSketchWindow? _attachedView;
         private string _content = string.Empty;
+        // The preset side of the content state (spec #11) — selection,
+        // remembered fields and a pending compose failure travel together:
+        // a direct content edit resets all three at once.
+        private readonly PresetState _preset = new PresetState();
         private string _sizeText = InitialSizeText;
         private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
+        private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
+        private bool _invert;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
@@ -172,6 +202,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// growth text holds no usable value.
         /// </summary>
         public double? RequestedGrowthFractionPerSide => _growthFraction;
+
+        /// <summary>
+        /// The error-correction level in force — L/M/Q/H, default M. A
+        /// discrete selector value rather than a parsed text field, so it is
+        /// always usable: there is no invalid state.
+        /// </summary>
+        public QRCodeGenerator.ECCLevel EccLevel => _eccLevel;
+
+        /// <summary>
+        /// The output polarity in force (ADR 0002): false emits the dark
+        /// cells — black code on a light field; true emits the light cells —
+        /// a white-on-black field for marking/engraving. Default off.
+        /// </summary>
+        public bool Invert => _invert;
 
         /// <summary>The generation result for the current inputs (null until the first edit).</summary>
         public QrSketchResult? CurrentResult => _current;
@@ -256,11 +300,194 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// Records <paramref name="content"/> verbatim and re-validates the
         /// whole request — current content, size and growth — so the picture
         /// and pending request always reflect the CURRENT inputs.
+        ///
+        /// A direct content edit is exactly a Raw/typed edit (spec #11's
+        /// "editable verbatim" rule): the content box is authoritative free
+        /// text, so the content type reverts to Raw and a pending preset-field
+        /// failure drops away. The edited text stays — it is the literal
+        /// payload now, and Raw's remembered text (re-picking Raw restores
+        /// it, never a composed preset payload).
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
+            _preset.ResetToRaw();
             _content = content ?? string.Empty;
+            _preset.RawContent = _content;   // raw's memory IS the box text
             return Regenerate();
+        }
+
+        // ---------------- content type + preset fields ----------------
+
+        /// <summary>
+        /// The selected content-type preset id — <see cref="PayloadComposer.DefaultPresetId"/>
+        /// ("raw") initially and whenever the content box is edited directly.
+        /// </summary>
+        public string ContentPresetId => _preset.Id;
+
+        /// <summary>
+        /// The selected preset's descriptor — the pane renders
+        /// <see cref="PayloadPresetDescriptor.Fields"/> as its per-preset
+        /// inputs from this, never hard-coding per-preset UI.
+        /// </summary>
+        public PayloadPresetDescriptor CurrentPreset =>
+            FindPreset(_preset.Id) ?? PayloadComposer.Presets[0];
+
+        /// <summary>
+        /// The selected preset's entered field values, keyed by field
+        /// <see cref="PayloadFieldDescriptor.Key"/> — the pane prefills its
+        /// inputs from this (absent keys take the descriptor's
+        /// <see cref="PayloadFieldDescriptor.DefaultValue"/>). For "raw" the
+        /// map is synthesized: its only field IS the content box.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> PresetFields
+        {
+            get
+            {
+                if (_preset.Id == PayloadComposer.DefaultPresetId)
+                    return new Dictionary<string, string> { ["content"] = _content };
+                return new Dictionary<string, string>(_preset.FieldsFor(_preset.Id));
+            }
+        }
+
+        /// <summary>
+        /// The pending preset-composition failure — which field is wrong and
+        /// why (<see cref="PayloadComposeError.FieldKey"/> names the bad
+        /// input so the pane can flag it) — or null while the fields compose.
+        /// </summary>
+        public PayloadComposeError? PresetFieldError => _preset.ComposeError;
+
+        /// <summary>
+        /// Selects the content-type preset and composes immediately from its
+        /// remembered fields (defaults on first pick): a composed payload
+        /// lands in the content box verbatim; a field set that cannot compose
+        /// fails the request openly — the composer's message on the status
+        /// line, no picture, and an EMPTY content box: the box only ever
+        /// shows text the CURRENT type produced, so a stale payload can
+        /// never sit beside fields it was not composed from. Picking Raw
+        /// restores the last hand-typed text — Raw's remembered payload —
+        /// never a composed blob from another type. An unknown id is
+        /// refused with the composer's UnknownPreset error — the current
+        /// selection stays in force.
+        /// </summary>
+        public QrSketchResult SetContentType(string? presetId)
+        {
+            var preset = FindPreset(presetId);
+            if (preset == null)
+            {
+                // The composer produces the same refusal; only the error is
+                // kept (Compose of an unknown id can never succeed).
+                _preset.ComposeError =
+                    PayloadComposer.Compose(presetId ?? string.Empty, null).Error;
+                return Regenerate();
+            }
+            _preset.Id = preset.Id;
+            if (preset.Id == PayloadComposer.DefaultPresetId)
+                _content = _preset.RawContent;   // raw's own text returns — never a composed payload
+            return ComposePreset();
+        }
+
+        /// <summary>
+        /// Records one preset-field edit — keyed by the descriptor's
+        /// <see cref="PayloadFieldDescriptor.Key"/>, the literal text for
+        /// text kinds, the option Value for Choice, "true"/"false" for
+        /// Boolean — then recomposes. A successful compose lands in the
+        /// content box verbatim; a failure names the bad field on the status
+        /// line and the request stays invalid until it is fixed. A key the
+        /// current preset does not declare is refused — a caller bug the
+        /// status line should name, never silently drop.
+        /// </summary>
+        public QrSketchResult SetPresetField(string key, string? value)
+        {
+            var preset = CurrentPreset;
+            if (!preset.Fields.Any(f => f.Key == key))
+            {
+                _preset.ComposeError = new PayloadComposeError(
+                    PayloadComposeErrorKind.InvalidField, key,
+                    preset.DisplayName + ": '" + (key ?? string.Empty) +
+                    "' is not one of its fields (" +
+                    string.Join(", ", preset.Fields.Select(f => f.Key)) + ").");
+                return Regenerate();
+            }
+            if (_preset.Id == PayloadComposer.DefaultPresetId)
+                return SetContent(value ?? string.Empty);   // raw's only field IS the content box
+            _preset.FieldsFor(_preset.Id)[key] = value ?? string.Empty;
+            return ComposePreset();
+        }
+
+        /// <summary>
+        /// Composes the current preset's fields. Success lands the literal
+        /// payload in <see cref="_content"/> — written directly, NOT through
+        /// <see cref="SetContent"/>, which is the manual-edit path that
+        /// reverts to Raw — and clears the compose error. Failure clears the
+        /// content (the box only ever holds text the current type produced)
+        /// and keeps the error pending for <see cref="Regenerate"/> to report.
+        /// </summary>
+        private QrSketchResult ComposePreset()
+        {
+            var compose = PayloadComposer.Compose(_preset.Id, PresetFields);
+            _preset.ComposeError = compose.Error;
+            _content = compose.Succeeded ? compose.Content! : string.Empty;
+            return Regenerate();
+        }
+
+        private static PayloadPresetDescriptor? FindPreset(string? presetId) =>
+            PayloadComposer.Presets.FirstOrDefault(
+                p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The content-type state (spec #11): which preset is selected, the
+        /// field values remembered per preset, and a pending compose
+        /// failure. One type because the three move together — a direct
+        /// content edit (<see cref="SetContent"/>) resets all of them.
+        /// </summary>
+        private sealed class PresetState
+        {
+            /// <summary>The selected preset id — "raw" initially and after any direct content edit.</summary>
+            public string Id = PayloadComposer.DefaultPresetId;
+
+            /// <summary>
+            /// Entered field values, remembered per preset — switching types
+            /// and back restores them. "raw" never appears here: its memory
+            /// is the last hand-typed payload, kept in <see cref="RawContent"/>
+            /// — a payload, not a set of field inputs.
+            /// </summary>
+            public readonly Dictionary<string, Dictionary<string, string>> FieldsByPreset =
+                new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// Raw's remembered payload — the last hand-typed free text
+            /// (recorded by <see cref="SetContent"/>, restored by
+            /// <see cref="SetContentType"/> picking Raw). A composed preset
+            /// payload is never inherited as raw content.
+            /// </summary>
+            public string RawContent = string.Empty;
+
+            /// <summary>
+            /// A pending composition failure — set by the last
+            /// SetContentType / SetPresetField that could not produce a
+            /// payload, cleared by the next successful compose or any direct
+            /// content edit. While set the request is invalid no matter what
+            /// other fields do.
+            /// </summary>
+            public PayloadComposeError? ComposeError;
+
+            /// <summary>A direct content edit reverts the selection to Raw; the failure drops with it.</summary>
+            public void ResetToRaw()
+            {
+                Id = PayloadComposer.DefaultPresetId;
+                ComposeError = null;
+            }
+
+            /// <summary>The remembered field map for a non-raw preset, created on first use.</summary>
+            public Dictionary<string, string> FieldsFor(string presetId)
+            {
+                if (!FieldsByPreset.TryGetValue(presetId, out var fields))
+                {
+                    fields = new Dictionary<string, string>();
+                    FieldsByPreset[presetId] = fields;
+                }
+                return fields;
+            }
         }
 
         /// <summary>
@@ -288,6 +515,44 @@ namespace SolidWorksQrAddIn.Core.Interaction
             return Regenerate();
         }
 
+        /// <summary>
+        /// Records the error-correction level and re-validates the whole
+        /// request — the level is part of the encoding, so a denser choice
+        /// rebuilds the matrix, the picture, and the info lines just like a
+        /// content edit.
+        /// </summary>
+        public QrSketchResult SetEccLevel(QRCodeGenerator.ECCLevel eccLevel)
+        {
+            _eccLevel = eccLevel;
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// Flips the output polarity and re-validates the whole request: with
+        /// <paramref name="invert"/> the emitted contours are the working
+        /// matrix's light cells — a dark field with the code left unmarked —
+        /// and the picture renders that same result (what you see is what
+        /// gets sketched). Applies to future creates only; existing sketches
+        /// are never mutated.
+        /// </summary>
+        public QrSketchResult SetInvert(bool invert)
+        {
+            _invert = invert;
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// The request the CURRENT inputs describe — the one the generator
+        /// and the create command both consume, so a create can never encode
+        /// different settings than the preview showed.
+        /// </summary>
+        private QrSketchRequest CurrentRequest(double sizeMm, double growthFraction) =>
+            new QrSketchRequest(_content, sizeMm, growthFraction)
+            {
+                EccLevel = _eccLevel,
+                Invert = _invert,
+            };
+
         private QrSketchResult Regenerate()
         {
             // Field-level validity first so the error names the field that is
@@ -303,11 +568,22 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 _growthFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
             }
+            else if (_preset.ComposeError != null)
+            {
+                // A pending preset-field failure is a content-level problem:
+                // it wins over generation and nothing malformed reaches the
+                // generator. The numeric fields stay recorded — they are not
+                // what is wrong.
+                _sizeMm = sizeMm;
+                _growthFraction = growthFraction;
+                _current = QrSketchResult.Fail(
+                    QrSketchErrorKind.InvalidPayload, _preset.ComposeError.Message);
+            }
             else
             {
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
-                _current = QrSketchGenerator.Generate(_content, sizeMm, growthFraction);
+                _current = QrSketchGenerator.Generate(CurrentRequest(sizeMm, growthFraction));
             }
 
             if (_current.Succeeded)
@@ -362,8 +638,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     FormatMm(QrSketchInfo.QuietZoneCellsPerSide * info.PitchMm) + ") per side"),
                 new QrInfoLine(
                     "Encoding",
-                    "Version " + info.Version + " · ECC M · " + content.Length +
+                    "Version " + info.Version + " · ECC " + _eccLevel + " · " + content.Length +
                     (content.Length == 1 ? " character" : " characters")),
+                new QrInfoLine(
+                    "Polarity",
+                    info.Inverted
+                        ? "Inverted — light code on a dark field"
+                        : "Dark code on a light field"),
             };
             return lines;
         }
@@ -510,15 +791,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (!_current.Succeeded)
                 return CommandResult.Failure(_current.Error!.Message);
 
-            // _current.Succeeded ⇒ both fields parsed — these are exactly the
-            // values the current result was generated and validated with.
+            // _current.Succeeded ⇒ both fields parsed — the request is exactly
+            // the one the current result was generated and validated with.
             // The window/command boundary must never let a host exception
             // escape toward SolidWorks — a failure result is the contract.
             CommandResult result;
             try
             {
                 result = _command.Execute(
-                    host, _content, _sizeMm!.Value, _growthFraction!.Value);
+                    host, CurrentRequest(_sizeMm!.Value, _growthFraction!.Value));
             }
             catch (Exception ex)
             {

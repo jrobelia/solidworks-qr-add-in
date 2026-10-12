@@ -1,4 +1,5 @@
 using System;
+using QRCoder;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
@@ -117,6 +118,8 @@ namespace SolidWorksQrAddIn
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
+                  $"preset={_session.ContentPresetId} " +
+                  $"ecc={_session.EccLevel} invert={_session.Invert} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -141,6 +144,28 @@ namespace SolidWorksQrAddIn
 
         public string SetQrGrowthProbe(string growthText) =>
             FieldProbe(s => s.SetGrowthText(growthText));
+
+        /// <summary>
+        /// The pane's error-correction selector, probed: parse the picked
+        /// level through <see cref="QrEccLevels"/> and apply it through the
+        /// session setter like every other field probe. An unrecognised
+        /// level never reaches the session.
+        /// </summary>
+        public string SetQrEccProbe(string level)
+        {
+            if (!QrEccLevels.TryParse(level, out QRCodeGenerator.ECCLevel ecc))
+                return $"ERROR unknown ECC level '{level}' — expected L, M, Q or H.";
+            return FieldProbe(s => s.SetEccLevel(ecc));
+        }
+
+        public string SetQrInvertProbe(bool invert) =>
+            FieldProbe(s => s.SetInvert(invert));
+
+        public string SetQrContentTypeProbe(string presetId) =>
+            FieldProbe(s => s.SetContentType(presetId));
+
+        public string SetQrPresetFieldProbe(string key, string value) =>
+            FieldProbe(s => s.SetPresetField(key, value));
 
         private static string Describe(QrSketchResult result)
         {

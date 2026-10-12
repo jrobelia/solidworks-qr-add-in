@@ -67,7 +67,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
-            int contourCount, int segmentCount)
+            int contourCount, int segmentCount, bool inverted = false)
         {
             Version = version;
             CellCount = cellCount;
@@ -80,6 +80,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             MinLightGapMm = minLightGapMm;
             ContourCount = contourCount;
             SegmentCount = segmentCount;
+            Inverted = inverted;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -109,7 +110,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>Smallest delivered contour edge (mm) — must clear the insertion guard.</summary>
         public double MinEdgeMm { get; }
 
-        /// <summary>Narrowest remaining light channel between grown regions (mm).</summary>
+        /// <summary>
+        /// Narrowest remaining channel of the UN-emitted polarity between
+        /// grown regions (mm): light channels in normal mode, dark-cell
+        /// pockets under invert.
+        /// </summary>
         public double MinLightGapMm { get; }
 
         /// <summary>Total closed contours (region outlines + holes + islands).</summary>
@@ -117,6 +122,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Total line segments the contour set delivers to the host.</summary>
         public int SegmentCount { get; }
+
+        /// <summary>
+        /// Output polarity (ADR 0002): true when the contours are the working
+        /// matrix's light cells — a dark field with the code left unmarked.
+        /// </summary>
+        public bool Inverted { get; }
     }
 
     /// <summary>

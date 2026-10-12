@@ -15,8 +15,10 @@ namespace SolidWorksQrAddIn.Core.Preview
     /// region → dark, inside a hole → white, inside a nested island → dark
     /// again. The picture footprint is the final grown outline plus
     /// <see cref="MarginCells"/> blank cells on every side — white space, not
-    /// a drawn box. No WPF references: the add-in maps the Gray8 buffer onto
-    /// a BitmapSource verbatim.
+    /// a drawn box; under invert the emitted field fills that margin out to
+    /// the matrix edge, so the same footprint shows the field with only the
+    /// per-side growth left as a white frame. No WPF references: the add-in
+    /// maps the Gray8 buffer onto a BitmapSource verbatim.
     /// </summary>
     public static class QrPictureRenderer
     {
