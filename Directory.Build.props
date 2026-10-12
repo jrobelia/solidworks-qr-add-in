@@ -1,5 +1,10 @@
 <Project>
   <PropertyGroup>
+    <!-- Assembly metadata — surfaces in file Properties > Details and in
+         the installer/Add-Remove Programs publisher fields. -->
+    <Authors>Jon Robelia</Authors>
+    <Copyright>Copyright © 2026 Jon Robelia</Copyright>
+
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
