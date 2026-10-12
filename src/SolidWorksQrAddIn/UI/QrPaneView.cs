@@ -24,10 +24,11 @@ namespace SolidWorksQrAddIn.UI
     ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
     ///     <see cref="QrSketchSession.SetGrowthText"/>) — DEBOUNCED, so a
     ///     burst of keystrokes coalesces into one regeneration instead of
-    ///     regenerating a dense QR synchronously per keystroke — and the
-    ///     error-correction selector straight into
-    ///     <see cref="QrSketchSession.SetEccLevel"/>, a discrete pick that
-    ///     needs no debounce,
+    ///     regenerating a dense QR synchronously per keystroke — plus the
+    ///     discrete controls: the error-correction selector pushes
+    ///     <see cref="QrSketchSession.SetEccLevel"/> and the invert checkbox
+    ///     pushes <see cref="QrSketchSession.SetInvert"/> immediately (a
+    ///     committed pick is never debounced),
     ///   - blits <see cref="QrSketchSession.Picture"/> (a Gray8 raster) into an
     ///     Image via BitmapSource.Create — the same grown contour result that
     ///     sketch insertion consumes,
@@ -60,6 +61,7 @@ namespace SolidWorksQrAddIn.UI
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
         private readonly ComboBox _eccBox;
+        private readonly CheckBox _invertBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
         private readonly Grid _infoGrid;
@@ -135,6 +137,24 @@ namespace SolidWorksQrAddIn.UI
                           "H is densest, L lightest. M is the default.",
             };
             panel.Children.Add(_eccBox);
+
+            // The invert toggle (spec #11, ADR 0002): a checkbox is a
+            // committed edit the moment it is clicked — it pushes straight
+            // into the session like a flushed field, never through the
+            // keystroke debounce. Applies to future creates only.
+            _invertBox = new CheckBox
+            {
+                Content = "Invert output (light code on a dark field)",
+                ToolTip = "Emits the code's light cells instead of the dark ones: " +
+                          "the sketch becomes a dark field with the code left " +
+                          "unmarked, for marking/engraving workflows. " +
+                          "Applies to the next sketch created — existing " +
+                          "sketches are never changed.",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            _invertBox.Checked += OnInvertToggled;
+            _invertBox.Unchecked += OnInvertToggled;
+            panel.Children.Add(_invertBox);
 
             var frame = new Border
             {
@@ -245,6 +265,7 @@ namespace SolidWorksQrAddIn.UI
                 _sizeBox.Text = _session.SizeText;
                 _growthBox.Text = _session.GrowthText;
                 _eccBox.SelectedItem = _session.EccLevel.ToString();
+                _invertBox.IsChecked = _session.Invert;
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -275,6 +296,9 @@ namespace SolidWorksQrAddIn.UI
                     _growthBox.Text = _session.GrowthText;
                 if (!Equals(_eccBox.SelectedItem, _session.EccLevel.ToString()))
                     _eccBox.SelectedItem = _session.EccLevel.ToString();
+                // A toggle carries no in-progress state — always re-pull.
+                if (_invertBox.IsChecked != _session.Invert)
+                    _invertBox.IsChecked = _session.Invert;
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -322,6 +346,19 @@ namespace SolidWorksQrAddIn.UI
                 _session.SetGrowthText(_growthBox.Text);
             }
             RefreshView();
+        }
+
+        /// <summary>
+        /// The invert toggle is a committed edit on click — no debounce, no
+        /// dirty flag: it pushes the new polarity into the session at once,
+        /// exactly like a flushed field edit. Suppressed while the view is
+        /// pulling session state (a pull is not an edit).
+        /// </summary>
+        private void OnInvertToggled(object? sender, RoutedEventArgs e)
+        {
+            if (_suppressFieldEvents)
+                return;
+            _session.SetInvert(_invertBox.IsChecked == true);
         }
 
         private void OnCreateClicked(object? sender, RoutedEventArgs e)
@@ -400,8 +437,8 @@ namespace SolidWorksQrAddIn.UI
                 var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
-                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} " +
-                       $"viewCell={cellText} viewEcc={_eccBox.SelectedItem}";
+                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
+                       $"viewEcc={_eccBox.SelectedItem} viewInvert={_invertBox.IsChecked == true}";
             }
         }
 

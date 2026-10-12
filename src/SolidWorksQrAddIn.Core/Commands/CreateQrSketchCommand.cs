@@ -41,8 +41,8 @@ namespace SolidWorksQrAddIn.Core.Commands
 
         /// <summary>
         /// The same command fed by a full <see cref="QrSketchRequest"/> — the
-        /// request carries the encoding settings (error-correction level
-        /// today) straight through to the generator.
+        /// request carries the encoding and output settings (error-correction
+        /// level, invert) straight through to the generator.
         /// </summary>
         public CommandResult Execute(ISketchHost host, QrSketchRequest request)
         {

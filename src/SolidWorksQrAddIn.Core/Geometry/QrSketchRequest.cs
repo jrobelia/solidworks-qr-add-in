@@ -35,5 +35,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// payload). Default M — the historical behaviour.
         /// </summary>
         public QRCodeGenerator.ECCLevel EccLevel { get; set; } = QRCodeGenerator.ECCLevel.M;
+
+        /// <summary>
+        /// Output polarity (ADR 0002): false emits the dark cells — black code
+        /// on a light field; true emits the LIGHT cells of the whole working
+        /// matrix — a dark field with the code left unmarked, bounded at the
+        /// matrix edge, for marking/engraving workflows. Default false.
+        /// </summary>
+        public bool Invert { get; set; }
     }
 }

@@ -14,9 +14,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
     /// headlessly testable core. Owns three things:
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
-    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/> and
-    ///      <see cref="SetEccLevel"/> store each edit EXACTLY as entered (no
-    ///      trimming or replacing rejected
+    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/>,
+    ///      <see cref="SetEccLevel"/> and <see cref="SetInvert"/> store each
+    ///      edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
     ///      input clears the picture — a stale preview must never look like a
@@ -106,6 +106,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
+        private bool _invert;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
@@ -182,6 +183,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// always usable: there is no invalid state.
         /// </summary>
         public QRCodeGenerator.ECCLevel EccLevel => _eccLevel;
+
+        /// <summary>
+        /// The output polarity in force (ADR 0002): false emits the dark
+        /// cells — black code on a light field; true emits the light cells —
+        /// a white-on-black field for marking/engraving. Default off.
+        /// </summary>
+        public bool Invert => _invert;
 
         /// <summary>The generation result for the current inputs (null until the first edit).</summary>
         public QrSketchResult? CurrentResult => _current;
@@ -311,12 +319,30 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// Flips the output polarity and re-validates the whole request: with
+        /// <paramref name="invert"/> the emitted contours are the working
+        /// matrix's light cells — a dark field with the code left unmarked —
+        /// and the picture renders that same result (what you see is what
+        /// gets sketched). Applies to future creates only; existing sketches
+        /// are never mutated.
+        /// </summary>
+        public QrSketchResult SetInvert(bool invert)
+        {
+            _invert = invert;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// The request the CURRENT inputs describe — the one the generator
         /// and the create command both consume, so a create can never encode
         /// different settings than the preview showed.
         /// </summary>
         private QrSketchRequest CurrentRequest(double sizeMm, double growthFraction) =>
-            new QrSketchRequest(_content, sizeMm, growthFraction) { EccLevel = _eccLevel };
+            new QrSketchRequest(_content, sizeMm, growthFraction)
+            {
+                EccLevel = _eccLevel,
+                Invert = _invert,
+            };
 
         private QrSketchResult Regenerate()
         {
@@ -394,6 +420,11 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     "Encoding",
                     "Version " + info.Version + " · ECC " + _eccLevel + " · " + content.Length +
                     (content.Length == 1 ? " character" : " characters")),
+                new QrInfoLine(
+                    "Polarity",
+                    info.Inverted
+                        ? "Inverted — light code on a dark field"
+                        : "Dark code on a light field"),
             };
             return lines;
         }

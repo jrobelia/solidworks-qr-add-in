@@ -118,7 +118,7 @@ namespace SolidWorksQrAddIn
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
-                  $"ecc={_session.EccLevel} " +
+                  $"ecc={_session.EccLevel} invert={_session.Invert} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -166,6 +166,9 @@ namespace SolidWorksQrAddIn
             }
             return Describe(session.SetEccLevel(ecc));
         }
+
+        public string SetQrInvertProbe(bool invert) =>
+            FieldProbe(s => s.SetInvert(invert));
 
         private static string Describe(QrSketchResult result)
         {

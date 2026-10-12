@@ -97,6 +97,13 @@ namespace SolidWorksQrAddIn.Core
         string SetQrEccProbe(string level);
 
         /// <summary>
+        /// Flips the output polarity exactly like the pane's invert checkbox:
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrInvertProbe(bool invert);
+
+        /// <summary>
         /// The Create Sketch button, probed: builds a fresh host adapter and
         /// runs the session create. Returns "OK &lt;sketchName&gt; …" or
         /// "ERROR &lt;message&gt;".

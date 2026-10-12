@@ -21,10 +21,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>Positive growth still rounds to zero on the normalized integer grid.</summary>
         GrowthRoundsToZero,
 
-        /// <summary>Growth is close enough to 50% that it would close every light channel.</summary>
+        /// <summary>Growth is close enough to 50% that it would close every
+        /// one-cell channel of the un-emitted polarity.</summary>
         GrowthClosesGaps,
 
-        /// <summary>A contour edge or light gap fell below the recorded insertion guard.</summary>
+        /// <summary>A contour edge or un-emitted channel fell below the recorded insertion guard.</summary>
         BelowInsertionLimit,
 
         /// <summary>Union output failed validation (zero area, zero-length edges,
