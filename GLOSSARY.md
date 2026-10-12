@@ -29,7 +29,11 @@ moment it is resolved in discussion, not before.
   host-side dims cannot observe instance Scale).
 - **Payload preset** — a `PayloadGenerator` template (Url, WiFi, vCard…)
   that formats fields into the exact string encoded; the content shown is
-  always the literal final payload, editable verbatim.
+  always the literal final payload, editable verbatim. The single
+  `PayloadComposer` module (Core) owns them all: `compose(presetId, fields)`
+  returns the literal payload or an error naming the bad field, and the
+  pane enumerates `PayloadComposer.Presets` (id, display name, ordered
+  field descriptors) to build preset inputs — never per-preset UI.
 
 ## SolidWorks
 
