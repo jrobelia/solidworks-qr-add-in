@@ -153,12 +153,9 @@ namespace SolidWorksQrAddIn
         /// </summary>
         public string SetQrEccProbe(string level)
         {
-            var session = ReadySession;
-            if (session == null)
-                return NotConnectedError;
             if (!QrEccLevels.TryParse(level, out QRCodeGenerator.ECCLevel ecc))
                 return $"ERROR unknown ECC level '{level}' — expected L, M, Q or H.";
-            return Describe(session.SetEccLevel(ecc));
+            return FieldProbe(s => s.SetEccLevel(ecc));
         }
 
         public string SetQrInvertProbe(bool invert) =>

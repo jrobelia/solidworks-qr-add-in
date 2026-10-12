@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Payload;
@@ -287,10 +288,11 @@ namespace SolidWorksQrAddIn.UI
             {
                 if (_suppressFieldEvents || _eccBox.SelectedItem == null)
                     return;
-                _session.SetEccLevel(
-                    (QRCodeGenerator.ECCLevel)Enum.Parse(
-                        typeof(QRCodeGenerator.ECCLevel),
-                        (string)_eccBox.SelectedItem));
+                // The shared parser seam — an unrecognized level is refused
+                // rather than coerced, exactly like the probe surface.
+                if (QrEccLevels.TryParse(_eccBox.SelectedItem as string,
+                        out QRCodeGenerator.ECCLevel ecc))
+                    _session.SetEccLevel(ecc);
             };
             _presetCombo.SelectionChanged += (_, __) => OnPresetTypeChanged();
 
