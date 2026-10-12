@@ -1,3 +1,7 @@
+<!-- Installer/THIRD-PARTY-NOTICES.txt is a plain-text copy of this file for
+the Inno license page (the installer cannot render markdown) — keep it in
+sync when this file changes. -->
+
 # Third-party notices
 
 Runtime libraries shipped with the add-in (deployed beside SolidWorksQrAddIn.dll):

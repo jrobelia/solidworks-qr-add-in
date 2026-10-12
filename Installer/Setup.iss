@@ -43,7 +43,10 @@ CloseApplications=yes
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-LicenseFile=..\THIRD-PARTY-NOTICES.md
+; Inno's license page is a plain-text control — the .md would show raw
+; markup. THIRD-PARTY-NOTICES.txt beside this script is the plain-text
+; rendering of ..\THIRD-PARTY-NOTICES.md — keep them in sync.
+LicenseFile=THIRD-PARTY-NOTICES.txt
 ; Installer exe + Settings > Apps icon — a multi-size ICO of the QR glyph,
 ; checked in beside this script (same convention as the InvenTree add-in).
 SetupIconFile=qr-addin.ico
