@@ -116,7 +116,9 @@ namespace SolidWorksQrAddIn
                 ? "STATE session=none"
                 : $"STATE open={_session.HasOpenWindow} windows={_session.WindowsCreated} " +
                   $"hasRequest={_session.HasValidRequest} " +
-                  $"size={_session.SizeText} growth={_session.GrowthText}";
+                  $"size={_session.SizeText} growth={_session.GrowthText} " +
+                  $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
+                  (_pane?.InfoSnapshot ?? "view=none");
 
         /// <summary>
         /// The shared setter-probe shape: gate on the connected session,

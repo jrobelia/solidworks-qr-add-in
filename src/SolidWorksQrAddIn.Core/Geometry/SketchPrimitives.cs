@@ -27,4 +27,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public SketchPoint2 Start { get; }
         public SketchPoint2 End { get; }
     }
+
+    /// <summary>
+    /// The closed-loop edge enumeration <see cref="QrContour"/> and
+    /// <see cref="QrConstructionSquare"/> share: vertex i connects to
+    /// vertex i+1, and the last edge closes back to the first.
+    /// </summary>
+    internal static class SketchClosedLoop
+    {
+        /// <summary>One edge per vertex, wrapping the final edge to vertex 0.</summary>
+        public static IEnumerable<SketchEdge> Edges(IReadOnlyList<SketchPoint2> vertices)
+        {
+            for (var i = 0; i < vertices.Count; i++)
+                yield return new SketchEdge(vertices[i], vertices[(i + 1) % vertices.Count]);
+        }
+    }
 }

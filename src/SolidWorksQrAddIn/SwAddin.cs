@@ -41,6 +41,7 @@ namespace SolidWorksQrAddIn
         private int _cookie;
         private bool _connected;
         private QrSketchSession? _session;
+        private SwHostStateWatcher? _hostWatcher;
 
         static SwAddin()
         {
@@ -155,12 +156,20 @@ namespace SolidWorksQrAddIn
                 // The interaction state behind the pane lives here for the
                 // connection's lifetime; the view factory returns the pane
                 // adapter — the task-pane tab is the single surface.
-                _session = new QrSketchSession(CreateQrWindow);
+                // The host provider doubles as the session's document-unit
+                // source — the cell-size readout re-asks a FRESH host for its
+                // length unit on every regeneration (never a cached doc).
+                // The watcher pushes the CHANGE: a document switch or a
+                // length-unit edit re-formats the readout and info lines
+                // without any field edit.
+                _hostWatcher = new SwHostStateWatcher(_sw);
+                _session = new QrSketchSession(CreateQrWindow, CreateSketchHost, _hostWatcher);
 
                 _pane = new QrTaskPaneControl(
                     _session, CreateSketchHost,
                     () => { try { _taskPaneView?.ShowView(); } catch { } },
                     () => { try { _taskPaneView?.HideView(); } catch { } });
+                _session.AttachView(_pane);
 
                 _taskPaneView = (ITaskpaneView)_sw.CreateTaskpaneView2(
                     paneIcon, "QR Sketch");
@@ -224,6 +233,10 @@ namespace SolidWorksQrAddIn
             // undo handlers release their document references too, so an
             // unloaded add-in can never be called back into dead state.
             try { QrSketchUndoRegistry.ReleaseAll(); } catch { }
+            // The watcher goes first — a SolidWorks notify can never call
+            // into a released session.
+            try { _hostWatcher?.Dispose(); } catch { }
+            _hostWatcher = null;
             try { _session?.Release(); } catch { }
             _session = null;
             try { _taskPaneView?.DeleteView(); } catch { }

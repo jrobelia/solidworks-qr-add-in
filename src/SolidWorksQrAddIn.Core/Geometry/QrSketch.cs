@@ -22,14 +22,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public bool IsHole { get; }
 
         /// <summary>The contour's edges; the final edge closes the loop.</summary>
-        public IEnumerable<SketchEdge> Edges
-        {
-            get
-            {
-                for (var i = 0; i < Vertices.Count; i++)
-                    yield return new SketchEdge(Vertices[i], Vertices[(i + 1) % Vertices.Count]);
-            }
-        }
+        public IEnumerable<SketchEdge> Edges => SketchClosedLoop.Edges(Vertices);
     }
 
     /// <summary>A hole loop inside a filled region, plus any filled islands nested in it.</summary>
@@ -64,14 +57,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// <summary>Size information about a generated QR sketch (all physical values in mm).</summary>
     public sealed class QrSketchInfo
     {
+        /// <summary>
+        /// The fixed quiet zone every working matrix carries: 4 light cells per
+        /// side (ISO 18004, ADR 0002) — always present, never a setting.
+        /// </summary>
+        public const int QuietZoneCellsPerSide = 4;
+
         public QrSketchInfo(
-            int version, int cellCount, double pitchMm,
+            int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
             int contourCount, int segmentCount)
         {
             Version = version;
             CellCount = cellCount;
+            MatrixCellCount = matrixCellCount;
             PitchMm = pitchMm;
             GrowthFractionPerSide = growthFractionPerSide;
             GrowthMmPerSide = growthMmPerSide;
@@ -87,6 +87,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Data cells per side N (quiet zone excluded).</summary>
         public int CellCount { get; }
+
+        /// <summary>
+        /// Working-matrix cells per side M = N + 2·<see cref="QuietZoneCellsPerSide"/> —
+        /// the data cells plus the fixed 4-cell light margin (ADR 0002).
+        /// </summary>
+        public int MatrixCellCount { get; }
 
         /// <summary>Cell pitch p = S/(N + 2r′) where r′ is the effective growth fraction.</summary>
         public double PitchMm { get; }
@@ -119,18 +125,36 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// </summary>
     public sealed class QrSketch
     {
-        public QrSketch(IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours, QrSketchInfo info)
+        public QrSketch(
+            IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
+            IReadOnlyList<QrConstructionSquare> constructionSquares,
+            QrSketchInfo info)
         {
             Regions = regions;
             Contours = contours;
+            ConstructionSquares = constructionSquares;
             Info = info;
         }
 
-        /// <summary>Top-level filled regions (disjoint dark areas of the QR pattern).</summary>
+        /// <summary>
+        /// Top-level filled regions (disjoint dark areas of the QR pattern), in
+        /// sketch-space metres at the requested size.
+        /// </summary>
         public IReadOnlyList<QrRegion> Regions { get; }
 
         /// <summary>Every contour — region outlines, hole loops, island outlines — flat.</summary>
         public IReadOnlyList<QrContour> Contours { get; }
+
+        /// <summary>
+        /// The QR square and keep-out square in the same sketch-space metres
+        /// at the requested size — construction geometry the host normalizes
+        /// INTO the block definition (ADR 0003), so the footprint and the
+        /// four-cell quiet-zone boundary scale and move with the instance.
+        /// The QR square IS the grown outline — its span is the insertion's
+        /// authoritative size measurement. Never cuttable profile and never
+        /// part of <see cref="Contours"/>.
+        /// </summary>
+        public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
 
         public QrSketchInfo Info { get; }
 

@@ -9,10 +9,13 @@ namespace SolidWorksQrAddIn.Core.Commands
     /// "Create QR Sketch" — encodes the given <paramref name="content"/>
     /// exactly (no trim/resolve/rewrite) at the requested
     /// <paramref name="sizeMm"/> final grown outline width with the requested
-    /// <paramref name="growthFractionPerSide"/> outline growth, then inserts
-    /// every validated contour as native sketch lines on the currently
-    /// selected support — one reference plane or one planar face — and leaves
-    /// the new sketch open for editing.
+    /// <paramref name="growthFractionPerSide"/> outline growth, then stages
+    /// every validated contour edge through the insertion seam on the
+    /// currently selected support — one reference plane or one planar face.
+    /// The host realizes the staged set at commit as ONE sketch block
+    /// instance drawn at the requested size and placed at Scale 1 — its
+    /// Scale field is a resize factor (spec #10, amended by ADR 0004) — and
+    /// leaves the new sketch open for editing.
     ///
     /// Host state is captured fresh at call time — the active part, the
     /// selected support, and the no-sketch-being-edited rule are always
@@ -123,6 +126,10 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 foreach (var edge in sketch.Edges)
                     insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
+                // The construction squares stage like the edges and commit
+                // with them — the session draws them inside the block
+                // definition, where they ride the instance's transforms.
+                insertion.AddConstructionSquares(sketch.ConstructionSquares);
                 insertion.KeepOpen();
                 // A committed creation earns its named undo step — custom
                 // undo objects (AddToDB bypasses native recording, so this
@@ -177,7 +184,8 @@ namespace SolidWorksQrAddIn.Core.Commands
                 host.RegisterSketchUndo(new SketchUndoRegistration(
                     SketchHostContract.CreationUndoName,
                     SafeSketchName(insertion),
-                    sketch.Edges.ToList()));
+                    sketch.Edges.ToList(),
+                    sketch.ConstructionSquares));
             }
             catch { /* the undo step is a nicety; the created sketch stands */ }
         }

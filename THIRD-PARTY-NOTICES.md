@@ -1,3 +1,7 @@
+<!-- Installer/LICENSE.txt appends a plain-text copy of this file below the
+MIT license for the Inno license page (the installer cannot render
+markdown) — keep it in sync when this file changes. -->
+
 # Third-party notices
 
 Runtime libraries shipped with the add-in (deployed beside SolidWorksQrAddIn.dll):

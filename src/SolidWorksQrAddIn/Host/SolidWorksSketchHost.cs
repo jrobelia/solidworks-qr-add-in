@@ -52,7 +52,10 @@ namespace SolidWorksQrAddIn.Host
             var mgr = doc.SketchManager as ISketchManager;
             var editing = mgr?.ActiveSketch != null;
 
-            return new SketchHostState(kind, ReadSelection(doc), editing);
+            // The length unit is a host fact — carried on the snapshot so the
+            // session (insertion scale, cell-size readout) never has to ask
+            // COM itself.
+            return new SketchHostState(kind, ReadSelection(doc), editing, DocLengthUnits.Of(doc));
         }
 
         /// <summary>
@@ -110,7 +113,8 @@ namespace SolidWorksQrAddIn.Host
         {
             var doc = _sw.IActiveDoc2 as IModelDoc2
                 ?? throw new SketchHostException("No active document.");
-            var insertion = BeginOnSelectedSupport(doc, recordUndo: true, out var support);
+            var insertion = BeginOnSelectedSupport(
+                doc, recordUndo: true, math: MathUtilityOrNull(), capturedSupport: out var support);
             // The undo-step plumbing the command calls next binds to THIS
             // begin's context — the doc, the sketch feature it created, and
             // the support a redo would reselect.
@@ -154,7 +158,7 @@ namespace SolidWorksQrAddIn.Host
                 var handler = new QrSketchUndoObject();
                 handler.Initialize(
                     pending.Doc, pending.Sketch, pending.Support,
-                    registration.UndoName, registration.Edges);
+                    registration, MathUtilityOrNull());
                 if (ext.SetApiUndoObject(handler, registration.UndoName))
                     QrSketchUndoRegistry.Keep(handler);
                 else
@@ -163,6 +167,21 @@ namespace SolidWorksQrAddIn.Host
             catch (Exception ex)
             {
                 Diag.Log($"SetApiUndoObject registration failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// The app's math utility, or null when it cannot be obtained — the
+        /// insertion's block step needs it for MathPoint insertion points and
+        /// fails honestly when it is missing.
+        /// </summary>
+        private IMathUtility? MathUtilityOrNull()
+        {
+            try { return _sw.IGetMathUtility() as IMathUtility; }
+            catch (Exception ex)
+            {
+                Diag.Log($"IGetMathUtility failed: {ex.Message}");
+                return null;
             }
         }
 
@@ -177,7 +196,8 @@ namespace SolidWorksQrAddIn.Host
         /// face entity) for the undo object's redo path.
         /// </summary>
         internal static SwSketchInsertion BeginOnSelectedSupport(
-            IModelDoc2 doc, bool recordUndo, out object? capturedSupport)
+            IModelDoc2 doc, bool recordUndo, IMathUtility? math,
+            out object? capturedSupport)
         {
             var mgr = doc.SketchManager as ISketchManager
                 ?? throw new SketchHostException("SolidWorks did not expose a sketch manager.");
@@ -243,7 +263,7 @@ namespace SolidWorksQrAddIn.Host
                 try
                 {
                     return new SwSketchInsertion(
-                        doc, mgr, sketchFeature, ext, recording, previousFlags);
+                        doc, mgr, sketchFeature, ext, math, recording, previousFlags);
                 }
                 catch (Exception ex)
                 {

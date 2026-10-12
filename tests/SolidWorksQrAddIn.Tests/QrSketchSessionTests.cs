@@ -176,11 +176,10 @@ namespace SolidWorksQrAddIn.Tests
 
             session.SetContent(PayloadA);
 
-            // The window budget is content/size/growth/picture/Create — the
-            // status must not smuggle in QR-version, cell-count or size
-            // readouts (spec: no additional size readouts).
+            // The status is a one-liner — QR facts (version, cell counts,
+            // sizes) live in the info section (InfoLines), not status text.
             Assert.True(session.HasValidRequest);
-            Assert.Equal("Ready — select Create Sketch.", session.StatusText);
+            Assert.Equal("Ready — click Create Sketch to insert.", session.StatusText);
             Assert.DoesNotContain("version", session.StatusText,
                 System.StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("cell", session.StatusText,
@@ -218,12 +217,13 @@ namespace SolidWorksQrAddIn.Tests
             var sketch = host.Document!.Sketches.Single();
             var expected = QrSketchGenerator.Generate(PayloadA,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
-            Assert.Equal(expected.Info.SegmentCount, sketch.Segments.Count);
+            var effective = sketch.ProfileSegments.ToList();
+            Assert.Equal(expected.Info.SegmentCount, effective.Count);
             var expectedEdges = expected.Edges.ToList();
             for (var i = 0; i < expectedEdges.Count; i++)
             {
-                Assert.Equal(expectedEdges[i].Start.X, sketch.Segments[i].X1, 12);
-                Assert.Equal(expectedEdges[i].End.Y, sketch.Segments[i].Y2, 12);
+                Assert.Equal(expectedEdges[i].Start.X, effective[i].X1, 12);
+                Assert.Equal(expectedEdges[i].End.Y, effective[i].Y2, 12);
             }
         }
 
@@ -243,11 +243,13 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, host.Document.Sketches.Count);
             var expectedB = QrSketchGenerator.Generate(PayloadB,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
-            Assert.Equal(expectedB.Info.SegmentCount, host.Document.Sketches[1].Segments.Count);
+            Assert.Equal(expectedB.Info.SegmentCount,
+                host.Document.Sketches[1].ProfileSegments.Count());
             // The first sketch keeps its own payload's geometry — unchanged.
             var expectedA = QrSketchGenerator.Generate(PayloadA,
                 QrSketchSession.InitialSizeMm, QrSketchSession.InitialGrowthFractionPerSide).Sketch!;
-            Assert.Equal(expectedA.Info.SegmentCount, host.Document.Sketches[0].Segments.Count);
+            Assert.Equal(expectedA.Info.SegmentCount,
+                host.Document.Sketches[0].ProfileSegments.Count());
         }
 
         [Fact]

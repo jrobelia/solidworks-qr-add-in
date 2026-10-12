@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swpublished;
 
@@ -79,30 +80,26 @@ namespace SolidWorksQrAddIn.Host
         private int _sketchFeatureId;
         private string _undoName = "";
         private object? _support;         // IFeature (datum plane) or IEntity (face)
-        private double[]? _edges;         // flat x1,y1,x2,y2, sketch-space metres
+        private IReadOnlyList<SketchEdge>? _edges;   // staged contour edges, sketch-space metres
+        private IReadOnlyList<QrConstructionSquare>? _constructionSquares;
+        private IMathUtility? _math;      // block insertion points for the redo
         private bool _undone;
         private bool _released;
 
         /// <summary>Native-only initialisation; never called across COM.</summary>
         internal void Initialize(
             IModelDoc2 doc, IFeature sketch, object? support,
-            string undoName, IReadOnlyList<SketchEdge> edges)
+            SketchUndoRegistration registration, IMathUtility? math)
         {
             _doc = doc;
             _sketch = sketch;
-            _undoName = undoName;
+            _undoName = registration.UndoName;
+            _math = math;
+            _constructionSquares = registration.ConstructionSquares;
             try { _sketchFeatureId = sketch.GetID(); }
             catch { _sketchFeatureId = 0; }
             _support = support;
-            var flat = new double[edges.Count * 4];
-            for (var i = 0; i < edges.Count; i++)
-            {
-                flat[i * 4 + 0] = edges[i].Start.X;
-                flat[i * 4 + 1] = edges[i].Start.Y;
-                flat[i * 4 + 2] = edges[i].End.X;
-                flat[i * 4 + 3] = edges[i].End.Y;
-            }
-            _edges = flat;
+            _edges = registration.Edges;
         }
 
         /// <summary>SolidWorks undo/redo callback — must never throw back.</summary>
@@ -133,6 +130,8 @@ namespace SolidWorksQrAddIn.Host
                 _sketch = null;
                 _support = null;
                 _edges = null;
+                _constructionSquares = null;
+                _math = null;
                 QrSketchUndoRegistry.Drop(this);
             }
             catch { /* a reset callback must never throw back into SolidWorks */ }
@@ -245,7 +244,7 @@ namespace SolidWorksQrAddIn.Host
             try
             {
                 insertion = SolidWorksSketchHost.BeginOnSelectedSupport(
-                    doc, recordUndo: false, out _);
+                    doc, recordUndo: false, _math, capturedSupport: out _);
             }
             catch (Exception ex)
             {
@@ -255,8 +254,12 @@ namespace SolidWorksQrAddIn.Host
 
             try
             {
-                for (var i = 0; i + 3 < edges.Length; i += 4)
-                    insertion.AddLine(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+                foreach (var e in edges)
+                    insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+                // Re-stage the construction squares too — the redo rebuilds
+                // the whole definition: contours and squares alike.
+                if (_constructionSquares != null)
+                    insertion.AddConstructionSquares(_constructionSquares);
                 insertion.KeepOpen();
                 _sketch = insertion.Feature;
                 try { _sketchFeatureId = _sketch.GetID(); }

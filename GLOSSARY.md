@@ -5,19 +5,28 @@ moment it is resolved in discussion, not before.
 
 ## QR / geometry
 
-- **QR square** — the construction square bounding the grown QR-cell extent.
-  Carries the driving dimension when no keep-out square is drawn.
-- **Keep-out square** — the construction square representing the QR quiet
-  zone; offsets outward from the QR square by `quietCells × cellPitch` per
-  side. Drawn only when quiet zone > 0. Carries the driving dimension when
-  present (it is always the outermost square).
-- **Quiet zone** — the spec-mandated blank margin around a QR code (4
-  modules by default) that scanners require; implemented as the keep-out
-  square's geometry, never as cuttable profile.
+- **Working matrix** — the `(N+8)×(N+8)` cell grid the generator operates
+  on: N×N data cells plus the fixed quiet zone as light cells (ADR 0002).
+- **QR code** — the square of marked cells encoding the content, including
+  the finder patterns. Does not include the quiet zone.
+- **QR code size** — the width and height of the QR code, excluding the
+  quiet zone. Cell growth does not change this requested size.
+- **Overall size** — the width and height of the QR code including its quiet
+  zone, bounded by the keep-out square.
+- **QR square** — the inner construction square marking the QR code size.
+- **Keep-out square** — the outer construction square marking the overall
+  reserved area: the QR code plus its quiet zone.
+- **Quiet zone** — the blank four-cell margin on each side of a QR code
+  that scanners require. It must remain clear of other markings.
 - **Cell pitch** — centre-to-centre spacing of QR modules:
   `finalSize / (dataCells + 2 × growthFraction)`.
-- **Driving dimension** — the single editable sketch dimension on the
-  outermost square; the parametric handle that resizes the QR (block path).
+- **Size readout** — the numeric size surfaces are the pane's info section
+  (cell pitch, footprint, quiet-zone width — shown in the document's
+  length unit, refreshed on unit/doc change events) and the block
+  instance's PropertyManager **Scale** field, which reads as a resize
+  FACTOR of the created size (ADR 0004). No sketch dimensions are emitted
+  (ADR 0003 superseded the earlier driven/equation-linked dimension plan —
+  host-side dims cannot observe instance Scale).
 - **Payload preset** — a `PayloadGenerator` template (Url, WiFi, vCard…)
   that formats fields into the exact string encoded; the content shown is
   always the literal final payload, editable verbatim.
@@ -25,9 +34,13 @@ moment it is resolved in discussion, not before.
 ## SolidWorks
 
 - **Block instance** — a `SketchBlockInstance` inserted into a sketch from
-  a block definition; scales uniformly via its scale property, and a
-  driving dimension inside the definition rescales the instance when
-  edited. Candidate container for the QR pattern + squares.
+  a block definition; scales uniformly via its `Scale` property — the QR's
+  resize handle, a factor of the created size (a dimension inside the
+  definition distorts rather than rescales, spike-verified). Container for
+  the real-size QR contours AND both construction squares — everything
+  tracks `Scale` and the insertion point uniformly (ADR 0003; ADR 0004 —
+  the definition draws at real size so SolidWorks' interactive contour
+  picker/extrude works, like a user-made block).
 - **Pane** — the add-in's docked `QR Sketch` task-pane tab (hosts the full
   UI; the retired floating window's role).
 - **Insertion support** — the selected reference plane or planar face the

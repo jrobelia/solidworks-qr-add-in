@@ -6,18 +6,24 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// <summary>
     /// Everything a host needs to register a custom undo step for the sketch
     /// a committed insertion just produced — the step's display name, the
-    /// created sketch feature's name, and the inserted edges in sketch-space
-    /// metres (the geometry a redo would re-insert). Contains no SolidWorks
-    /// objects; the host binds it to its own document/feature references.
+    /// created sketch feature's name, and the STAGED model: the contour
+    /// edges in sketch-space metres at the final size plus the construction
+    /// squares in the same metre space. A redo re-stages all of it
+    /// through the same buffered insertion session — block instance,
+    /// squares included.
+    /// Contains no SolidWorks objects; the host binds it to its own
+    /// document/feature references.
     /// </summary>
     public sealed class SketchUndoRegistration
     {
         public SketchUndoRegistration(
-            string undoName, string sketchName, IReadOnlyList<SketchEdge> edges)
+            string undoName, string sketchName, IReadOnlyList<SketchEdge> edges,
+            IReadOnlyList<QrConstructionSquare>? constructionSquares = null)
         {
             UndoName = undoName;
             SketchName = sketchName;
             Edges = edges;
+            ConstructionSquares = constructionSquares;
         }
 
         /// <summary>The undo step's display name (SketchHostContract.CreationUndoName).</summary>
@@ -28,5 +34,12 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         /// <summary>The inserted segments in sketch-space metres, insertion order.</summary>
         public IReadOnlyList<SketchEdge> Edges { get; }
+
+        /// <summary>
+        /// The construction squares the command staged, or null when the
+        /// creation carried none — a redo re-stages them inside the block
+        /// definition so the squares survive an undo/redo cycle.
+        /// </summary>
+        public IReadOnlyList<QrConstructionSquare>? ConstructionSquares { get; }
     }
 }

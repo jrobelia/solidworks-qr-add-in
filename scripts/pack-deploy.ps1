@@ -12,6 +12,7 @@
       SolidWorksQrAddIn.Core.dll
       QRCoder.dll                  pinned dependency (MIT)
       Clipper2Lib.dll              pinned dependency (BSL-1.0)
+      LICENSE.txt                  own MIT license
       THIRD-PARTY-NOTICES.md       notices + pinned versions + selected assets
       DEPLOYMENT.md                install / register / unregister procedure
       ACCEPTANCE.md                live acceptance checklist

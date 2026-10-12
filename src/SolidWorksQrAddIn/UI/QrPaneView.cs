@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -30,7 +31,9 @@ namespace SolidWorksQrAddIn.UI
     ///     created host adapter (fresh host state every press — no cached
     ///     support) — only AFTER flushing every pending field edit, so a
     ///     create can never run on a stale, not-yet-regenerated request,
-    ///   - shows <see cref="QrSketchSession.StatusText"/>,
+    ///   - lays out <see cref="QrSketchSession.InfoLines"/> as label/value
+    ///     text rows — plain facts, deliberately not text boxes — and
+    ///     <see cref="QrSketchSession.StatusText"/>,
     ///   - re-pulls everything on <see cref="SyncFromSession"/> — the session
     ///     calls it (through the task-pane adapter, already on this
     ///     dispatcher) whenever state changed without the view driving, so
@@ -49,8 +52,12 @@ namespace SolidWorksQrAddIn.UI
         private readonly Func<ISketchHost> _hostProvider;
         private readonly TextBox _contentBox;
         private readonly TextBox _sizeBox;
+        private readonly TextBlock _sizeLabel;
+        private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
         private readonly Image _picture;
+        private readonly Border _infoSection;
+        private readonly Grid _infoGrid;
         private readonly TextBlock _status;
         private readonly DispatcherTimer _editDebounce;
         private bool _contentDirty;
@@ -83,30 +90,30 @@ namespace SolidWorksQrAddIn.UI
             panel.Children.Add(_contentBox);
 
             // Spec budget: content, size, growth, picture, Create.
-            panel.Children.Add(new TextBlock
+            _sizeInputUnit = _session.LengthUnit;
+            _sizeLabel = new TextBlock
             {
-                Text = "Final grown QR outline size (mm) — the grown QR outline " +
-                       "width, excluding the clear margin:",
-                TextWrapping = TextWrapping.Wrap,
+                Text = _session.SizeLabel,
                 Margin = new Thickness(0, 8, 0, 4),
-            });
+            };
+            panel.Children.Add(_sizeLabel);
             _sizeBox = new TextBox
             {
-                ToolTip = "The finished QR outline width in millimetres after outline " +
-                          "growth — the 4-cell white margin around it is not included.",
+                ToolTip = "Width and height of the QR code in the document's length unit. " +
+                          "The quiet zone is not included.",
             };
             panel.Children.Add(_sizeBox);
 
             panel.Children.Add(new TextBlock
             {
-                Text = "Outline growth (% of cell width per side):",
+                Text = "Cell growth per side (% of cell width):",
                 Margin = new Thickness(0, 8, 0, 4),
             });
             _growthBox = new TextBox
             {
-                ToolTip = "How far each dark cell grows past its own outline on every " +
-                          "side, as a percentage of one cell's width. Resolves " +
-                          "corner-only contacts between diagonal cells.",
+                ToolTip = "Widens each dark cell on all sides by this percentage of " +
+                          "the cell spacing, helping diagonally touching cells connect. " +
+                          "The QR code size stays fixed.",
             };
             panel.Children.Add(_growthBox);
 
@@ -134,6 +141,50 @@ namespace SolidWorksQrAddIn.UI
             create.Click += OnCreateClicked;
             panel.Children.Add(create);
 
+            // Info section (spec #10 follow-up): read-only FACTS about the
+            // request the fields currently describe — label/value text rows,
+            // deliberately NOT text boxes so nothing looks editable. The
+            // session formats every value (headlessly testable); this view
+            // only lays the rows out. Hidden while inputs are invalid —
+            // stale facts must never describe an unusable request.
+            var infoPanel = new StackPanel { Margin = new Thickness(8) };
+            infoPanel.Children.Add(new TextBlock
+            {
+                Text = "QR details",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+            _infoGrid = new Grid();
+            _infoGrid.ColumnDefinitions.Add(
+                new ColumnDefinition { Width = GridLength.Auto });
+            _infoGrid.ColumnDefinitions.Add(
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            infoPanel.Children.Add(_infoGrid);
+            _infoSection = new Border
+            {
+                BorderBrush = SystemColors.ControlDarkBrush,
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            _infoSection.Child = infoPanel;
+            panel.Children.Add(_infoSection);
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = QrSketchSession.ResizeNote,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 8, 0, 0),
+            });
+
+            panel.Children.Add(new TextBlock
+            {
+                Text = QrSketchSession.QuietZoneNote,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+
             _status = new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap,
@@ -147,6 +198,12 @@ namespace SolidWorksQrAddIn.UI
             _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
             _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
             _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
+
+            // Unit-change refresh is event-driven through the session's
+            // host-state watcher (ActiveDocChangeNotify + UnitsChangeNotify);
+            // showing the tab is one more honest moment to re-read, in case
+            // the pane missed an event while hidden.
+            IsVisibleChanged += (_, __) => { if (IsVisible) _session.RefreshInfo(); };
 
             // The pane outlives any one "open" — pull the session's existing
             // inputs so a session that outlives a hidden tab still shows the
@@ -173,6 +230,9 @@ namespace SolidWorksQrAddIn.UI
         /// </summary>
         public void SyncFromSession()
         {
+            if (_sizeDirty && (_sizeInputUnit.MetresPerUnit != _session.LengthUnit.MetresPerUnit ||
+                               _sizeInputUnit.Symbol != _session.LengthUnit.Symbol))
+                FlushPendingEdits();
             _suppressFieldEvents = true;
             try
             {
@@ -221,7 +281,7 @@ namespace SolidWorksQrAddIn.UI
             if (_sizeDirty)
             {
                 _sizeDirty = false;
-                _session.SetSizeText(_sizeBox.Text);
+                _session.SetSizeText(_sizeBox.Text, _sizeInputUnit);
             }
             if (_growthDirty)
             {
@@ -249,8 +309,66 @@ namespace SolidWorksQrAddIn.UI
 
         private void RefreshView()
         {
+            _sizeInputUnit = _session.LengthUnit;
+            _sizeLabel.Text = _session.SizeLabel;
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
+            RebuildInfoRows();
             ShowStatus(_session.StatusText, isError: !_session.HasValidRequest);
+        }
+
+        /// <summary>
+        /// Re-lay the info section from <see cref="QrSketchSession.InfoLines"/>
+        /// — label/value TextBlocks, facts not fields. The whole section
+        /// collapses while the inputs are invalid so no stale facts show.
+        /// </summary>
+        private void RebuildInfoRows()
+        {
+            var lines = _session.InfoLines;
+            _infoGrid.Children.Clear();
+            _infoGrid.RowDefinitions.Clear();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                _infoGrid.RowDefinitions.Add(
+                    new RowDefinition { Height = GridLength.Auto });
+                var label = new TextBlock
+                {
+                    Text = lines[i].Label,
+                    Foreground = SystemColors.GrayTextBrush,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 10, 3),
+                };
+                var value = new TextBlock
+                {
+                    Text = lines[i].Value,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 3),
+                    ToolTip = lines[i].Label == "Cell size"
+                        ? "Spacing from one cell to the next, before cell growth."
+                        : lines[i].Label == "Overall size"
+                            ? "Width and height including the quiet zone."
+                            : null,
+                };
+                Grid.SetRow(label, i);
+                Grid.SetRow(value, i);
+                Grid.SetColumn(value, 1);
+                _infoGrid.Children.Add(label);
+                _infoGrid.Children.Add(value);
+            }
+            _infoSection.Visibility = lines.Count == 0
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        public string InfoSnapshot
+        {
+            get
+            {
+                var labels = _infoGrid.Children.OfType<TextBlock>();
+                var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
+                string cellText = cell == null ? string.Empty : labels.First(
+                    x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
+                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText}";
+            }
         }
 
         private void ShowStatus(string text, bool isError)

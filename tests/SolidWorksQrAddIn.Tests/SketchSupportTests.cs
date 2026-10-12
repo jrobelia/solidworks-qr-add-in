@@ -76,22 +76,24 @@ namespace SolidWorksQrAddIn.Tests
         {
             // The seam contract: AddLine receives the module's sketch-space
             // metres unchanged — centring and orientation come from the module
-            // result itself, never from an adapter-side transform. Asserted
-            // exactly (bit-identical), not recomputed the way the code does.
+            // result itself, never from an adapter-side transform. The staged
+            // edges ARE delivered verbatim; the drawn geometry they become
+            // (def-space ÷scale, instance ×scale — the block realization)
+            // round-trips to the same values within a float ulp.
             var host = HostWith(selType);
 
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.True(result.Succeeded, result.Message);
-            var segs = host.Document!.Sketches.Single().Segments;
+            var segs = host.Document!.Sketches.Single().ProfileSegments.ToList();
             var expected = Expected.Edges.ToList();
             Assert.Equal(expected.Count, segs.Count);
             for (var i = 0; i < expected.Count; i++)
             {
-                Assert.Equal(expected[i].Start.X, segs[i].X1);
-                Assert.Equal(expected[i].Start.Y, segs[i].Y1);
-                Assert.Equal(expected[i].End.X, segs[i].X2);
-                Assert.Equal(expected[i].End.Y, segs[i].Y2);
+                Assert.Equal(expected[i].Start.X, segs[i].X1, 15);
+                Assert.Equal(expected[i].Start.Y, segs[i].Y1, 15);
+                Assert.Equal(expected[i].End.X, segs[i].X2, 15);
+                Assert.Equal(expected[i].End.Y, segs[i].Y2, 15);
             }
         }
 
@@ -106,8 +108,8 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(new CreateQrSketchCommand().Execute(onPlane, Content, SizeMm, Growth).Succeeded);
             Assert.True(new CreateQrSketchCommand().Execute(onFace, Content, SizeMm, Growth).Succeeded);
 
-            var fromPlane = onPlane.Document!.Sketches.Single().Segments;
-            var fromFace = onFace.Document!.Sketches.Single().Segments;
+            var fromPlane = onPlane.Document!.Sketches.Single().ProfileSegments.ToList();
+            var fromFace = onFace.Document!.Sketches.Single().ProfileSegments.ToList();
             Assert.Equal(fromPlane.Count, fromFace.Count);
             for (var i = 0; i < fromPlane.Count; i++)
             {
@@ -130,7 +132,7 @@ namespace SolidWorksQrAddIn.Tests
             var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
 
             Assert.True(result.Succeeded, result.Message);
-            var segs = host.Document!.Sketches.Single().Segments;
+            var segs = host.Document!.Sketches.Single().ProfileSegments.ToList();
             double half = SizeMm / 2.0 / 1000.0;
             Assert.Equal(half, segs.Max(s => System.Math.Max(s.X1, s.X2)), 12);
             Assert.Equal(-half, segs.Min(s => System.Math.Min(s.X1, s.X2)), 12);

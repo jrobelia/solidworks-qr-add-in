@@ -31,7 +31,8 @@
 AppId={{EFF08964-4543-45AC-9CDC-867500E50276}}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=SolidWorks QR Add-In Contributors
+AppPublisher=Jon Robelia
+AppCopyright=Copyright (c) 2026 Jon Robelia
 DefaultDirName={autopf}\{#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -43,7 +44,10 @@ CloseApplications=yes
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-LicenseFile=..\THIRD-PARTY-NOTICES.md
+; Inno's license page is a plain-text control, so LICENSE.txt beside this
+; script carries the add-in's own MIT license (same text as ..\LICENSE) plus
+; a plain-text rendering of ..\THIRD-PARTY-NOTICES.md — keep them in sync.
+LicenseFile=LICENSE.txt
 ; Installer exe + Settings > Apps icon — a multi-size ICO of the QR glyph,
 ; checked in beside this script (same convention as the InvenTree add-in).
 SetupIconFile=qr-addin.ico

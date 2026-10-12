@@ -163,7 +163,21 @@ from its own build output, passing the deployed folder:
 ```powershell
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
 ```
+
+The `units` mode uses a session-free instance and checks the native document
+watcher plus the actual pane's rendered size label, input, and cell-size value.
+It changes the document unit system, calls `SetUnits`, and switches documents
+without invoking the QR menu command or Create. The pending QR's physical size
+stays fixed while its input and details convert to the active document's unit.
+On SW 2023 SP5, assigning `LengthUnit` directly does not emit
+`UnitsChangeNotify`; the probe reports that API-only route diagnostically,
+not as an interactive event test. Use `SetUnits` or the unit-system preference
+when an API-driven change must notify listeners. Pass the folder actually used
+by COM registration: specifying a different DLL path does not override its
+`CodeBase`. An installer-managed setup uses Program Files, so install the
+updated installer before checking the rendered pane.
 
 The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
 `Activator.CreateInstance` (PowerShell late binding does **not** work — verified),

@@ -1,0 +1,379 @@
+using System.Linq;
+using SolidWorksQrAddIn.Core.Commands;
+using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Tests.Fakes;
+using Xunit;
+
+namespace SolidWorksQrAddIn.Tests
+{
+    /// <summary>
+    /// Spec #10 / ticket #16, amended by ADR 0004 — the insertion session
+    /// realizes the staged QR contours as ONE sketch block instance: the
+    /// definition is drawn at the staged (real) size and the instance lands
+    /// at Scale 1 — the PropertyManager scale field is a resize FACTOR, not
+    /// a size readout. Assertions stay on the fake host's world state —
+    /// block present, instance scale, definition geometry — never call
+    /// counts.
+    /// </summary>
+    public class QrBlockInsertionTests
+    {
+        private const string Content = "SW-QR-MVP";
+        private const double SizeMm = 25.0;
+        private const double Growth = 0.03;
+
+        private static readonly QrSketch Expected =
+            QrSketchGenerator.Generate(Content, SizeMm, Growth).Sketch!;
+
+        private static bool[,] Cells(int n, params (int row, int col)[] dark)
+        {
+            var cells = new bool[n, n];
+            foreach (var (row, col) in dark)
+                cells[row, col] = true;
+            return cells;
+        }
+
+        private static TestSketchHost HostWithSelectedPlane()
+        {
+            var host = new TestSketchHost { Document = FakeDocument.FreshPart() };
+            host.Document!.Selection.Add(FakeSelType.DatumPlane);
+            return host;
+        }
+
+        [Fact]
+        public void A_create_produces_exactly_one_block_instance_in_the_new_sketch()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            var sketch = host.Document!.Sketches.Single();
+            var instance = Assert.Single(sketch.BlockInstances);
+            // The QR pattern is inside the block — the host sketch holds no
+            // raw contour segments of its own.
+            Assert.Empty(sketch.Segments);
+            Assert.Same(instance.Definition, Assert.Single(host.Document.BlockDefinitions));
+        }
+
+        [Fact]
+        public void A_matrix_without_border_cells_still_marks_the_grown_outline()
+        {
+            var host = HostWithSelectedPlane();
+
+            // One interior cell: its grown contour spans ~(u+2g)·p — far
+            // less than the requested outline. The QR square rides inside
+            // the definition regardless and still marks the full grown
+            // outline at ±S/2 — the cell sparsity is invisible outside.
+            var sketch = QrSketchGenerator.GenerateFromCells(
+                Cells(3, (1, 1)), SizeMm, Growth).Sketch!;
+            double halfM = SizeMm / 2.0 / 1000.0;
+            Assert.True(sketch.Edges.Max(e =>
+                System.Math.Max(System.Math.Abs(e.Start.X), System.Math.Abs(e.End.X))) < halfM,
+                "fixture must not reach the grown outline — the degenerate case");
+
+            var insertion = host.BeginSketchInsertion();
+            foreach (var e in sketch.Edges)
+                insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+            insertion.AddConstructionSquares(sketch.ConstructionSquares);
+            insertion.KeepOpen();
+            insertion.Dispose();
+
+            var instance = Assert.Single(host.Document!.Sketches.Single().BlockInstances);
+            Assert.Equal(1.0, instance.Scale, 9);
+            // …and the QR square really renders at ±S/2 — the grown outline
+            // the cell content sits inside, exactly as the model intends.
+            var qrSquareExtent = instance.EffectiveEdges
+                .Where(e => e.Construction)
+                .SelectMany(e => new[] { e.X1, e.Y1, e.X2, e.Y2 })
+                .Select(System.Math.Abs).Min();
+            Assert.Equal(halfM, qrSquareExtent, 9);
+        }
+
+        [Fact]
+        public void The_success_message_describes_the_block_instance_not_raw_segments()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            // The committed sketch holds ONE block instance and no raw
+            // segments of its own — the message must describe that world.
+            Assert.Contains("block", result.Message, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void The_instance_lands_unscaled_at_the_origin()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            var instance = Assert.Single(host.Document!.Sketches.Single().BlockInstances);
+            // ADR 0004: the definition carries the real size — the instance
+            // is an unscaled, unrotated placement at the sketch origin.
+            Assert.Equal(1.0, instance.Scale, 9);
+            Assert.Equal(0.0, instance.Angle, 12);
+            Assert.Equal(0.0, instance.X, 12);
+            Assert.Equal(0.0, instance.Y, 12);
+        }
+
+        [Fact]
+        public void The_block_definition_is_real_sized_and_carries_every_edge()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            var def = Assert.Single(host.Document!.BlockDefinitions);
+            Assert.Equal(Expected.Info.SegmentCount, def.Contours.Count);
+            // The definition also folds in the two construction squares —
+            // QR square + keep-out square, four edges each (ADR 0003).
+            Assert.Equal(8, def.ConstructionEdges.Count);
+            Assert.All(def.ConstructionEdges, e => Assert.True(e.Construction));
+            // The def content IS the staged geometry at the requested size:
+            // ±S/2 = ±12.5 mm in sketch-space metres (ADR 0004).
+            double half = SizeMm / 2.0 / 1000.0;
+            var xs = def.Contours.SelectMany(e => new[] { e.X1, e.X2 }).ToList();
+            var ys = def.Contours.SelectMany(e => new[] { e.Y1, e.Y2 }).ToList();
+            Assert.Equal(half, xs.Max(), 12);
+            Assert.Equal(-half, xs.Min(), 12);
+            Assert.Equal(half, ys.Max(), 12);
+            Assert.Equal(-half, ys.Min(), 12);
+            // …edge for edge identical to the model's sized contour set.
+            var expected = Expected.Edges.ToList();
+            for (var i = 0; i < expected.Count; i++)
+            {
+                Assert.Equal(expected[i].Start.X, def.Contours[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y, def.Contours[i].Y1, 12);
+            }
+        }
+
+        [Fact]
+        public void The_instance_renders_the_requested_geometry_at_the_requested_size()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            var instance = host.Document!.Sketches.Single().BlockInstances.Single();
+            // Effective geometry = def × scale — the same contour set the
+            // sized emission produced, in sketch-space metres, ±S/2. The
+            // construction squares render alongside it (they make
+            // EffectiveEdges longer) — the cuttable pattern is ProfileEdges.
+            var effective = instance.ProfileEdges.ToList();
+            var expected = Expected.Edges.ToList();
+            Assert.Equal(expected.Count, effective.Count);
+            for (var i = 0; i < expected.Count; i++)
+            {
+                Assert.Equal(expected[i].Start.X, effective[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y, effective[i].Y1, 12);
+                Assert.Equal(expected[i].End.X, effective[i].X2, 12);
+                Assert.Equal(expected[i].End.Y, effective[i].Y2, 12);
+            }
+            double half = SizeMm / 2.0 / 1000.0;
+            Assert.Equal(half, effective.Max(e => System.Math.Max(e.X1, e.X2)), 9);
+            Assert.Equal(-half, effective.Min(e => System.Math.Min(e.X1, e.X2)), 9);
+        }
+
+        [Fact]
+        public void Editing_the_instance_scale_rescales_every_cell_uniformly()
+        {
+            var host = HostWithSelectedPlane();
+            Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
+            var instance = host.Document!.Sketches.Single().BlockInstances.Single();
+            var before = instance.EffectiveEdges.ToList();
+
+            // The engineer edits the PropertyManager Scale field — the QR's
+            // resize handle, now a FACTOR (ADR 0004): 1 → 2 doubles every
+            // definition edge (25 mm → 50 mm rendered).
+            instance.Scale = 2.0;
+
+            var after = instance.EffectiveEdges.ToList();
+            Assert.Equal(before.Count, after.Count);
+            for (var i = 0; i < before.Count; i++)
+            {
+                Assert.Equal(before[i].X1 * 2.0, after[i].X1, 12);
+                Assert.Equal(before[i].Y1 * 2.0, after[i].Y1, 12);
+                Assert.Equal(before[i].X2 * 2.0, after[i].X2, 12);
+                Assert.Equal(before[i].Y2 * 2.0, after[i].Y2, 12);
+            }
+            Assert.Equal(50.0 / 2.0 / 1000.0,
+                instance.ProfileEdges.Max(e => System.Math.Max(e.X1, e.X2)), 9);
+        }
+
+        [Fact]
+        public void In_an_inch_document_the_definition_is_still_real_sized()
+        {
+            var host = HostWithSelectedPlane();
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.True(result.Succeeded, result.Message);
+            var instance = Assert.Single(host.Document.Sketches.Single().BlockInstances);
+            // Sketch-space geometry is always metres — document units only
+            // change what the UI displays, never the staged content.
+            Assert.Equal(1.0, instance.Scale, 9);
+            var xs = instance.Definition.Contours
+                .SelectMany(e => new[] { e.X1, e.X2 }).ToList();
+            Assert.Equal(SizeMm / 2.0 / 1000.0, xs.Max(), 12);
+            Assert.Equal(-SizeMm / 2.0 / 1000.0, xs.Min(), 12);
+            // And the effective profile geometry is the same 25 mm pattern.
+            Assert.Equal(SizeMm / 2.0 / 1000.0,
+                instance.ProfileEdges.Max(e => System.Math.Max(e.X1, e.X2)), 9);
+        }
+
+        // ---------- failure / cleanup at the block step ----------
+
+        private static FakeSketch PriorUserSketch(FakeDocument doc)
+        {
+            var sketch = new FakeSketch("SketchUser");
+            sketch.Segments.Add(new FakeLine(0, 0, 0.01, 0));
+            doc.Sketches.Add(sketch);
+            var captured = sketch;
+            doc.PushUserUndoStep("User Sketch", () =>
+            {
+                doc.Sketches.Remove(captured);
+                if (ReferenceEquals(doc.ActiveSketch, captured))
+                    doc.ActiveSketch = null;
+            });
+            return sketch;
+        }
+
+        [Fact]
+        public void A_block_draw_failure_removes_the_partial_sketch()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            host.FailBlockDraw = true;
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Single(doc.Sketches);
+            Assert.Same(userSketch, doc.Sketches[0]);
+            Assert.Empty(doc.BlockDefinitions);
+            Assert.Null(doc.ActiveSketch);
+        }
+
+        [Fact]
+        public void A_block_make_failure_removes_the_partial_sketch()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            host.FailBlockMake = true;
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("block", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.Single(doc.Sketches);
+            Assert.Same(userSketch, doc.Sketches[0]);
+            Assert.Empty(doc.BlockDefinitions);
+            Assert.Null(doc.ActiveSketch);
+        }
+
+        [Fact]
+        public void A_block_instance_failure_removes_the_whole_sketch_block_included()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            host.FailBlockInstance = true;
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("removed", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            // The formed instance dies with the sketch feature it lives
+            // inside — no block geometry remains reachable in the tree.
+            Assert.Single(doc.Sketches);
+            Assert.Same(userSketch, doc.Sketches[0]);
+            Assert.Empty(doc.Sketches.SelectMany(s => s.BlockInstances));
+            Assert.Null(doc.ActiveSketch);
+        }
+
+        [Fact]
+        public void A_block_failure_with_a_failing_cleanup_reports_honestly()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            host.FailBlockMake = true;
+            host.FailCleanup = true;
+
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("Cleanup failed", result.Message);
+            Assert.Contains("may remain", result.Message, System.StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("was removed", result.Message);
+            Assert.Equal(2, doc.Sketches.Count);
+            Assert.Same(userSketch, doc.Sketches[0]);
+            Assert.Null(doc.ActiveSketch);
+        }
+
+        // ---------- named undo over the block ----------
+
+        [Fact]
+        public void Named_undo_registers_the_same_step_which_removes_sketch_and_block()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            var result = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+            Assert.True(result.Succeeded, result.Message);
+            var qrSketch = doc.Sketches.Single(s => !ReferenceEquals(s, userSketch));
+            var def = doc.BlockDefinitions.Single();
+
+            var reg = Assert.Single(host.UndoRegistrations);
+            Assert.Equal(Core.Hosting.SketchHostContract.CreationUndoName, reg.UndoName);
+            Assert.Equal(qrSketch.Name, reg.SketchName);
+            // The registration still carries the requested geometry — the
+            // staged edges plus the staged squares a redo would re-fold
+            // into the definition through the same session.
+            Assert.Equal(Expected.Info.SegmentCount, reg.Edges.Count);
+            Assert.Equal(2, reg.ConstructionSquares!.Count);
+
+            doc.ActiveSketch = null;
+            Assert.True(doc.UndoLastStep());
+
+            // One Ctrl+Z removes the whole sketch feature — the block lives
+            // inside it, so its instance leaves the feature tree with it.
+            Assert.DoesNotContain(qrSketch, doc.Sketches);
+            Assert.Contains(userSketch, doc.Sketches);
+            Assert.Empty(doc.Sketches.SelectMany(s => s.BlockInstances));
+        }
+
+        [Fact]
+        public void Redo_restores_the_sketch_with_its_block_intact()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
+            var qrSketch = doc.Sketches.Single();
+
+            doc.ActiveSketch = null;
+            Assert.True(doc.UndoLastStep());
+            Assert.DoesNotContain(qrSketch, doc.Sketches);
+
+            Assert.True(doc.RedoLastStep());
+            Assert.Contains(qrSketch, doc.Sketches);
+            var instance = Assert.Single(qrSketch.BlockInstances);
+            Assert.Equal(1.0, instance.Scale, 9);
+            Assert.Equal(Expected.Info.SegmentCount,
+                instance.ProfileEdges.Count());
+            // The construction squares ride back inside the definition too.
+            Assert.Equal(8, instance.Definition.ConstructionEdges.Count);
+        }
+    }
+}

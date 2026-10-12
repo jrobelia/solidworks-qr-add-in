@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 
 namespace SolidWorksQrAddIn.Tests.Fakes
@@ -21,14 +22,23 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     /// <summary>One line segment recorded in sketch-space metres.</summary>
     public sealed class FakeLine
     {
-        public FakeLine(double x1, double y1, double x2, double y2)
+        public FakeLine(double x1, double y1, double x2, double y2, bool construction = false)
         {
             X1 = x1; Y1 = y1; X2 = x2; Y2 = y2;
+            Construction = construction;
         }
         public double X1 { get; }
         public double Y1 { get; }
         public double X2 { get; }
         public double Y2 { get; }
+
+        /// <summary>
+        /// Construction geometry — reference/clearance lines, never part of a
+        /// cuttable profile. Inside a block definition the flag rides with
+        /// the segment exactly like the real API's ConstructionGeometry —
+        /// and like that setter it is applied after the line exists.
+        /// </summary>
+        public bool Construction { get; set; }
     }
 
     /// <summary>An in-memory sketch: a named feature holding its segments.</summary>
@@ -36,7 +46,128 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     {
         public FakeSketch(string name) { Name = name; }
         public string Name { get; }
+
+        /// <summary>
+        /// Raw line segments drawn directly in this sketch. The QR contours
+        /// no longer land here — they are wrapped in a block instance at
+        /// commit — so a created QR sketch leaves this empty. User sketches
+        /// and failure paths still use it.
+        /// </summary>
         public List<FakeLine> Segments { get; } = new List<FakeLine>();
+
+        /// <summary>Block instances placed in this sketch (the QR is exactly one).</summary>
+        public List<FakeBlockInstance> BlockInstances { get; } = new List<FakeBlockInstance>();
+
+        /// <summary>
+        /// The geometry the sketch actually shows: raw drawn segments plus
+        /// every block instance's effective (scale/angle/position-resolved)
+        /// edges — the world-state a test should assert on when it asks
+        /// "what did the create leave in the sketch". Construction-flagged
+        /// lines inside a block render too (ADR 0003) — they carry
+        /// <see cref="FakeLine.Construction"/> so profile assertions filter
+        /// them, never by accident counting them as cuttable geometry.
+        /// </summary>
+        public IEnumerable<FakeLine> EffectiveSegments =>
+            Segments.Concat(BlockInstances.SelectMany(i => i.EffectiveEdges));
+
+        /// <summary>
+        /// The profile-eligible geometry — <see cref="EffectiveSegments"/>
+        /// minus construction lines. An extrude reads only this set.
+        /// </summary>
+        public IEnumerable<FakeLine> ProfileSegments =>
+            EffectiveSegments.Where(e => !e.Construction);
+    }
+
+    /// <summary>
+    /// A sketch block definition: the QR contours drawn at the requested
+    /// real size in sketch-space metres (ADR 0004). In the real host the
+    /// definition lives in the document, shared by its instances.
+    /// </summary>
+    public sealed class FakeBlockDefinition
+    {
+        public FakeBlockDefinition(string name) { Name = name; }
+
+        public string Name { get; }
+
+        /// <summary>The definition's contours in sketch-space metres at the requested size.</summary>
+        public List<FakeLine> Contours { get; } = new List<FakeLine>();
+
+        /// <summary>
+        /// The definition's construction segments — the QR square and the
+        /// keep-out square drawn at real size (ADR 0003/0004). They render
+        /// on every instance as construction geometry, tracking Scale and
+        /// position, and never feed a profile.
+        /// </summary>
+        public List<FakeLine> ConstructionEdges { get; } = new List<FakeLine>();
+
+        /// <summary>Instances of this definition placed in sketches.</summary>
+        public List<FakeBlockInstance> Instances { get; } = new List<FakeBlockInstance>();
+    }
+
+    /// <summary>
+    /// A block instance placed in a sketch: a definition handle plus the
+    /// placement — insertion point, uniform <see cref="Scale"/> (the resize
+    /// handle — a factor of the created size, ADR 0004) and rotation.
+    /// </summary>
+    public sealed class FakeBlockInstance
+    {
+        public FakeBlockInstance(FakeBlockDefinition definition, double x, double y)
+        {
+            Definition = definition;
+            X = x;
+            Y = y;
+        }
+
+        public string Name { get; set; } = "";
+
+        public FakeBlockDefinition Definition { get; }
+
+        /// <summary>Insertion point, sketch-space metres.</summary>
+        public double X { get; set; }
+        public double Y { get; set; }
+
+        /// <summary>
+        /// Uniform scale — what the PropertyManager Scale field shows. Editing
+        /// it rescales the effective geometry uniformly, exactly like the
+        /// real instance property.
+        /// </summary>
+        public double Scale { get; set; } = 1.0;
+
+        /// <summary>Rotation, radians.</summary>
+        public double Angle { get; set; }
+
+        /// <summary>
+        /// The geometry the instance currently contributes to the sketch, in
+        /// sketch-space metres: definition contours AND construction
+        /// segments × Scale, rotated by <see cref="Angle"/>, offset to the
+        /// insertion point — the construction lines render on the instance
+        /// and track its transforms (ADR 0003, live-verified consexp).
+        /// Recomputed on every read — a Scale edit rescales it immediately.
+        /// </summary>
+        public IEnumerable<FakeLine> EffectiveEdges
+        {
+            get
+            {
+                double cos = Math.Cos(Angle);
+                double sin = Math.Sin(Angle);
+                foreach (var e in Definition.Contours.Concat(Definition.ConstructionEdges))
+                {
+                    yield return new FakeLine(
+                        X + Scale * (e.X1 * cos - e.Y1 * sin),
+                        Y + Scale * (e.X1 * sin + e.Y1 * cos),
+                        X + Scale * (e.X2 * cos - e.Y2 * sin),
+                        Y + Scale * (e.X2 * sin + e.Y2 * cos),
+                        e.Construction);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The profile-eligible geometry the instance contributes — every
+        /// effective edge that is not construction geometry.
+        /// </summary>
+        public IEnumerable<FakeLine> ProfileEdges =>
+            EffectiveEdges.Where(e => !e.Construction);
     }
 
     /// <summary>
@@ -85,6 +216,24 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>Committed sketch features in the tree.</summary>
         public List<FakeSketch> Sketches { get; } = new List<FakeSketch>();
+
+        /// <summary>Block definitions created in this document (doc-level registry).</summary>
+        public List<FakeBlockDefinition> BlockDefinitions { get; } = new List<FakeBlockDefinition>();
+
+        /// <summary>Sequence number for generated block names ("Block1", "Block1-1").</summary>
+        public int NextBlockNumber { get; set; } = 1;
+
+        /// <summary>
+        /// The document's length unit in metres — the in-memory stand-in for
+        /// the native adapter's ModelDoc2.LengthUnit read (swLengthUnit_e).
+        /// 0.001 = millimetres, 0.0254 = inches. It only drives the pane's
+        /// cell-size readout — sketch-space geometry is always metres and
+        /// the block definition draws at the real size (ADR 0004).
+        /// </summary>
+        public double MetresPerLengthUnit { get; set; } = 0.001;
+
+        /// <summary>Display symbol for the document's length unit ("mm", "in", …).</summary>
+        public string LengthUnitSymbol { get; set; } = "mm";
 
         /// <summary>Mutable sketch-manager flags, as the real ISketchManager exposes.</summary>
         public Dictionary<string, bool> SketchManagerFlags { get; } = new Dictionary<string, bool>
@@ -253,6 +402,43 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>When true, KeepOpen throws a non-seam exception before committing.</summary>
         public bool KeepOpenThrows { get; set; }
 
+        /// <summary>
+        /// When true, the first definition draw inside the commit's block
+        /// step fails (the CreateLine stage) — the sketch may hold
+        /// partially-drawn definition lines, then abort cleans it up.
+        /// </summary>
+        public bool FailBlockDraw { get; set; }
+
+        /// <summary>
+        /// When true, the commit's MakeSketchBlockFromSelected stage fails —
+        /// the drawn definition lines were already in the sketch but no block
+        /// formed. Abort still removes the whole sketch.
+        /// </summary>
+        public bool FailBlockMake { get; set; }
+
+        /// <summary>
+        /// When true, the commit's block make produces a definition but no
+        /// instance in the sketch — the commit's instance-count check
+        /// refuses. Abort removes the whole sketch (block inside it).
+        /// </summary>
+        public bool FailBlockInstance { get; set; }
+
+        /// <summary>
+        /// When true, the commit's construction-square draw stage fails —
+        /// the square's def-space lines could not be drawn into the block
+        /// definition. Abort removes the whole sketch.
+        /// </summary>
+        public bool FailSquareDraw { get; set; }
+
+        /// <summary>
+        /// When true, the construction-flag write on the first staged
+        /// square edge fails — models an ISketchSegment.ConstructionGeometry
+        /// setter that throws. The edge was drawn (solid), then the flag
+        /// could not be applied; the commit must abort honestly rather
+        /// than leave the square as profile geometry.
+        /// </summary>
+        public bool FailSquareFlag { get; set; }
+
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
@@ -363,7 +549,11 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             else
                 selection = SupportSelection.Other;
 
-            return new SketchHostState(kind, selection, doc?.ActiveSketch != null);
+            return new SketchHostState(
+                kind, selection, doc?.ActiveSketch != null,
+                doc == null
+                    ? null
+                    : new HostLengthUnit(doc.MetresPerLengthUnit, doc.LengthUnitSymbol));
         }
 
         public ISketchInsertion BeginSketchInsertion()
@@ -438,6 +628,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         private readonly FakeDocument _doc;
         private readonly FakeSketch _sketch;
         private readonly Dictionary<string, bool> _flagSnapshot;
+        private readonly List<FakeLine> _buffered = new List<FakeLine>();
+        private readonly List<QrConstructionSquare> _stagedSquares =
+            new List<QrConstructionSquare>();
         private bool _committed;
         private bool _aborted;
         private CleanupOutcome? _abortOutcome;
@@ -456,32 +649,136 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         }
 
         public string SketchName => _sketch.Name;
-        public int LineCount => _sketch.Segments.Count;
+        public int LineCount => _buffered.Count;
 
+        /// <summary>
+        /// Stages one contour edge of the QR pattern at its final size in
+        /// sketch-space metres. Nothing is drawn yet — the session buffers
+        /// the staged edges and realizes them at commit: a block-capable
+        /// host draws them at the staged size, wraps them in a block
+        /// definition and places the one instance at Scale 1 (ADR 0004 —
+        /// real-size definition, Scale as a resize factor).
+        /// </summary>
         public void AddLine(double x1, double y1, double x2, double y2)
         {
             if (_aborted || _committed)
                 throw new SketchInsertionException("The insertion session is already finished.");
-            var next = _sketch.Segments.Count + 1;
+            var next = _buffered.Count + 1;
             if (_host.ThrowUnhandledOnLineNumber == next)
                 throw new InvalidOperationException(
                     $"Injected: the host exploded inserting line {next}.");
             if (_host.FailOnLineNumber == next)
                 throw new SketchInsertionException(
                     $"CreateLine returned no segment for line {next}.");
-            _sketch.Segments.Add(new FakeLine(x1, y1, x2, y2));
+            _buffered.Add(new FakeLine(x1, y1, x2, y2));
+        }
+
+        /// <summary>
+        /// Stages the model's construction squares — QR square and keep-out
+        /// square in sketch-space metres at the requested size — for
+        /// commit-time emission INSIDE the block definition (ADR 0003).
+        /// Nothing lands yet: <see cref="KeepOpen"/> draws them into the
+        /// same real-size definition fold as the contours, flagged
+        /// construction — they then track the instance's Scale and moves
+        /// with no constraints, dims, or equations anywhere.
+        /// </summary>
+        public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
+        {
+            if (_aborted || _committed)
+                throw new SketchInsertionException("The insertion session is already finished.");
+            if (squares != null)
+                _stagedSquares.AddRange(squares);
         }
 
         public void KeepOpen()
         {
             if (_host.KeepOpenThrows)
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
+            if (_buffered.Count > 0)
+                RealizeAsBlockInstance();
             _committed = true;
             // Live-verified on SW 2023 SP5: the AddToDB recording is refused
             // (FinishRecordingUndoObject2 returns false), so a committed
             // creation produces NO step from the recording — the named undo
             // step arrives separately via RegisterSketchUndo.
             _doc.DiscardUndoRecording();
+        }
+
+        /// <summary>
+        /// The staged-geometry → block-instance realization the native
+        /// adapter performs inside the open sketch edit (ADR 0004):
+        ///   1. the definition draws at the STAGED size — real sketch-space
+        ///      metres, no normalization;
+        ///   2. the staged squares draw the same way, then take the
+        ///      construction flag;
+        ///   3. the drawn lines fold into the definition and its first
+        ///      instance (scale 1 at the origin);
+        ///   4. the instance stays at Scale 1 — the PM field is a resize
+        ///      factor, not a size readout.
+        /// </summary>
+        private void RealizeAsBlockInstance()
+        {
+            // Definition draw stage — staged edges land as ordinary sketch
+            // lines first (the conversion step below swallows them).
+            for (var i = 0; i < _buffered.Count; i++)
+            {
+                if (_host.FailBlockDraw && i == 0)
+                    throw new SketchInsertionException(
+                        "CreateLine returned no segment while drawing the block definition.");
+                var e = _buffered[i];
+                _sketch.Segments.Add(new FakeLine(e.X1, e.Y1, e.X2, e.Y2));
+            }
+
+            // The staged construction squares drawn the same way, then
+            // construction-flagged — the same fold swallows them into the
+            // definition, where they track the instance's transforms. The
+            // flag write is its own stage: a failure leaves a solid line
+            // the commit must refuse.
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                foreach (var e in square.Edges)
+                {
+                    squareIndex++;
+                    if (_host.FailSquareDraw && squareIndex == 1)
+                        throw new SketchInsertionException(
+                            "CreateLine returned no segment while drawing the construction square.");
+                    var line = new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+                    _sketch.Segments.Add(line);
+                    if (_host.FailSquareFlag && squareIndex == 1)
+                        throw new SketchInsertionException(
+                            "The construction-geometry flag could not be applied to the square's edge.");
+                    line.Construction = true;
+                }
+            }
+
+            if (_host.FailBlockMake)
+                throw new SketchInsertionException(
+                    "MakeSketchBlockFromSelected failed to form a block definition.");
+
+            // The select-all → MakeSketchBlockFromSelected step: the drawn
+            // lines leave the sketch's raw segment list and become the
+            // definition's content — solid edges as contours, construction-
+            // flagged edges as the def's construction segments; the first
+            // instance lands at the origin at scale 1.
+            var def = new FakeBlockDefinition("Block" + _doc.NextBlockNumber++);
+            def.Contours.AddRange(_sketch.Segments.Where(e => !e.Construction));
+            def.ConstructionEdges.AddRange(_sketch.Segments.Where(e => e.Construction));
+            _sketch.Segments.Clear();
+            _doc.BlockDefinitions.Add(def);
+
+            // FailBlockInstance models the make producing a definition but
+            // no instance in the sketch — the commit's instance-count check
+            // must refuse then, as the native adapter does.
+            if (!_host.FailBlockInstance)
+            {
+                var instance = new FakeBlockInstance(def, 0.0, 0.0) { Name = def.Name + "-1" };
+                def.Instances.Add(instance);
+                _sketch.BlockInstances.Add(instance);
+            }
+            if (_sketch.BlockInstances.Count == 0)
+                throw new SketchInsertionException(
+                    "The block definition formed but placed no instance in the sketch.");
         }
 
         public CleanupOutcome Abort()

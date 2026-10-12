@@ -1,0 +1,66 @@
+SOLIDWORKS QR ADD-IN
+====================
+
+MIT License
+
+Copyright (c) 2026 Jon Robelia
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+======================================================================
+THIRD-PARTY NOTICES
+======================================================================
+
+Runtime libraries shipped with the add-in (deployed beside
+SolidWorksQrAddIn.dll):
+
+  Package   Version         License   Selected NuGet asset (net48)   Used for
+  QRCoder   1.8.0 (pinned)  MIT       lib/net40/QRCoder.dll          QR encoding
+                                                                     (ModuleMatrix)
+  Clipper2  2.0.0 (pinned)  BSL-1.0   lib/netstandard2.0/            Integer polygon
+                                      Clipper2Lib.dll                union + nested
+                                                                     contours
+
+Full license texts ship in the deployment folder under licenses\ (and live
+in the source repo at licenses/):
+
+  licenses\QRCoder-LICENSE.txt   - MIT License, (c) 2013-2025 Raffael
+                                 Herrmann, (c) 2024-2025 Shane Krueger.
+                                 Upstream: github.com/Shane32/QRCoder
+                                 (LICENSE on master)
+  licenses\Clipper2-LICENSE.txt  - Boost Software License 1.0.
+                                 Upstream: github.com/AngusJohnson/Clipper2
+                                 (License.txt on main)
+
+Selected-asset note: NuGet resolves lib/net40/QRCoder.dll for the net48
+target and lib/netstandard2.0/Clipper2Lib.dll (net48 supports .NET Standard
+2.0). The resolved versions and package content hashes are locked in the
+committed packages.lock.json files and verified during restore with
+dotnet restore --locked-mode - a drifted project file fails the
+restore/pack rather than pulling a different asset. No SolidWorks
+assemblies are redistributed: the add-in references the installed SDK
+interop assemblies at build time only - nothing is copied or shipped.
+
+Development/test-only packages (not shipped with the add-in):
+
+  Package                      Version   License
+  xunit                        2.9.3     Apache-2.0
+  xunit.runner.visualstudio    3.0.2     Apache-2.0
+  Microsoft.NET.Test.Sdk       17.12.0   MIT

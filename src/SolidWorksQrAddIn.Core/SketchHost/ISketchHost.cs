@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using SolidWorksQrAddIn.Core.Geometry;
 
 namespace SolidWorksQrAddIn.Core.Hosting
 {
@@ -45,19 +47,58 @@ namespace SolidWorksQrAddIn.Core.Hosting
         Other,
     }
 
+    /// <summary>
+    /// The document's length unit as the host reports it — a host fact, never
+    /// something the core may invent. <see cref="MetresPerUnit"/> converts
+    /// between document units and sketch-space metres (0.001 for mm docs,
+    /// 0.0254 for inch docs); <see cref="Symbol"/> is the display label.
+    /// The pane's cell-size readout is expressed in these units. (The block
+    /// instance's Scale is a unitless resize factor — ADR 0004 — it no
+    /// longer rides on the document unit.)
+    /// </summary>
+    public sealed class HostLengthUnit
+    {
+        public HostLengthUnit(double metresPerUnit, string symbol)
+        {
+            MetresPerUnit = metresPerUnit;
+            Symbol = symbol;
+        }
+
+        /// <summary>Sketch-space metres per document length unit.</summary>
+        public double MetresPerUnit { get; }
+
+        /// <summary>The unit's display label ("mm", "in", …).</summary>
+        public string Symbol { get; }
+
+        /// <summary>
+        /// Millimetres — the add-in's baseline unit, used when the host
+        /// cannot report a real unit (no document, unreadable property).
+        /// </summary>
+        public static readonly HostLengthUnit Millimetres = new HostLengthUnit(0.001, "mm");
+    }
+
     /// <summary>Point-in-time host state used for command eligibility decisions.</summary>
     public sealed class SketchHostState
     {
-        public SketchHostState(HostDocumentKind document, SupportSelection selection, bool isEditingSketch)
+        public SketchHostState(
+            HostDocumentKind document, SupportSelection selection, bool isEditingSketch,
+            HostLengthUnit? lengthUnit = null)
         {
             Document = document;
             Selection = selection;
             IsEditingSketch = isEditingSketch;
+            LengthUnit = lengthUnit ?? HostLengthUnit.Millimetres;
         }
 
         public HostDocumentKind Document { get; }
         public SupportSelection Selection { get; }
         public bool IsEditingSketch { get; }
+
+        /// <summary>
+        /// The document's length unit at capture time — mm when the host
+        /// could not report one.
+        /// </summary>
+        public HostLengthUnit LengthUnit { get; }
     }
 
     /// <summary>
@@ -94,9 +135,18 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// <summary>
     /// One sketch-insertion session bound to a single newly created sketch.
     /// Contract:
-    ///  - <see cref="AddLine"/> appends a native line segment in sketch space.
-    ///  - <see cref="KeepOpen"/> commits success: the new sketch stays open in
-    ///    edit mode and is never cleaned up.
+    ///  - <see cref="AddLine"/> STAGES one contour edge at its final size in
+    ///    sketch space; the host may buffer edges and realize them at commit
+    ///    (the adapters draw them at the staged size inside one sketch
+    ///    block instance placed at Scale 1 — spec #10, ADR 0004 — so
+    ///    nothing lands as raw segments until
+    ///    <see cref="KeepOpen"/>).
+    ///  - <see cref="AddConstructionSquares"/> STAGES the definition-internal
+    ///    construction squares the same way — realized at commit INSIDE the
+    ///    block definition, so they scale and move with the instance.
+    ///  - <see cref="KeepOpen"/> commits success: the staged geometry is
+    ///    realized, the new sketch stays open in edit mode and is never
+    ///    cleaned up.
     ///  - <see cref="Abort"/> exits edit mode and deletes only the sketch this
     ///    session created, reporting the cleanup result honestly. It is a
     ///    no-op on a committed session and reports the same REAL outcome on
@@ -112,10 +162,29 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// <summary>Name of the tracked sketch feature ("Sketch1", ...).</summary>
         string SketchName { get; }
 
+        /// <summary>Staged contour edges so far.</summary>
         int LineCount { get; }
 
-        /// <summary>Coordinates are sketch-space metres. Throws <see cref="SketchInsertionException"/> on failure.</summary>
+        /// <summary>
+        /// Stages one contour edge; coordinates are sketch-space metres at the
+        /// final size. Throws <see cref="SketchInsertionException"/> on failure.
+        /// </summary>
         void AddLine(double x1, double y1, double x2, double y2);
+
+        /// <summary>
+        /// Stages the model's construction squares — the QR square and the
+        /// keep-out square in sketch-space metres at the requested size —
+        /// for commit-time emission INSIDE the block definition (ADR 0003).
+        /// Like <see cref="AddLine"/> this only stages: <see cref="KeepOpen"/>
+        /// draws the squares into the same real-size definition space as the
+        /// contours, flagged construction, BEFORE the selection
+        /// fold that forms the block — so the footprint and the quiet-zone
+        /// boundary are definition content that scales and moves with the
+        /// instance, with no host-side constraints, dimensions, or
+        /// equations. A null or empty list stages nothing. Throws
+        /// <see cref="SketchInsertionException"/> on failure.
+        /// </summary>
+        void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares);
 
         void KeepOpen();
 

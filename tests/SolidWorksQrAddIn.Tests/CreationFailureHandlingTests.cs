@@ -422,7 +422,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, doc.Sketches.Count);
             Assert.Same(userSketch, doc.Sketches[0]);
             Assert.Equal("Sketch1", doc.Sketches[1].Name);      // the partial sketch remains
-            Assert.Equal(2, doc.Sketches[1].Segments.Count);    // only the edges that landed
+            // The staged edges are buffered until commit — a mid-staging
+            // failure leaves an empty sketch shell (no drawn segments, no
+            // block) rather than half a QR.
+            Assert.Empty(doc.Sketches[1].Segments);
+            Assert.Empty(doc.Sketches[1].BlockInstances);
         }
 
         [Fact]

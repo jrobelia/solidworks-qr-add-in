@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using SolidWorksQrAddIn.Core.Geometry;
+
 namespace SolidWorksQrAddIn.Core.Hosting
 {
     /// <summary>
@@ -74,6 +77,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
                         $"Injected failure: host could not insert line {_failOnLine}.");
                 _inner.AddLine(x1, y1, x2, y2);
             }
+
+            public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares) =>
+                _inner.AddConstructionSquares(squares);
 
             public void KeepOpen() => _inner.KeepOpen();
 

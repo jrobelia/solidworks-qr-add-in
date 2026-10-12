@@ -53,11 +53,13 @@ namespace SolidWorksQrAddIn.Core.Deployment
         };
 
         /// <summary>
-        /// Notices, the install/acceptance docs, the registration scripts, and
-        /// the full license texts shipped beside the binaries.
+        /// The add-in's own license, third-party notices, the
+        /// install/acceptance docs, the registration scripts, and the full
+        /// dependency license texts shipped beside the binaries.
         /// </summary>
         public static IReadOnlyList<DeploymentFile> ShippedFiles { get; } = new[]
         {
+            new DeploymentFile("LICENSE", "LICENSE.txt"),
             new DeploymentFile("THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
             new DeploymentFile("docs/DEPLOYMENT.md", "DEPLOYMENT.md"),
             new DeploymentFile("docs/ACCEPTANCE.md", "ACCEPTANCE.md"),

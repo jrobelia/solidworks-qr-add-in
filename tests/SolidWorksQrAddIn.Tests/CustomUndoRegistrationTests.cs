@@ -107,7 +107,17 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(doc.RedoLastStep());         // the same handler toggles back
             Assert.Contains(qrSketch, doc.Sketches);
-            Assert.Equal(Expected.Info.SegmentCount, qrSketch.Segments.Count);
+            // Redo restores the sketch whole — block instance, contours, and
+            // the construction squares inside its definition.
+            Assert.Equal(Expected.Info.SegmentCount,
+                qrSketch.ProfileSegments.Count());
+            Assert.Equal(8, qrSketch.BlockInstances.Single()
+                .Definition.ConstructionEdges.Count);
+            // ... with the block instance back at its unscaled state — the
+            // live round-1 failure was the rebuild dying inside
+            // MakeSketchBlockFromSelected, leaving no instance at all.
+            var instance = Assert.Single(qrSketch.BlockInstances);
+            Assert.Equal(1.0, instance.Scale, 9);
         }
 
         [Fact]
@@ -133,6 +143,26 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains(qrSketch1, doc.Sketches);
             Assert.True(doc.UndoLastStep());
             Assert.DoesNotContain(qrSketch1, doc.Sketches);
+        }
+
+        [Fact]
+        public void Undo_removes_the_created_sketch_so_the_next_create_succeeds()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var userSketch = PriorUserSketch(doc);
+            Assert.True(new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth).Succeeded);
+
+            doc.ActiveSketch = null;
+            Assert.True(doc.UndoLastStep());
+            Assert.Contains(userSketch, doc.Sketches);
+            Assert.Single(doc.Sketches);
+
+            // A create following the undo lands cleanly — the removed sketch
+            // left nothing behind to impede it.
+            var second = new CreateQrSketchCommand().Execute(host, Content, SizeMm, Growth);
+            Assert.True(second.Succeeded, second.Message);
+            Assert.Equal(2, doc.Sketches.Count);
         }
 
         [Fact]
