@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using QRCoder;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -25,7 +26,11 @@ namespace SolidWorksQrAddIn.UI
     ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
     ///     <see cref="QrSketchSession.SetGrowthText"/>) — DEBOUNCED, so a
     ///     burst of keystrokes coalesces into one regeneration instead of
-    ///     regenerating a dense QR synchronously per keystroke,
+    ///     regenerating a dense QR synchronously per keystroke — plus the
+    ///     discrete controls: the error-correction selector pushes
+    ///     <see cref="QrSketchSession.SetEccLevel"/> and the invert checkbox
+    ///     pushes <see cref="QrSketchSession.SetInvert"/> immediately (a
+    ///     committed pick is never debounced),
     ///   - drives the content-type picker (spec #11): a dropdown of
     ///     <see cref="PayloadComposer.Presets"/> selection-changed into
     ///     <see cref="QrSketchSession.SetContentType"/>, plus per-preset
@@ -68,6 +73,8 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _sizeLabel;
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
+        private readonly ComboBox _eccBox;
+        private readonly CheckBox _invertBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
         private readonly Grid _infoGrid;
@@ -161,6 +168,38 @@ namespace SolidWorksQrAddIn.UI
             };
             panel.Children.Add(_growthBox);
 
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Error correction:",
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _eccBox = new ComboBox
+            {
+                ItemsSource = new[] { "L", "M", "Q", "H" },
+                ToolTip = "QR error-correction level. A higher level survives more " +
+                          "damage but packs more cells into the same size — " +
+                          "H is densest, L lightest. M is the default.",
+            };
+            panel.Children.Add(_eccBox);
+
+            // The invert toggle (spec #11, ADR 0002): a checkbox is a
+            // committed edit the moment it is clicked — it pushes straight
+            // into the session like a flushed field, never through the
+            // keystroke debounce. Applies to future creates only.
+            _invertBox = new CheckBox
+            {
+                Content = "Invert output (light code on a dark field)",
+                ToolTip = "Emits the code's light cells instead of the dark ones: " +
+                          "the sketch becomes a dark field with the code left " +
+                          "unmarked, for marking/engraving workflows. " +
+                          "Applies to the next sketch created — existing " +
+                          "sketches are never changed.",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            _invertBox.Checked += OnInvertToggled;
+            _invertBox.Unchecked += OnInvertToggled;
+            panel.Children.Add(_invertBox);
+
             var frame = new Border
             {
                 BorderBrush = SystemColors.ControlDarkBrush,
@@ -242,6 +281,17 @@ namespace SolidWorksQrAddIn.UI
             _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
             _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
             _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
+            // A dropdown pick is discrete — there is nothing to debounce, so
+            // the level lands in the session immediately.
+            _eccBox.SelectionChanged += (_, __) =>
+            {
+                if (_suppressFieldEvents || _eccBox.SelectedItem == null)
+                    return;
+                _session.SetEccLevel(
+                    (QRCodeGenerator.ECCLevel)Enum.Parse(
+                        typeof(QRCodeGenerator.ECCLevel),
+                        (string)_eccBox.SelectedItem));
+            };
             _presetCombo.SelectionChanged += (_, __) => OnPresetTypeChanged();
 
             // Unit-change refresh is event-driven through the session's
@@ -260,6 +310,8 @@ namespace SolidWorksQrAddIn.UI
                 _contentBox.Text = _session.Content;
                 _sizeBox.Text = _session.SizeText;
                 _growthBox.Text = _session.GrowthText;
+                _eccBox.SelectedItem = _session.EccLevel.ToString();
+                _invertBox.IsChecked = _session.Invert;
             }
             finally { _suppressFieldEvents = false; }
             RebuildPresetFields();
@@ -298,6 +350,11 @@ namespace SolidWorksQrAddIn.UI
                     _sizeBox.Text = _session.SizeText;
                 if (!_growthDirty && _growthBox.Text != _session.GrowthText)
                     _growthBox.Text = _session.GrowthText;
+                if (!Equals(_eccBox.SelectedItem, _session.EccLevel.ToString()))
+                    _eccBox.SelectedItem = _session.EccLevel.ToString();
+                // A toggle carries no in-progress state — always re-pull.
+                if (_invertBox.IsChecked != _session.Invert)
+                    _invertBox.IsChecked = _session.Invert;
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -548,6 +605,19 @@ namespace SolidWorksQrAddIn.UI
             RefreshView();
         }
 
+        /// <summary>
+        /// The invert toggle is a committed edit on click — no debounce, no
+        /// dirty flag: it pushes the new polarity into the session at once,
+        /// exactly like a flushed field edit. Suppressed while the view is
+        /// pulling session state (a pull is not an edit).
+        /// </summary>
+        private void OnInvertToggled(object? sender, RoutedEventArgs e)
+        {
+            if (_suppressFieldEvents)
+                return;
+            _session.SetInvert(_invertBox.IsChecked == true);
+        }
+
         private void OnCreateClicked(object? sender, RoutedEventArgs e)
         {
             try
@@ -647,7 +717,8 @@ namespace SolidWorksQrAddIn.UI
                 var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
-                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText}";
+                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
+                       $"viewEcc={_eccBox.SelectedItem} viewInvert={_invertBox.IsChecked == true}";
             }
         }
 

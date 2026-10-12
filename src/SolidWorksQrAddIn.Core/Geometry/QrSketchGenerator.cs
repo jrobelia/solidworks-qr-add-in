@@ -12,18 +12,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// nesting and size info out — or one actionable error.
     ///
     /// Pipeline (spec "Geometry generation"; matrix model per ADR 0002):
-    ///   1. encode exactly — standard QR, automatic version, ECC M;
+    ///   1. encode exactly — standard QR, automatic version, the request's
+    ///      error-correction level (L/M/Q/H, default M);
     ///   2. the working matrix is the encoder's full (N+8)×(N+8) matrix —
     ///      N×N data cells plus the fixed 4-cell light quiet zone per side;
     ///   3. pitch p = S/(N + 2r′), grown-cell pitch on a normalized integer
     ///      grid of <see cref="QrInsertionGuard.GridUnitsPerCell"/> units/cell
     ///      (S still measures the N-cell data area — size semantics unchanged);
-    ///   4. expand every dark cell by g = round(r·U) units on all four sides —
-    ///      quiet-zone cells are light and never emit;
+    ///   4. expand every EMITTED cell by g = round(r·U) units on all four
+    ///      sides — dark cells emit in normal mode (quiet-zone cells are
+    ///      light and never emit), light cells emit under invert (the whole
+    ///      matrix becomes the field);
     ///   5. union (Clipper2 NonZero) and clip to the working-matrix square —
     ///      a guaranteed no-op in normal mode (grown dark cells cannot reach
-    ///      the 4-cell border) — into a PolyTree64 with outer/hole/island
-    ///      nesting preserved;
+    ///      the 4-cell border), the real field edge under invert — into a
+    ///      PolyTree64 with outer/hole/island nesting preserved;
     ///   6. strip redundant collinear vertices (epsilon 0);
     ///   7. validate on the grid: nonzero area, no zero-length edges, no
     ///      self-intersections, no residual corner-only contacts;
@@ -42,13 +45,27 @@ namespace SolidWorksQrAddIn.Core.Geometry
     public static class QrSketchGenerator
     {
         /// <summary>
-        /// Encodes <paramref name="content"/> exactly (standard QR, automatic
-        /// version selection, error correction M) and generates the grown,
-        /// unioned contour set at <paramref name="sizeMm"/> final outline width.
+        /// The request at its defaults: encodes <paramref name="content"/>
+        /// exactly (standard QR, automatic version selection, error
+        /// correction M, normal polarity) at <paramref name="sizeMm"/> final
+        /// outline width.
         /// </summary>
-        public static QrSketchResult Generate(string content, double sizeMm, double growthFractionPerSide)
+        public static QrSketchResult Generate(string content, double sizeMm, double growthFractionPerSide) =>
+            Generate(new QrSketchRequest(content, sizeMm, growthFractionPerSide));
+
+        /// <summary>
+        /// Encodes <see cref="QrSketchRequest.Content"/> exactly (standard QR,
+        /// automatic version selection, the request's
+        /// <see cref="QrSketchRequest.EccLevel"/>) and generates the grown,
+        /// unioned contour set at <see cref="QrSketchRequest.SizeMm"/> final
+        /// outline width, emitting the polarity
+        /// <see cref="QrSketchRequest.Invert"/> selects (ADR 0002).
+        /// </summary>
+        public static QrSketchResult Generate(QrSketchRequest request)
         {
-            if (string.IsNullOrEmpty(content))
+            if (request == null)
+                throw new ArgumentNullException(nameof(request));
+            if (string.IsNullOrEmpty(request.Content))
                 return QrSketchResult.Fail(QrSketchErrorKind.EmptyContent,
                     "QR content is empty. Enter the text or URL to encode.");
 
@@ -57,7 +74,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             try
             {
                 using (var generator = new QRCodeGenerator())
-                using (var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M))
+                using (var data = generator.CreateQrCode(request.Content, request.EccLevel))
                 {
                     // ModuleMatrix IS the working matrix (ADR 0002): N×N data
                     // cells plus the standard 4-cell light quiet zone on every
@@ -77,8 +94,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
             catch (QRCoder.Exceptions.DataTooLongException ex)
             {
                 return QrSketchResult.Fail(QrSketchErrorKind.PayloadTooLong,
-                    $"The content does not fit in a standard QR code at error correction M: {ex.Message} " +
-                    "Shorten the text or URL.");
+                    $"The content does not fit in a standard QR code at error correction " +
+                    $"{request.EccLevel}: {ex.Message} Shorten the text or URL, or pick a " +
+                    "lighter error-correction level.");
             }
             catch (Exception ex)
             {
@@ -87,7 +105,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
-                sizeMm, growthFractionPerSide, version);
+                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert);
         }
 
         /// <summary>
@@ -96,8 +114,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// from the top-left data cell. Deterministic-fixture seam for tests;
         /// the encoded path funnels through it with a full encoded matrix —
         /// both are padded into the same (N+8)×(N+8) working matrix.
+        /// <paramref name="invert"/> selects the emitted polarity exactly as in
+        /// <see cref="Generate"/>.
         /// </summary>
-        public static QrSketchResult GenerateFromCells(bool[,] darkCells, double sizeMm, double growthFractionPerSide)
+        public static QrSketchResult GenerateFromCells(
+            bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false)
         {
             if (darkCells == null)
                 throw new ArgumentNullException(nameof(darkCells));
@@ -112,16 +133,20 @@ namespace SolidWorksQrAddIn.Core.Geometry
             for (var row = 0; row < n; row++)
                 for (var col = 0; col < n; col++)
                     matrix[row + q, col + q] = darkCells[row, col];
-            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0);
+            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert);
         }
 
         /// <summary>
         /// Runs the pipeline on a working matrix: <paramref name="matrix"/> is
         /// the full (N+8)×(N+8) grid where <paramref name="dataCells"/> is the
         /// N×N payload extent inside it (the margin cells are always light).
+        /// <paramref name="invert"/> flips which cells emit: dark cells
+        /// normally, light cells under invert — the only mode switch; growth,
+        /// union, clipping, validation and conversion run identically.
         /// </summary>
         private static QrSketchResult Build(
-            bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version)
+            bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
+            bool invert)
         {
             int m = matrix.GetLength(0);
             int n = dataCells;
@@ -147,8 +172,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
             if (2 * g >= u)
                 return QrSketchResult.Fail(QrSketchErrorKind.GrowthClosesGaps,
                     $"Outline growth {growthFraction:P2} rounds to {g} grid units/side — at or beyond half a " +
-                    "cell, it would close every one-cell light channel. Reduce the growth percentage.");
+                    $"cell, it would close every one-cell {(invert ? "dark" : "light")} channel. " +
+                    "Reduce the growth percentage.");
 
+            // The smallest drawable feature in EITHER polarity: emitted cells
+            // grown by g neck diagonally at 2g; a one-cell channel of the
+            // un-emitted polarity is grown down to u−2g (light gaps normally,
+            // dark-cell pockets under invert).
             long minGridFeature = Math.Min(2 * g, u - 2 * g);
             if (minGridFeature < QrInsertionGuard.MinGridFeatureUnits)
                 return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
@@ -165,14 +195,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion guard. Increase the size " +
                     "or adjust the growth percentage.");
 
-            // ---------- expand dark cells + union, clipped to the matrix ----------
+            // ---------- expand emitted cells + union, clipped to the matrix ----------
+            // The polarity select is the only mode switch (ADR 0002): dark
+            // cells emit normally, light cells emit under invert — across the
+            // WHOLE working matrix, so the quiet zone becomes field.
             var subject = new Paths64();
-            int darkCount = 0;
+            int emittedCount = 0;
             for (var row = 0; row < m; row++)
                 for (var col = 0; col < m; col++)
                 {
-                    if (!matrix[row, col]) continue;
-                    darkCount++;
+                    if (matrix[row, col] == invert) continue;
+                    emittedCount++;
                     long x0 = (long)col * u - g;
                     long y0 = (long)row * u - g;
                     long x1 = ((long)col + 1) * u + g;
@@ -184,14 +217,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     };
                     subject.Add(rect);
                 }
-            if (darkCount == 0)
+            if (emittedCount == 0)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
-                    "The cell matrix contains no dark cells; nothing would be sketched.");
+                    invert
+                        ? "The cell matrix contains no light cells; nothing would be sketched."
+                        : "The cell matrix contains no dark cells; nothing would be sketched.");
 
             // ADR 0002: all geometry is clipped to the working-matrix square
             // [0, M·U] — a guaranteed no-op in normal mode (grown dark cells
-            // stay g < U/2 < 4U inside the border), a clean field edge when a
-            // future mode emits light cells.
+            // stay g < U/2 < 4U inside the border), the clean rectangular
+            // field edge under invert.
             long matrixEdge = (long)m * u;
             var clip = new Paths64
             {
@@ -273,7 +308,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 minEdgeMm: minEdgeMm,
                 minLightGapMm: (u - 2 * g) * mmPerUnit,
                 contourCount: flatPaths.Count,
-                segmentCount: segmentCount);
+                segmentCount: segmentCount,
+                inverted: invert);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction

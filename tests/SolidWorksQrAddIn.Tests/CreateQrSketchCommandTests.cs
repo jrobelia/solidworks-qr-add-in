@@ -1,4 +1,5 @@
 using System.Linq;
+using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Tests.Fakes;
@@ -118,6 +119,28 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             Assert.True(host.Document!.RedrawCount >= 1);
+        }
+
+        [Fact]
+        public void The_request_ecc_level_reaches_the_inserted_sketch()
+        {
+            var host = HostWithSelectedPlane();
+            // "SW-QR-MVP12" encodes at version 1 (N=21) at M but needs
+            // version 2 (N=25) at H — the inserted sketch must be the denser
+            // one, not a default-level rendering of the same payload.
+            var request = new QrSketchRequest("SW-QR-MVP12", SizeMm, Growth)
+            {
+                EccLevel = QRCodeGenerator.ECCLevel.H,
+            };
+
+            var result = new CreateQrSketchCommand().Execute(host, request);
+
+            Assert.True(result.Succeeded, result.Message);
+            var expected = QrSketchGenerator.Generate(request).Sketch!;
+            var atM = QrSketchGenerator.Generate("SW-QR-MVP12", SizeMm, Growth).Sketch!;
+            Assert.NotEqual(atM.Info.SegmentCount, expected.Info.SegmentCount);
+            Assert.Equal(expected.Info.SegmentCount,
+                host.Document!.Sketches.Single().ProfileSegments.Count());
         }
 
         [Fact]

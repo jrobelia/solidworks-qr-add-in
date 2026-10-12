@@ -79,8 +79,16 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   bit-identical shared endpoints, nonzero-area closed contours), insertion-guard
   rejections (rounding growth, light-gap collapse, sub-0.05 mm features), input
   errors (empty content, non-finite/≤0 size, growth outside (0, 0.5), payload
-  beyond QR capacity at ECC M), and direct validator rejections (zero area,
-  zero-length edge, self-intersection, pinched + pair corner contacts).
+  beyond QR capacity — the error names the selected ECC level), and direct
+  validator rejections (zero area, zero-length edge, self-intersection,
+  pinched + pair corner contacts). Error correction (ticket 24): the request
+  carries the ECC level 1:1 onto `QRCodeGenerator.ECCLevel` (default M), the
+  same payload encodes denser at H than at L, and the insertion guard
+  applies at every level. Inverted
+  polarity (ticket 25, `QrInvertTests`): the emitted contours are the
+  working matrix's light cells — one field bounded at the matrix edge (the
+  keep-out square), the code left as shrunken pockets, the same insertion
+  guard.
 - **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
   no/other selection, already-editing sketch), insertion request through the
   test adapter, per-request geometry (explicit size/growth; byte-exact payload,
@@ -99,10 +107,12 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   the creation, never prior user work.
 - **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
   (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
-  orientation, material-area parity, deterministic signature.
+  orientation, material-area parity, deterministic signature — plus the
+  inverted field through the same render path (no second renderer).
 - **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
   clearing, exact content, size/growth field parsing (mm / % per side) with
-  useful errors and verbatim-kept rejected text, a plain Ready status with no
+  useful errors and verbatim-kept rejected text, invert toggle → regenerated
+  inverted request + picture + polarity info line, a plain Ready status with no
   version/cell/size readouts, current-request insertion, fresh host
   revalidation (no stale cross-document support), create blocked while
   editing, single-surface lifecycle (focus-or-recreate, close, release — the
@@ -185,8 +195,8 @@ loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
-`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`,
-`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
+`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`, `SetQrEccProbe`,
+`SetQrInvertProbe`, `SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
 `CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
 `RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for

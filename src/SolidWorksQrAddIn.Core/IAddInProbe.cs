@@ -60,10 +60,10 @@ namespace SolidWorksQrAddIn.Core
         /// <summary>
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
-        /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; unit=&lt;sym&gt;
-        /// cell=&lt;text&gt; ..." — size/growth are the field texts exactly
-        /// as shown (initially 25 and 3); preset is the content-type id
-        /// (initially "raw").
+        /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
+        /// invert=&lt;bool&gt; unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
+        /// size/growth are the field texts exactly as shown (initially 25
+        /// and 3); preset is the content-type id (initially "raw").
         /// </summary>
         string WindowStateProbe();
 
@@ -87,6 +87,22 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrGrowthProbe(string growthText);
+
+        /// Picks the error-correction level exactly like the pane's selector:
+        /// "L", "M", "Q" or "H" (case-insensitive). Returns
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;"
+        /// for the revalidated request, and "ERROR unknown ECC level …" for
+        /// anything outside the four levels.
+        /// </summary>
+        string SetQrEccProbe(string level);
+
+        /// <summary>
+        /// Flips the output polarity exactly like the pane's invert checkbox:
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrInvertProbe(bool invert);
 
         /// <summary>
         /// Picks the content-type preset exactly like the pane's dropdown:

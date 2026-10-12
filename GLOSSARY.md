@@ -37,6 +37,11 @@ moment it is resolved in discussion, not before.
   session, a direct payload-box edit is a Raw/typed edit — the content
   type reverts to Raw — while entered field values are remembered per
   preset, so re-picking a type recomposes its fields.
+- **Polarity / invert** — which working-matrix cells emit contours: dark
+  cells normally (black code on a light field); the LIGHT cells under
+  `invert` — a white code on a dark field bounded by the keep-out square,
+  for marking/engraving (ADR 0002). The same contour result feeds the
+  preview — no second renderer.
 
 ## SolidWorks
 
