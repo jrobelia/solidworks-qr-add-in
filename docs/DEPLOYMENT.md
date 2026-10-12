@@ -151,7 +151,18 @@ a bare file check would let 4.6/4.7 hosts through and fail mid-install.
    lets `LoadAddIn` and COM automation load it fine. To load per-session
    without admin, use **File → Open** on `SolidWorksQrAddIn.dll` (the Open
    dialog has an "Add-Ins (*.dll)" filter). To appear in Tools → Add-Ins
-   durably, use the machine-wide (elevated) route below. Once loaded, the
+   durably on a dev machine, a one-time elevated write of *just* the
+   discovery key suffices — COM can stay per-user, so the HKCU `CodeBase`
+   still controls which build loads:
+
+   ```powershell
+   $key = 'HKLM\SOFTWARE\SolidWorks\AddIns\{DA932451-66B9-4092-9534-292AD913DEAC}'
+   reg add $key /ve /t REG_DWORD /d 1 /f
+   reg add $key /v Title /t REG_SZ /d "SolidWorks QR Add-In" /f
+   reg add $key /v Description /t REG_SZ /d "Creates native QR-code sketches from text or URLs inside SolidWorks." /f
+   ```
+
+   For end-user installs, use the machine-wide (elevated) route below. Once loaded, the
    command appears as **QR Sketch → Create QR Sketch** on the menu, and the
    QR UI lives in a docked **QR Sketch task-pane tab** (created via
    `CreateTaskpaneView2`, hosting the WPF view through a WinForms
