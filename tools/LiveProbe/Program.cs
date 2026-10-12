@@ -487,6 +487,13 @@ namespace SolidWorksQrAddIn.LiveProbe
         // ================= ticket 7: performance measurement =================
 
         /// <summary>
+        /// The ascending size ladder (mm) every insertion-guard scan climbs —
+        /// the perf pass takes the first rung that clears, the `xsettings`
+        /// gate replays the whole ladder for its refused/accepted rungs.
+        /// </summary>
+        private static readonly double[] GuardLadderMm = { 25.0, 40.0, 60.0, 80.0, 120.0, 160.0 };
+
+        /// <summary>
         /// Representative short/medium/dense payloads. Cell counts are reported
         /// per run — versions shift with length, that is the point.
         /// </summary>
@@ -533,7 +540,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // dense QR at 25 mm can fall below the 0.05 mm feature floor.
                 QrSketchResult? result = null;
                 double sizeMm = 0;
-                foreach (var trySize in new[] { 25.0, 40.0, 60.0, 80.0, 120.0 })
+                foreach (var trySize in GuardLadderMm)
                 {
                     var r = QrSketchGenerator.Generate(content, trySize, 0.03);
                     if (r.Succeeded) { result = r; sizeMm = trySize; break; }
@@ -6299,9 +6306,6 @@ namespace SolidWorksQrAddIn.LiveProbe
         // Refuses to run while ANY SolidWorks process exists — an occupied
         // seat can be an interactive session the probe must never touch.
         // =====================================================================
-
-        /// <summary>The size ladder the guard-floor phase replays (mm).</summary>
-        private static readonly double[] GuardLadderMm = { 25.0, 40.0, 60.0, 80.0, 120.0, 160.0 };
 
         private static int XsettingsMain(string[] args)
         {

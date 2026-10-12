@@ -88,6 +88,7 @@ namespace SolidWorksQrAddIn.Core
         /// </summary>
         string SetQrGrowthProbe(string growthText);
 
+        /// <summary>
         /// Picks the error-correction level exactly like the pane's selector:
         /// "L", "M", "Q" or "H" (case-insensitive). Returns
         /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;

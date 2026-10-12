@@ -217,7 +217,7 @@ namespace SolidWorksQrAddIn.Core.Payload
                         if (!IsPhoneNumber(number))
                         {
                             return InvalidField(preset,
-                                preset.Fields.First(f => f.Key == "number"),
+                                FieldNamed(preset, "number"),
                                 PhoneNumberReason(number));
                         }
                         return PayloadComposeResult.Ok(
@@ -229,7 +229,7 @@ namespace SolidWorksQrAddIn.Core.Payload
                         if (!IsPhoneNumber(number))
                         {
                             return InvalidField(preset,
-                                preset.Fields.First(f => f.Key == "number"),
+                                FieldNamed(preset, "number"),
                                 PhoneNumberReason(number));
                         }
                         var message = values["message"];
@@ -242,7 +242,7 @@ namespace SolidWorksQrAddIn.Core.Payload
                         if (!LooksLikeEmailAddress(to))
                         {
                             return InvalidField(preset,
-                                preset.Fields.First(f => f.Key == "to"), EmailReason(to));
+                                FieldNamed(preset, "to"), EmailReason(to));
                         }
                         return PayloadComposeResult.Ok(
                             new PayloadGenerator.Mail(
@@ -289,7 +289,7 @@ namespace SolidWorksQrAddIn.Core.Payload
             }
             else if (string.IsNullOrEmpty(password))
             {
-                var passwordField = preset.Fields.First(f => f.Key == "password");
+                var passwordField = FieldNamed(preset, "password");
                 return PayloadComposeResult.Fail(
                     PayloadComposeErrorKind.MissingField, passwordField.Key,
                     preset.DisplayName + ": '" + passwordField.Label +
@@ -311,7 +311,7 @@ namespace SolidWorksQrAddIn.Core.Payload
             if (string.IsNullOrWhiteSpace(values["firstName"]) &&
                 string.IsNullOrWhiteSpace(values["lastName"]))
             {
-                var nameField = preset.Fields.First(f => f.Key == "firstName");
+                var nameField = FieldNamed(preset, "firstName");
                 return PayloadComposeResult.Fail(
                     PayloadComposeErrorKind.MissingField, nameField.Key,
                     preset.DisplayName + ": a contact needs a first or last name.");
@@ -321,19 +321,19 @@ namespace SolidWorksQrAddIn.Core.Payload
             if (!string.IsNullOrEmpty(phone) && !IsPhoneNumber(phone!))
             {
                 return InvalidField(preset,
-                    preset.Fields.First(f => f.Key == "phone"), PhoneNumberReason(phone!));
+                    FieldNamed(preset, "phone"), PhoneNumberReason(phone!));
             }
             var mobile = values["mobile"];
             if (!string.IsNullOrEmpty(mobile) && !IsPhoneNumber(mobile!))
             {
                 return InvalidField(preset,
-                    preset.Fields.First(f => f.Key == "mobile"), PhoneNumberReason(mobile!));
+                    FieldNamed(preset, "mobile"), PhoneNumberReason(mobile!));
             }
             var email = values["email"];
             if (!string.IsNullOrEmpty(email) && !LooksLikeEmailAddress(email!))
             {
                 return InvalidField(preset,
-                    preset.Fields.First(f => f.Key == "email"), EmailReason(email!));
+                    FieldNamed(preset, "email"), EmailReason(email!));
             }
 
             PayloadGenerator.ContactData.ContactOutputType outputType;
@@ -365,12 +365,12 @@ namespace SolidWorksQrAddIn.Core.Payload
             var longitude = values["longitude"]!;
             if (!TryParseCoordinate(latitude, -90.0, 90.0))
             {
-                return InvalidField(preset, preset.Fields.First(f => f.Key == "latitude"),
+                return InvalidField(preset, FieldNamed(preset, "latitude"),
                     "must be a number from -90 to 90 — got '" + latitude + "'");
             }
             if (!TryParseCoordinate(longitude, -180.0, 180.0))
             {
-                return InvalidField(preset, preset.Fields.First(f => f.Key == "longitude"),
+                return InvalidField(preset, FieldNamed(preset, "longitude"),
                     "must be a number from -180 to 180 — got '" + longitude + "'");
             }
 
@@ -421,6 +421,11 @@ namespace SolidWorksQrAddIn.Core.Payload
         private static PayloadPresetDescriptor? FindPreset(string presetId) =>
             AllPresets.FirstOrDefault(
                 p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The descriptor for one declared field — every key below is declared.</summary>
+        private static PayloadFieldDescriptor FieldNamed(
+            PayloadPresetDescriptor preset, string key) =>
+            preset.Fields.First(f => f.Key == key);
 
         private static PayloadComposeResult InvalidField(
             PayloadPresetDescriptor preset, PayloadFieldDescriptor field, string reason) =>

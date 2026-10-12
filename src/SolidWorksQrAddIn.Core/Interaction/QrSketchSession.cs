@@ -38,8 +38,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      <see cref="PayloadComposer.Compose"/> and lands the literal
     ///      payload in the content box — the same verbatim state a typed
     ///      edit writes. A field set that cannot compose fails the request
-    ///      with the composer's message on the status line; nothing malformed
-    ///      reaches the generator or the host.
+    ///      with the composer's message on the status line (and no picture);
+    ///      the box keeps its last text until the fields compose again —
+    ///      nothing malformed reaches the generator or the host.
     ///
     ///      THE VERBATIM RULE: a manual content edit while a preset is
     ///      selected is treated exactly like a Raw/typed edit — the content
@@ -122,17 +123,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private IQrSketchWindow? _window;
         private IQrSketchWindow? _attachedView;
         private string _content = string.Empty;
-        private string _presetId = PayloadComposer.DefaultPresetId;
-        // Entered field values, remembered per preset — switching types and
-        // back restores them. "raw" never appears here: its single "content"
-        // field IS _content, so storing it would duplicate the truth.
-        private readonly Dictionary<string, Dictionary<string, string>> _presetFields =
-            new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        // A pending composition failure — set by the last SetContentType /
-        // SetPresetField that could not produce a payload, cleared by the
-        // next successful compose or any direct content edit. While set the
-        // request is invalid no matter what other fields do.
-        private PayloadComposeError? _composeError;
+        // The preset side of the content state (spec #11) — selection,
+        // remembered fields and a pending compose failure travel together:
+        // a direct content edit resets all three at once.
+        private readonly PresetState _preset = new PresetState();
         private string _sizeText = InitialSizeText;
         private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
@@ -315,8 +309,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
-            _presetId = PayloadComposer.DefaultPresetId;
-            _composeError = null;
+            _preset.ResetToRaw();
             _content = content ?? string.Empty;
             return Regenerate();
         }
@@ -327,7 +320,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// The selected content-type preset id — <see cref="PayloadComposer.DefaultPresetId"/>
         /// ("raw") initially and whenever the content box is edited directly.
         /// </summary>
-        public string ContentPresetId => _presetId;
+        public string ContentPresetId => _preset.Id;
 
         /// <summary>
         /// The selected preset's descriptor — the pane renders
@@ -335,7 +328,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// inputs from this, never hard-coding per-preset UI.
         /// </summary>
         public PayloadPresetDescriptor CurrentPreset =>
-            FindPreset(_presetId) ?? PayloadComposer.Presets[0];
+            FindPreset(_preset.Id) ?? PayloadComposer.Presets[0];
 
         /// <summary>
         /// The selected preset's entered field values, keyed by field
@@ -348,9 +341,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
         {
             get
             {
-                if (_presetId == PayloadComposer.DefaultPresetId)
+                if (_preset.Id == PayloadComposer.DefaultPresetId)
                     return new Dictionary<string, string> { ["content"] = _content };
-                return new Dictionary<string, string>(FieldsFor(_presetId));
+                return new Dictionary<string, string>(_preset.FieldsFor(_preset.Id));
             }
         }
 
@@ -359,16 +352,18 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// why (<see cref="PayloadComposeError.FieldKey"/> names the bad
         /// input so the pane can flag it) — or null while the fields compose.
         /// </summary>
-        public PayloadComposeError? PresetFieldError => _composeError;
+        public PayloadComposeError? PresetFieldError => _preset.ComposeError;
 
         /// <summary>
         /// Selects the content-type preset and composes immediately from its
         /// remembered fields (defaults on first pick): a composed payload
         /// lands in the content box verbatim; a field set that cannot compose
-        /// fails the request with the composer's message — the pane can never
-        /// show fields describing one payload while the box encodes another.
-        /// An unknown id is refused with the composer's UnknownPreset error —
-        /// the current selection stays in force.
+        /// fails the request openly — the composer's message on the status
+        /// line and no picture — while the box keeps its LAST text until the
+        /// fields compose again (the INVALID status is the signal that the
+        /// box is not what the fields describe). An unknown id is refused
+        /// with the composer's UnknownPreset error — the current selection
+        /// stays in force.
         /// </summary>
         public QrSketchResult SetContentType(string? presetId)
         {
@@ -377,10 +372,11 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 // The composer produces the same refusal; only the error is
                 // kept (Compose of an unknown id can never succeed).
-                _composeError = PayloadComposer.Compose(presetId ?? string.Empty, null).Error;
+                _preset.ComposeError =
+                    PayloadComposer.Compose(presetId ?? string.Empty, null).Error;
                 return Regenerate();
             }
-            _presetId = preset.Id;
+            _preset.Id = preset.Id;
             return ComposePreset();
         }
 
@@ -399,16 +395,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
             var preset = CurrentPreset;
             if (!preset.Fields.Any(f => f.Key == key))
             {
-                _composeError = new PayloadComposeError(
+                _preset.ComposeError = new PayloadComposeError(
                     PayloadComposeErrorKind.InvalidField, key,
                     preset.DisplayName + ": '" + (key ?? string.Empty) +
                     "' is not one of its fields (" +
                     string.Join(", ", preset.Fields.Select(f => f.Key)) + ").");
                 return Regenerate();
             }
-            if (_presetId == PayloadComposer.DefaultPresetId)
+            if (_preset.Id == PayloadComposer.DefaultPresetId)
                 return SetContent(value ?? string.Empty);   // raw's only field IS the content box
-            FieldsFor(_presetId)[key] = value ?? string.Empty;
+            _preset.FieldsFor(_preset.Id)[key] = value ?? string.Empty;
             return ComposePreset();
         }
 
@@ -422,8 +418,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         private QrSketchResult ComposePreset()
         {
-            var compose = PayloadComposer.Compose(_presetId, PresetFields);
-            _composeError = compose.Error;
+            var compose = PayloadComposer.Compose(_preset.Id, PresetFields);
+            _preset.ComposeError = compose.Error;
             if (compose.Succeeded)
                 _content = compose.Content!;
             return Regenerate();
@@ -433,15 +429,52 @@ namespace SolidWorksQrAddIn.Core.Interaction
             PayloadComposer.Presets.FirstOrDefault(
                 p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase));
 
-        /// <summary>The remembered field map for a non-raw preset, created on first use.</summary>
-        private Dictionary<string, string> FieldsFor(string presetId)
+        /// <summary>
+        /// The content-type state (spec #11): which preset is selected, the
+        /// field values remembered per preset, and a pending compose
+        /// failure. One type because the three move together — a direct
+        /// content edit (<see cref="SetContent"/>) resets all of them.
+        /// </summary>
+        private sealed class PresetState
         {
-            if (!_presetFields.TryGetValue(presetId, out var fields))
+            /// <summary>The selected preset id — "raw" initially and after any direct content edit.</summary>
+            public string Id = PayloadComposer.DefaultPresetId;
+
+            /// <summary>
+            /// Entered field values, remembered per preset — switching types
+            /// and back restores them. "raw" never appears here: its single
+            /// "content" field IS the box's text, so storing it would
+            /// duplicate the truth.
+            /// </summary>
+            public readonly Dictionary<string, Dictionary<string, string>> FieldsByPreset =
+                new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// A pending composition failure — set by the last
+            /// SetContentType / SetPresetField that could not produce a
+            /// payload, cleared by the next successful compose or any direct
+            /// content edit. While set the request is invalid no matter what
+            /// other fields do.
+            /// </summary>
+            public PayloadComposeError? ComposeError;
+
+            /// <summary>A direct content edit reverts the selection to Raw; the failure drops with it.</summary>
+            public void ResetToRaw()
             {
-                fields = new Dictionary<string, string>();
-                _presetFields[presetId] = fields;
+                Id = PayloadComposer.DefaultPresetId;
+                ComposeError = null;
             }
-            return fields;
+
+            /// <summary>The remembered field map for a non-raw preset, created on first use.</summary>
+            public Dictionary<string, string> FieldsFor(string presetId)
+            {
+                if (!FieldsByPreset.TryGetValue(presetId, out var fields))
+                {
+                    fields = new Dictionary<string, string>();
+                    FieldsByPreset[presetId] = fields;
+                }
+                return fields;
+            }
         }
 
         /// <summary>
@@ -522,7 +555,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 _growthFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
             }
-            else if (_composeError != null)
+            else if (_preset.ComposeError != null)
             {
                 // A pending preset-field failure is a content-level problem:
                 // it wins over generation and nothing malformed reaches the
@@ -531,7 +564,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
                 _current = QrSketchResult.Fail(
-                    QrSketchErrorKind.InvalidPayload, _composeError.Message);
+                    QrSketchErrorKind.InvalidPayload, _preset.ComposeError.Message);
             }
             else
             {
