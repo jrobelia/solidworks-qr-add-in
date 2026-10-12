@@ -52,8 +52,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// something the core may invent. <see cref="MetresPerUnit"/> converts
     /// between document units and sketch-space metres (0.001 for mm docs,
     /// 0.0254 for inch docs); <see cref="Symbol"/> is the display label.
-    /// The block-instance Scale reads as a size in these units, and the
-    /// pane's cell-size readout is expressed in them.
+    /// The pane's cell-size readout is expressed in these units. (The block
+    /// instance's Scale is a unitless resize factor — ADR 0004 — it no
+    /// longer rides on the document unit.)
     /// </summary>
     public sealed class HostLengthUnit
     {
@@ -136,9 +137,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
     /// Contract:
     ///  - <see cref="AddLine"/> STAGES one contour edge at its final size in
     ///    sketch space; the host may buffer edges and realize them at commit
-    ///    (the adapters draw them unit-proportioned inside one sketch block
-    ///    instance whose Scale reads the requested size in document units —
-    ///    spec #10 — so nothing lands as raw segments until
+    ///    (the adapters draw them at the staged size inside one sketch
+    ///    block instance placed at Scale 1 — spec #10, ADR 0004 — so
+    ///    nothing lands as raw segments until
     ///    <see cref="KeepOpen"/>).
     ///  - <see cref="AddConstructionSquares"/> STAGES the definition-internal
     ///    construction squares the same way — realized at commit INSIDE the
@@ -175,8 +176,8 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// keep-out square in sketch-space metres at the requested size —
         /// for commit-time emission INSIDE the block definition (ADR 0003).
         /// Like <see cref="AddLine"/> this only stages: <see cref="KeepOpen"/>
-        /// normalizes the squares into the same unit-proportioned definition
-        /// space as the contours, flagged construction, BEFORE the selection
+        /// draws the squares into the same real-size definition space as the
+        /// contours, flagged construction, BEFORE the selection
         /// fold that forms the block — so the footprint and the quiet-zone
         /// boundary are definition content that scales and moves with the
         /// instance, with no host-side constraints, dimensions, or

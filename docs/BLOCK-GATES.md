@@ -1,6 +1,33 @@
 # Spec 10 — live block-instance gate results
 
 
+## Round 5 — real-size definition, Scale as factor (ADR 0004)
+
+**Driver (interactive, engineer-reported):** with the unit-proportioned
+definition (`Scale = 25` carrying the size), selecting the QR sketch and
+clicking Extrude produced SolidWorks' "doubly nested contour" prompt and
+no cell region could be picked — the interactive contour engine cannot
+resolve ~0.034 mm def-space cells. Control experiment: **explode the
+add-in's block, re-make a block from the same geometry by hand (real-size
+def, `Scale = 1`) → the sketch extrudes normally.** The fix is to emit
+that shape: definition at the staged size, instance at `Scale = 1`; the
+PM Scale field is now a resize factor.
+
+Updated `blockqr` gates (`Program.cs`):
+
+- `Scale ≈ 25.0000` → `Scale ≈ 1.0` (def carries the real 25 mm size)
+- def construction segment lengths: QR square side `0.001` → `0.025` m,
+  keep-out side `keepSide` (≈0.0344 m) instead of `keepSide ÷ 25`
+- Scale-edit gate drives a factor: `Scale = 1.6` (⇒ ±27.5 mm keep-out,
+  same picks) instead of `40.0`
+- "size surfaces" gate: the pane cell-size readout only (Scale is a
+  factor, not a size)
+
+Live re-verify **pending** (needs a SolidWorks-free window); headless
+suite green at the change. Historical rounds below describe the state at
+their dates — the `Scale=25`/unit-def evidence was correct then and is
+superseded by ADR 0004.
+
 ## Round 4 — construction geometry INSIDE the block definition (ADR 0003)
 
 Harness: `tools/LiveProbe` mode `consexp` against **SolidWorks 2023 SP5

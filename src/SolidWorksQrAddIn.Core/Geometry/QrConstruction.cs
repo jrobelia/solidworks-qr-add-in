@@ -28,12 +28,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// definition (ADR 0003): four corner vertices in sketch-space metres
     /// at the requested size — the same space <see cref="QrSketch.Contours"/>
     /// uses — closed-loop convention like <see cref="QrContour"/> (the last
-    /// vertex connects back to the first). The host normalizes the square
-    /// into the unit-proportioned definition alongside the contours and
+    /// vertex connects back to the first). The host draws the square into
+    /// the real-size block definition alongside the contours (ADR 0004) and
     /// flags it construction, so it scales and moves with the block
     /// instance, renders as a dashed bounds/clearance marker, and never
-    /// feeds an extrude profile. The QR square IS the grown outline — its
-    /// span is the insertion's authoritative size measurement; the
+    /// feeds an extrude profile. The QR square IS the grown outline; the
     /// keep-out square deliberately exceeds it.
     /// </summary>
     public sealed class QrConstructionSquare
@@ -49,8 +48,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// The four corner vertices in sketch-space metres at the requested
-        /// size — NOT normalized; the host divides by the block scale to
-        /// land the square inside the unit-proportioned definition.
+        /// size — drawn into the block definition as-is (ADR 0004: the def
+        /// is real-size, the instance's Scale is a resize factor).
         /// </summary>
         public IReadOnlyList<SketchPoint2> Vertices { get; }
 

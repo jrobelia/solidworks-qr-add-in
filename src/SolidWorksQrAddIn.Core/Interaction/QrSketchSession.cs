@@ -57,14 +57,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
         public const int PreviewPixelsAcross = 240;
 
         /// <summary>
-        /// The pane's static note (spec #10): the created QR is one block
-        /// instance whose PropertyManager Scale field IS the size — resize is
-        /// an edit of that field, not a re-create.
+        /// The pane's static note (spec #10, amended by ADR 0004): the
+        /// created QR is one block instance drawn at the requested size —
+        /// resize is an edit of the block's Scale factor, not a re-create;
+        /// extrusion picks cell regions or works off the exploded block.
         /// </summary>
         public const string ResizeNote =
             "The QR is created as one sketch block instance — to resize it, " +
-            "edit the block's Scale property (it reads as the QR size in " +
-            "document units).";
+            "edit the block's Scale property (a factor: 2 doubles the size). " +
+            "To extrude it, pick inside a cell region or explode the block.";
 
         private const string PromptText = "Enter the text or URL to encode.";
 

@@ -84,10 +84,11 @@ namespace SolidWorksQrAddIn.Host
         /// Stages one contour edge at its final size in sketch-space metres.
         /// Nothing is drawn yet — the session buffers the staged edges and
         /// realizes them at <see cref="KeepOpen"/>: the QR lands as ONE
-        /// sketch block instance whose definition is drawn unit-proportioned
-        /// (1 × 1 document unit) and whose Scale reads the requested size in
-        /// document units — the PropertyManager scale field IS the QR's
-        /// resize handle (spec #10).
+        /// sketch block instance whose definition is drawn at the staged
+        /// size and whose instance stays at Scale 1 — the PropertyManager
+        /// scale field is a resize FACTOR (spec #10, ADR 0004: the earlier
+        /// unit-proportioned definition broke SolidWorks' interactive
+        /// contour picker; a user-made block is always real-size + Scale 1).
         /// </summary>
         public void AddLine(double x1, double y1, double x2, double y2)
         {
@@ -100,11 +101,11 @@ namespace SolidWorksQrAddIn.Host
         /// Stages the model's construction squares — the QR square and the
         /// keep-out square in sketch-space metres at the requested size —
         /// for commit-time emission INSIDE the block definition (ADR 0003).
-        /// Nothing is drawn yet: <see cref="KeepOpen"/> normalizes them into
-        /// the same definition as the contours, flagged construction, BEFORE
-        /// the selection fold that forms the block — the squares then scale
-        /// and move with the instance with no host-side constraints,
-        /// dimensions, or equations.
+        /// Nothing is drawn yet: <see cref="KeepOpen"/> draws them into
+        /// the same real-size definition as the contours, flagged
+        /// construction, BEFORE the selection fold that forms the block —
+        /// the squares then scale and move with the instance with no
+        /// host-side constraints, dimensions, or equations.
         /// </summary>
         public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
         {
@@ -133,26 +134,30 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// The staged-geometry → block-instance realization (spec #10), run
-        /// inside the open sketch edit:
-        ///   1. the instance Scale IS the requested size — the span of the
-        ///      staged contour edges and the staged QR square (the grown
-        ///      outline itself), expressed in the document's own length
-        ///      unit;
-        ///   2. the definition is drawn unit-proportioned — every staged
-        ///      contour edge ÷ the scale, so the QR content lands inside a
-        ///      definition spanning exactly one document unit;
-        ///   3. the staged construction squares are drawn through the same
-        ///      ÷scale normalization and flagged construction — they ride
-        ///      INTO the block definition (ADR 0003), so the QR footprint
-        ///      and the four-cell quiet-zone boundary scale and move with
-        ///      the instance, and construction geometry never feeds a
-        ///      profile;
-        ///   4. the by-object selection converts ONLY those drawn lines —
+        /// The staged-geometry → block-instance realization (spec #10,
+        /// amended by ADR 0004), run inside the open sketch edit:
+        ///   1. the definition is drawn at the STAGED size — every buffered
+        ///      contour edge and construction square lands as ordinary
+        ///      sketch lines at its real sketch-space metres, exactly the
+        ///      geometry a user draws before Tools > Blocks > Make;
+        ///   2. the staged construction squares are construction-flagged
+        ///      — they ride INTO the block definition (ADR 0003), so the
+        ///      QR footprint and the four-cell quiet-zone boundary scale
+        ///      and move with the instance, and construction geometry
+        ///      never feeds a profile;
+        ///   3. the by-object selection converts ONLY those drawn lines —
         ///      contours and squares alike — into the definition and its
         ///      first instance (scale 1 at the origin);
-        ///   5. the instance's Scale is set to the document-unit size — the
-        ///      PropertyManager field then reads as the QR size.
+        ///   4. the instance stays at Scale 1 — its Scale field is a resize
+        ///      FACTOR of the created size, not a size readout.
+        /// ADR 0004: an earlier design drew the def unit-proportioned
+        /// (1 doc unit) and carried the size on instance Scale — SolidWorks'
+        /// interactive contour picker could not resolve the tiny def-space
+        /// cells and refused extrusion ("doubly nested contour"). A block
+        /// the user makes by hand is always real-size + Scale 1 and
+        /// extrudes normally — matching that shape restores the interactive
+        /// extrude path while keeping every block property (move/scale as a
+        /// unit, def-internal squares, clean explode).
         /// Live-verified (consexp, docs/BLOCK-GATES.md round 4): construction
         /// segments inside a block definition render on the instance, track
         /// Scale edits and drags, keep the construction flag through explode,
@@ -162,33 +167,22 @@ namespace SolidWorksQrAddIn.Host
         /// </summary>
         private void RealizeAsBlockInstance()
         {
-            // 1. The instance Scale IS the requested size: the staged span
-            //    (contour edges + the QR square, the grown outline itself)
-            //    in the document's own length unit — a host fact read once,
-            //    since the normalization below needs it too.
-            var docUnit = DocLengthUnits.Of(_doc);
-            double scaleDocUnits = StagedSpan() / docUnit.MetresPerUnit;
-            if (scaleDocUnits <= 0.0)
-                throw new SketchInsertionException(
-                    "The staged QR outline spans zero — no block definition can be formed.");
-
-            // 2. Draw the definition: staged edges ÷ scale = unit-proportioned
-            //    (one document unit across). These are ordinary sketch lines
-            //    until the block-make step swallows them into the block.
+            // 1. Draw the definition at the staged size — real sketch-space
+            //    metres, no normalization (ADR 0004). These are ordinary
+            //    sketch lines until the block-make step swallows them.
             var drawn = new List<ISketchSegment>(_buffered.Count + 8);
             for (var i = 0; i < _buffered.Count; i++)
             {
                 var e = _buffered[i];
                 drawn.Add(DrawDefEdge(
-                    e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
-                    e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits,
+                    e.Start.X, e.Start.Y, e.End.X, e.End.Y,
                     "block definition", $"line {i + 1} of {_buffered.Count}"));
             }
 
-            // 3. The staged construction squares — same ÷scale normalization
-            //    as the contours, then construction-flagged, so they land in
-            //    the block's selection fold below and become definition
-            //    content that tracks the instance's transforms.
+            // 2. The staged construction squares — same real-size draw,
+            //    then construction-flagged, so they land in the block's
+            //    selection fold below and become definition content that
+            //    tracks the instance's transforms.
             var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
@@ -197,8 +191,7 @@ namespace SolidWorksQrAddIn.Host
                 {
                     squareIndex++;
                     var segment = DrawDefEdge(
-                        e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
-                        e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits,
+                        e.Start.X, e.Start.Y, e.End.X, e.End.Y,
                         label, $"edge {squareIndex}");
                     // A swallowed flag failure would land the square as SOLID
                     // definition geometry — profile content that feeds
@@ -218,7 +211,7 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     "The document exposed no extension/math interface — the QR block could not be formed.");
 
-            // 4. Select exactly what this session drew — BY OBJECT, not
+            // 3. Select exactly what this session drew — BY OBJECT, not
             //    SelectAll. Measured live (undo-callback reinsert, round-1
             //    blockqr gate): inside the API undo object's redo the blanket
             //    select-all delivered an empty selection and
@@ -255,9 +248,9 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     "MakeSketchBlockFromSelected formed no block definition.");
 
-            // 5. The make leaves instance #1 in the sketch at scale 1 — set
-            //    its Scale to the document-unit size so the PropertyManager
-            //    field reads as the QR size (verified settable live, spike Q2).
+            // 4. The make leaves instance #1 in the sketch at scale 1 — the
+            //    honest check is only that one landed. Scale stays 1: the
+            //    field is a resize FACTOR of the created size (ADR 0004).
             try
             {
                 var sketch = _sketchFeature as ISketch
@@ -266,16 +259,12 @@ namespace SolidWorksQrAddIn.Host
                 if (sketch.GetSketchBlockInstanceCount() < 1)
                     throw new SketchInsertionException(
                         "The block definition formed but placed no instance in the sketch.");
-                var instance = sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance
-                    ?? throw new SketchInsertionException(
-                        "The block instance could not be read back.");
-                instance.Scale = scaleDocUnits;
             }
             catch (SketchInsertionException) { throw; }
             catch (Exception ex)
             {
                 throw new SketchInsertionException(
-                    $"The block instance's Scale could not be applied: {ex.Message}", ex);
+                    $"The block instance could not be read back: {ex.Message}", ex);
             }
         }
 
@@ -300,36 +289,6 @@ namespace SolidWorksQrAddIn.Host
             {
                 throw new SketchInsertionException(
                     $"CreateLine failed while drawing the {what} ({which}): {ex.Message}", ex);
-            }
-        }
-
-        /// <summary>
-        /// The staged outline span (max of the x/y extents), metres — the
-        /// buffered contour edges PLUS the staged QR square, which IS the
-        /// grown outline. With it staged the span is the requested size even
-        /// when the dark cells never reach the outline — the block Scale
-        /// stays authoritative for any matrix. The keep-out square is not
-        /// extent evidence: it deliberately spans the wider working-matrix
-        /// boundary.
-        /// </summary>
-        private double StagedSpan()
-        {
-            double minX = double.MaxValue, maxX = double.MinValue;
-            double minY = double.MaxValue, maxY = double.MinValue;
-            foreach (var e in _buffered)
-                Include(e);
-            foreach (var square in _stagedSquares)
-                if (square.Role == QrSquareRole.QrSquare)
-                    foreach (var e in square.Edges)
-                        Include(e);
-            return Math.Max(maxX - minX, maxY - minY);
-
-            void Include(SketchEdge e)
-            {
-                minX = Math.Min(minX, Math.Min(e.Start.X, e.End.X));
-                maxX = Math.Max(maxX, Math.Max(e.Start.X, e.End.X));
-                minY = Math.Min(minY, Math.Min(e.Start.Y, e.End.Y));
-                maxY = Math.Max(maxY, Math.Max(e.Start.Y, e.End.Y));
             }
         }
 

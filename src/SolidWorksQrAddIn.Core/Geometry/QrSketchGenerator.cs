@@ -33,9 +33,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///
     /// The result carries the grown, unioned contours at the requested size
     /// plus the QR square and keep-out square as construction squares in the
-    /// same sketch-space metres (ADR 0002/0003): the host normalizes all of
-    /// it into the unit-proportioned block definition at insertion, flagging
-    /// the squares construction so they fold in without feeding a profile.
+    /// same sketch-space metres (ADR 0002/0003/0004): the host draws all of
+    /// it into the real-size block definition at insertion, flagging the
+    /// squares construction so they fold in without feeding a profile.
     ///
     /// Contains no SolidWorks objects.
     /// </summary>
@@ -284,10 +284,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // geometry to instance-projected edges or read instance Scale).
             // They emit in the same sketch-space metres at the requested
             // size as the contours: the QR square IS the grown outline —
-            // ±S/2 — so its staged span is the insertion's authoritative
-            // size even when the dark cells never reach the outline; the
-            // keep-out square is the working-matrix boundary M·u·mmPerUnit
-            // per side (ADR 0002, not "4 cells outside the QR square").
+            // ±S/2 — so the drawn square marks the outline even when the
+            // dark cells never reach it; the keep-out square is the
+            // working-matrix boundary M·u·mmPerUnit per side (ADR 0002,
+            // not "4 cells outside the QR square").
             double grownHalfM = grownUnits * mPerUnit / 2.0;
             double matrixHalfM = m * (double)u * mPerUnit / 2.0;
             var squares = new List<QrConstructionSquare>(2)

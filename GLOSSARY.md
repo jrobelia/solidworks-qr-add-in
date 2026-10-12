@@ -8,8 +8,8 @@ moment it is resolved in discussion, not before.
 - **Working matrix** — the `(N+8)×(N+8)` cell grid the generator operates
   on: N×N data cells plus the fixed quiet zone as light cells (ADR 0002).
 - **QR square** — the construction square bounding the grown QR-cell extent
-  (side = final size S). Lives INSIDE the block definition in unit space
-  (ADR 0003) — renders and tracks the instance's Scale/position.
+  (side = final size S). Lives INSIDE the block definition at real size
+  (ADR 0003/0004) — renders and tracks the instance's Scale/position.
 - **Keep-out square** — the construction square marking the quiet-zone
   clearance: the working-matrix boundary, `(N+8) × cellPitch` per side,
   always present. Same def-internal construction geometry as the QR square.
@@ -20,9 +20,10 @@ moment it is resolved in discussion, not before.
   profile.
 - **Cell pitch** — centre-to-centre spacing of QR modules:
   `finalSize / (dataCells + 2 × growthFraction)`.
-- **Size readout** — the numeric size surfaces are the block instance's
-  PropertyManager **Scale** field and the pane's cell-size readout. No
-  sketch dimensions are emitted (ADR 0003 superseded the earlier
+- **Size readout** — the numeric size surfaces are the pane's cell-size
+  readout and the block instance's PropertyManager **Scale** field, which
+  reads as a resize FACTOR of the created size (ADR 0004). No sketch
+  dimensions are emitted (ADR 0003 superseded the earlier
   driven/equation-linked dimension plan — host-side dims cannot observe
   instance Scale).
 - **Payload preset** — a `PayloadGenerator` template (Url, WiFi, vCard…)
@@ -33,10 +34,12 @@ moment it is resolved in discussion, not before.
 
 - **Block instance** — a `SketchBlockInstance` inserted into a sketch from
   a block definition; scales uniformly via its `Scale` property — the QR's
-  resize handle (a dimension inside the definition distorts rather than
-  rescales, spike-verified). Container for the unit-proportioned QR
-  contours AND both construction squares — everything tracks `Scale` and
-  the insertion point uniformly (ADR 0003).
+  resize handle, a factor of the created size (a dimension inside the
+  definition distorts rather than rescales, spike-verified). Container for
+  the real-size QR contours AND both construction squares — everything
+  tracks `Scale` and the insertion point uniformly (ADR 0003; ADR 0004 —
+  the definition draws at real size so SolidWorks' interactive contour
+  picker/extrude works, like a user-made block).
 - **Pane** — the add-in's docked `QR Sketch` task-pane tab (hosts the full
   UI; the retired floating window's role).
 - **Insertion support** — the selected reference plane or planar face the

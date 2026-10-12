@@ -113,11 +113,11 @@ namespace SolidWorksQrAddIn.Tests
                 qrSketch.ProfileSegments.Count());
             Assert.Equal(8, qrSketch.BlockInstances.Single()
                 .Definition.ConstructionEdges.Count);
-            // ... with the block instance back at the same scale — the live
-            // round-1 failure was the rebuild dying inside
+            // ... with the block instance back at its unscaled state — the
+            // live round-1 failure was the rebuild dying inside
             // MakeSketchBlockFromSelected, leaving no instance at all.
             var instance = Assert.Single(qrSketch.BlockInstances);
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            Assert.Equal(1.0, instance.Scale, 9);
         }
 
         [Fact]

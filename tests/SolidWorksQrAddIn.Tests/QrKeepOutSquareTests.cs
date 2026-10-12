@@ -81,11 +81,12 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(4, keepOut.Count);
             Assert.All(keepOut, e => Assert.True(e.Construction));
 
-            // Def-space extent: the model's sized keep-out half ÷ the
-            // instance scale — strictly outside the unit QR box (±0.5 mm).
-            double expectedHalfM = ModelKeepOutHalf() / SizeMm;
+            // Def-space extent: the model's sized keep-out half (ADR 0004 —
+            // the def draws at the staged size) — strictly outside the
+            // grown QR box (±S/2).
+            double expectedHalfM = ModelKeepOutHalf();
             Assert.All(keepOut, e => Assert.Equal(expectedHalfM, Extent(e), 9));
-            Assert.True(expectedHalfM > 0.0005);
+            Assert.True(expectedHalfM > SizeMm / 2.0 / 1000.0);
         }
 
         [Fact]
@@ -98,8 +99,8 @@ namespace SolidWorksQrAddIn.Tests
             var instance = sketch.BlockInstances.Single();
 
             // Rendered extent = the model's sized half-extent (the block
-            // projects def×Scale; def = sized÷Scale) — the working matrix
-            // boundary in metres.
+            // projects def×Scale; def = sized, Scale = 1) — the working
+            // matrix boundary in metres.
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             double keepOutHalf = cons.Max(Extent);
             Assert.Equal(ModelKeepOutHalf(), keepOutHalf, 9);
@@ -138,11 +139,11 @@ namespace SolidWorksQrAddIn.Tests
             // Same transform machinery as the contours: a Scale edit
             // rescales the rendered keep-out square — no equation state
             // exists anywhere to do it.
-            instance.Scale = SizeMm / 2.0;
+            instance.Scale = 0.5;
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             Assert.Equal(ModelKeepOutHalf() / 2.0, cons.Max(Extent), 9);
 
-            instance.Scale = SizeMm * 2.0;
+            instance.Scale = 2.0;
             cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             Assert.Equal(ModelKeepOutHalf() * 2.0, cons.Max(Extent), 9);
         }

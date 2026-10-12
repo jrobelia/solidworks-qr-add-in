@@ -8,10 +8,10 @@ namespace SolidWorksQrAddIn.Host
     /// <summary>
     /// The document's length unit as a host fact: reads
     /// <see cref="IModelDoc2.LengthUnit"/> (an swLengthUnit_e) and maps it to
-    /// metres-per-unit plus a display symbol. Used two ways: the insertion
-    /// session converts unit-proportioned contours into the one-document-unit
-    /// block definition and the staged span into the instance Scale; the host
-    /// state snapshot carries it for the pane's cell-size readout.
+    /// metres-per-unit plus a display symbol. The host state snapshot
+    /// carries it for the pane's cell-size readout (the insertion session
+    /// draws the block definition at the staged real size — ADR 0004 —
+    /// so no conversion happens there any more).
     /// </summary>
     internal static class DocLengthUnits
     {

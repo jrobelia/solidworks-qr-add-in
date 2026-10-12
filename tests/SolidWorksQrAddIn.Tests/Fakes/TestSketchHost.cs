@@ -79,9 +79,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     }
 
     /// <summary>
-    /// A sketch block definition: the QR contours drawn unit-proportioned —
-    /// one document length unit across — in sketch-space metres. In the real
-    /// host the definition lives in the document, shared by its instances.
+    /// A sketch block definition: the QR contours drawn at the requested
+    /// real size in sketch-space metres (ADR 0004). In the real host the
+    /// definition lives in the document, shared by its instances.
     /// </summary>
     public sealed class FakeBlockDefinition
     {
@@ -89,12 +89,12 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         public string Name { get; }
 
-        /// <summary>The definition's contours in sketch-space metres (one document unit across).</summary>
+        /// <summary>The definition's contours in sketch-space metres at the requested size.</summary>
         public List<FakeLine> Contours { get; } = new List<FakeLine>();
 
         /// <summary>
         /// The definition's construction segments — the QR square and the
-        /// keep-out square drawn at unit coordinates (ADR 0003). They render
+        /// keep-out square drawn at real size (ADR 0003/0004). They render
         /// on every instance as construction geometry, tracking Scale and
         /// position, and never feed a profile.
         /// </summary>
@@ -107,7 +107,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
     /// <summary>
     /// A block instance placed in a sketch: a definition handle plus the
     /// placement — insertion point, uniform <see cref="Scale"/> (the resize
-    /// handle — it reads as the QR size in document units) and rotation.
+    /// handle — a factor of the created size, ADR 0004) and rotation.
     /// </summary>
     public sealed class FakeBlockInstance
     {
@@ -226,9 +226,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// <summary>
         /// The document's length unit in metres — the in-memory stand-in for
         /// the native adapter's ModelDoc2.LengthUnit read (swLengthUnit_e).
-        /// 0.001 = millimetres, 0.0254 = inches. The block definition spans
-        /// exactly one of these units and the instance Scale reads as the
-        /// size in them.
+        /// 0.001 = millimetres, 0.0254 = inches. It only drives the pane's
+        /// cell-size readout — sketch-space geometry is always metres and
+        /// the block definition draws at the real size (ADR 0004).
         /// </summary>
         public double MetresPerLengthUnit { get; set; } = 0.001;
 
@@ -417,9 +417,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public bool FailBlockMake { get; set; }
 
         /// <summary>
-        /// When true, the commit's instance step fails — the block definition
-        /// and its instance exist but the Scale could not be applied. Abort
-        /// removes the whole sketch (block inside it).
+        /// When true, the commit's block make produces a definition but no
+        /// instance in the sketch — the commit's instance-count check
+        /// refuses. Abort removes the whole sketch (block inside it).
         /// </summary>
         public bool FailBlockInstance { get; set; }
 
@@ -655,9 +655,9 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// Stages one contour edge of the QR pattern at its final size in
         /// sketch-space metres. Nothing is drawn yet — the session buffers
         /// the staged edges and realizes them at commit: a block-capable
-        /// host draws them unit-proportioned, wraps them in a block
-        /// definition and places the one instance whose Scale reads the
-        /// staged span in document units.
+        /// host draws them at the staged size, wraps them in a block
+        /// definition and places the one instance at Scale 1 (ADR 0004 —
+        /// real-size definition, Scale as a resize factor).
         /// </summary>
         public void AddLine(double x1, double y1, double x2, double y2)
         {
@@ -677,10 +677,10 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// Stages the model's construction squares — QR square and keep-out
         /// square in sketch-space metres at the requested size — for
         /// commit-time emission INSIDE the block definition (ADR 0003).
-        /// Nothing lands yet: <see cref="KeepOpen"/> normalizes them into
-        /// the same definition fold as the contours, flagged construction —
-        /// they then track the instance's Scale and moves with no
-        /// constraints, dims, or equations anywhere.
+        /// Nothing lands yet: <see cref="KeepOpen"/> draws them into the
+        /// same real-size definition fold as the contours, flagged
+        /// construction — they then track the instance's Scale and moves
+        /// with no constraints, dims, or equations anywhere.
         /// </summary>
         public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares)
         {
@@ -706,24 +706,19 @@ namespace SolidWorksQrAddIn.Tests.Fakes
 
         /// <summary>
         /// The staged-geometry → block-instance realization the native
-        /// adapter performs inside the open sketch edit:
-        ///   1. the instance Scale IS the requested size — the span of the
-        ///      staged contour edges and the staged QR square (the grown
-        ///      outline itself) expressed in document units;
-        ///   2. the definition is drawn unit-proportioned (every edge
-        ///      divided by the scale, so the def spans one document unit);
-        ///   3. the staged squares draw through the same ÷scale
-        ///      normalization, then take the construction flag;
-        ///   4. select-all converts the drawn lines into the definition and
-        ///      its first instance (scale 1 at the origin);
-        ///   5. the instance's Scale is set to the document-unit size — the
-        ///      PropertyManager field then reads as the size.
+        /// adapter performs inside the open sketch edit (ADR 0004):
+        ///   1. the definition draws at the STAGED size — real sketch-space
+        ///      metres, no normalization;
+        ///   2. the staged squares draw the same way, then take the
+        ///      construction flag;
+        ///   3. the drawn lines fold into the definition and its first
+        ///      instance (scale 1 at the origin);
+        ///   4. the instance stays at Scale 1 — the PM field is a resize
+        ///      factor, not a size readout.
         /// </summary>
         private void RealizeAsBlockInstance()
         {
-            double scaleDocUnits = StagedSpan() / _doc.MetresPerLengthUnit;
-
-            // Definition draw stage — rescaled edges land as ordinary sketch
+            // Definition draw stage — staged edges land as ordinary sketch
             // lines first (the conversion step below swallows them).
             for (var i = 0; i < _buffered.Count; i++)
             {
@@ -731,16 +726,14 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     throw new SketchInsertionException(
                         "CreateLine returned no segment while drawing the block definition.");
                 var e = _buffered[i];
-                _sketch.Segments.Add(new FakeLine(
-                    e.X1 / scaleDocUnits, e.Y1 / scaleDocUnits,
-                    e.X2 / scaleDocUnits, e.Y2 / scaleDocUnits));
+                _sketch.Segments.Add(new FakeLine(e.X1, e.Y1, e.X2, e.Y2));
             }
 
-            // The staged construction squares through the same ÷scale
-            // normalization, then construction-flagged — the same fold
-            // swallows them into the definition, where they track the
-            // instance's transforms. The flag write is its own stage: a
-            // failure leaves a solid line the commit must refuse.
+            // The staged construction squares drawn the same way, then
+            // construction-flagged — the same fold swallows them into the
+            // definition, where they track the instance's transforms. The
+            // flag write is its own stage: a failure leaves a solid line
+            // the commit must refuse.
             var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
@@ -750,9 +743,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                     if (_host.FailSquareDraw && squareIndex == 1)
                         throw new SketchInsertionException(
                             "CreateLine returned no segment while drawing the construction square.");
-                    var line = new FakeLine(
-                        e.Start.X / scaleDocUnits, e.Start.Y / scaleDocUnits,
-                        e.End.X / scaleDocUnits, e.End.Y / scaleDocUnits);
+                    var line = new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
                     _sketch.Segments.Add(line);
                     if (_host.FailSquareFlag && squareIndex == 1)
                         throw new SketchInsertionException(
@@ -769,48 +760,25 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             // lines leave the sketch's raw segment list and become the
             // definition's content — solid edges as contours, construction-
             // flagged edges as the def's construction segments; the first
-            // instance lands at the origin.
+            // instance lands at the origin at scale 1.
             var def = new FakeBlockDefinition("Block" + _doc.NextBlockNumber++);
             def.Contours.AddRange(_sketch.Segments.Where(e => !e.Construction));
             def.ConstructionEdges.AddRange(_sketch.Segments.Where(e => e.Construction));
             _sketch.Segments.Clear();
             _doc.BlockDefinitions.Add(def);
-            var instance = new FakeBlockInstance(def, 0.0, 0.0) { Name = def.Name + "-1" };
-            def.Instances.Add(instance);
-            _sketch.BlockInstances.Add(instance);
 
-            if (_host.FailBlockInstance)
-                throw new SketchInsertionException(
-                    "The block instance's Scale could not be applied.");
-            instance.Scale = scaleDocUnits;
-        }
-
-        /// <summary>
-        /// The staged outline span (max of the x/y extents), metres — the
-        /// buffered contour edges PLUS the staged QR square, which IS the
-        /// grown outline, so the span is the requested size even when the
-        /// dark cells never reach it. The keep-out square is excluded: it
-        /// deliberately spans the wider working-matrix boundary.
-        /// </summary>
-        private double StagedSpan()
-        {
-            double minX = double.MaxValue, maxX = double.MinValue;
-            double minY = double.MaxValue, maxY = double.MinValue;
-            foreach (var e in _buffered)
-                Include(e.X1, e.Y1, e.X2, e.Y2);
-            foreach (var square in _stagedSquares)
-                if (square.Role == QrSquareRole.QrSquare)
-                    foreach (var e in square.Edges)
-                        Include(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
-            return Math.Max(maxX - minX, maxY - minY);
-
-            void Include(double x1, double y1, double x2, double y2)
+            // FailBlockInstance models the make producing a definition but
+            // no instance in the sketch — the commit's instance-count check
+            // must refuse then, as the native adapter does.
+            if (!_host.FailBlockInstance)
             {
-                minX = Math.Min(minX, Math.Min(x1, x2));
-                maxX = Math.Max(maxX, Math.Max(x1, x2));
-                minY = Math.Min(minY, Math.Min(y1, y2));
-                maxY = Math.Max(maxY, Math.Max(y1, y2));
+                var instance = new FakeBlockInstance(def, 0.0, 0.0) { Name = def.Name + "-1" };
+                def.Instances.Add(instance);
+                _sketch.BlockInstances.Add(instance);
             }
+            if (_sketch.BlockInstances.Count == 0)
+                throw new SketchInsertionException(
+                    "The block definition formed but placed no instance in the sketch.");
         }
 
         public CleanupOutcome Abort()

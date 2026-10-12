@@ -9,8 +9,8 @@ namespace SolidWorksQrAddIn.Tests
     /// <summary>
     /// Spec #10 / ticket #17, reworked by ADR 0003 — the QR construction
     /// square lives INSIDE the block definition: the grown QR-cell extent
-    /// staged in sketch-space metres and normalized into the definition
-    /// with the contours so it tracks the instance's Scale
+    /// staged in sketch-space metres and drawn at that size into the
+    /// definition with the contours so it tracks the instance's Scale
     /// and moves with no constraints, dimensions, or equations. The
     /// keep-out square is <see cref="QrKeepOutSquareTests"/>' subject; this
     /// file covers the QR square, the shared fold mechanics, and the
@@ -74,15 +74,16 @@ namespace SolidWorksQrAddIn.Tests
 
             // The definition carries BOTH folds: contours plus eight
             // construction edges (two squares). The QR square is the
-            // smaller one — the unit box, the model's sized half ÷ Scale.
+            // smaller one — the grown outline box at the model's sized
+            // half-extent (ADR 0004: the def draws at the staged size).
             Assert.Equal(8, def.ConstructionEdges.Count);
             var minExtent = def.ConstructionEdges.Min(Extent);
             var qrEdges = def.ConstructionEdges.Where(e => Extent(e) == minExtent).ToList();
             Assert.Equal(4, qrEdges.Count);
             Assert.All(def.ConstructionEdges, e => Assert.True(e.Construction));
-            Assert.All(qrEdges, e => Assert.Equal(ModelQrHalfM() / SizeMm, Extent(e), 9));
+            Assert.All(qrEdges, e => Assert.Equal(ModelQrHalfM(), Extent(e), 9));
             Assert.All(qrEdges, e => Assert.Equal(
-                ModelQrHalfM() / SizeMm,
+                ModelQrHalfM(),
                 System.Math.Max(System.Math.Abs(e.X2 - e.X1),
                                 System.Math.Abs(e.Y2 - e.Y1)) / 2.0,
                 9));
@@ -96,9 +97,9 @@ namespace SolidWorksQrAddIn.Tests
 
             var sketch = host.Document!.Sketches.Single();
             var instance = sketch.BlockInstances.Single();
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            Assert.Equal(1.0, instance.Scale, 9);
 
-            // At Scale=25 the unit-box QR square renders at ±12.5 mm — the
+            // At Scale=1 the def's QR square renders at ±12.5 mm — the
             // same span the grown profile reaches.
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             var qrHalf = cons.Min(Extent);
@@ -116,7 +117,7 @@ namespace SolidWorksQrAddIn.Tests
 
             var sketch = host.Document!.Sketches.Single();
             var instance = sketch.BlockInstances.Single();
-            instance.Scale = SizeMm / 2.0;
+            instance.Scale = 0.5;
 
             var cons = instance.EffectiveEdges.Where(e => e.Construction).ToList();
             Assert.Equal(0.00625, cons.Min(Extent), 9);
@@ -251,11 +252,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(doc.RedoLastStep());
             Assert.Contains(qrSketch, doc.Sketches);
             var instance = qrSketch.BlockInstances.Single();
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            Assert.Equal(1.0, instance.Scale, 9);
             var cons = instance.Definition.ConstructionEdges;
             Assert.Equal(8, cons.Count);
             Assert.All(cons, e => Assert.True(e.Construction));
-            // The smaller construction square is the unit box.
+            // The smaller construction square is the QR-square box.
             Assert.Equal(4, cons.Count(e => Extent(e) == cons.Min(Extent)));
             Assert.Equal(8, qrSketch.EffectiveSegments.Count(e => e.Construction));
         }

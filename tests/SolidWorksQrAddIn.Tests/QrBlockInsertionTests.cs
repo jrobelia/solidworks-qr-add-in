@@ -7,12 +7,13 @@ using Xunit;
 namespace SolidWorksQrAddIn.Tests
 {
     /// <summary>
-    /// Spec #10 / ticket #16 — the insertion session realizes the staged QR
-    /// contours as ONE sketch block instance: the definition is drawn
-    /// unit-proportioned (1 × 1 document unit) and the instance's Scale reads
-    /// the requested size in document units — the PropertyManager scale field
-    /// IS the size. Assertions stay on the fake host's world state — block
-    /// present, instance scale, definition geometry — never call counts.
+    /// Spec #10 / ticket #16, amended by ADR 0004 — the insertion session
+    /// realizes the staged QR contours as ONE sketch block instance: the
+    /// definition is drawn at the staged (real) size and the instance lands
+    /// at Scale 1 — the PropertyManager scale field is a resize FACTOR, not
+    /// a size readout. Assertions stay on the fake host's world state —
+    /// block present, instance scale, definition geometry — never call
+    /// counts.
     /// </summary>
     public class QrBlockInsertionTests
     {
@@ -55,14 +56,14 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void A_matrix_without_border_cells_still_scales_the_instance_to_the_requested_size()
+        public void A_matrix_without_border_cells_still_marks_the_grown_outline()
         {
             var host = HostWithSelectedPlane();
 
             // One interior cell: its grown contour spans ~(u+2g)·p — far
-            // less than the requested outline. A span measured over the
-            // contour edges alone would under-report the size; the staged
-            // QR square IS the grown outline and keeps the Scale honest.
+            // less than the requested outline. The QR square rides inside
+            // the definition regardless and still marks the full grown
+            // outline at ±S/2 — the cell sparsity is invisible outside.
             var sketch = QrSketchGenerator.GenerateFromCells(
                 Cells(3, (1, 1)), SizeMm, Growth).Sketch!;
             double halfM = SizeMm / 2.0 / 1000.0;
@@ -78,7 +79,7 @@ namespace SolidWorksQrAddIn.Tests
             insertion.Dispose();
 
             var instance = Assert.Single(host.Document!.Sketches.Single().BlockInstances);
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            Assert.Equal(1.0, instance.Scale, 9);
             // …and the QR square really renders at ±S/2 — the grown outline
             // the cell content sits inside, exactly as the model intends.
             var qrSquareExtent = instance.EffectiveEdges
@@ -102,7 +103,7 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void The_instance_scale_reads_the_requested_size_in_document_units()
+        public void The_instance_lands_unscaled_at_the_origin()
         {
             var host = HostWithSelectedPlane();
 
@@ -110,15 +111,16 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             var instance = Assert.Single(host.Document!.Sketches.Single().BlockInstances);
-            // mm document (0.001 m/unit): Scale IS the requested 25 mm size.
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            // ADR 0004: the definition carries the real size — the instance
+            // is an unscaled, unrotated placement at the sketch origin.
+            Assert.Equal(1.0, instance.Scale, 9);
             Assert.Equal(0.0, instance.Angle, 12);
             Assert.Equal(0.0, instance.X, 12);
             Assert.Equal(0.0, instance.Y, 12);
         }
 
         [Fact]
-        public void The_block_definition_is_unit_proportioned_and_carries_every_edge()
+        public void The_block_definition_is_real_sized_and_carries_every_edge()
         {
             var host = HostWithSelectedPlane();
 
@@ -131,22 +133,21 @@ namespace SolidWorksQrAddIn.Tests
             // QR square + keep-out square, four edges each (ADR 0003).
             Assert.Equal(8, def.ConstructionEdges.Count);
             Assert.All(def.ConstructionEdges, e => Assert.True(e.Construction));
-            // One document unit across: ±0.5 mm on an mm document. The def
-            // content is the staged geometry ÷ the instance scale — exactly
-            // the generator's unit contour set drawn in document units.
+            // The def content IS the staged geometry at the requested size:
+            // ±S/2 = ±12.5 mm in sketch-space metres (ADR 0004).
+            double half = SizeMm / 2.0 / 1000.0;
             var xs = def.Contours.SelectMany(e => new[] { e.X1, e.X2 }).ToList();
             var ys = def.Contours.SelectMany(e => new[] { e.Y1, e.Y2 }).ToList();
-            Assert.Equal(0.0005, xs.Max(), 12);
-            Assert.Equal(-0.0005, xs.Min(), 12);
-            Assert.Equal(0.0005, ys.Max(), 12);
-            Assert.Equal(-0.0005, ys.Min(), 12);
-            // …and it matches the model's sized contours ÷ the instance
-            // scale — the def's unit-proportioned space (one mm doc unit).
+            Assert.Equal(half, xs.Max(), 12);
+            Assert.Equal(-half, xs.Min(), 12);
+            Assert.Equal(half, ys.Max(), 12);
+            Assert.Equal(-half, ys.Min(), 12);
+            // …edge for edge identical to the model's sized contour set.
             var expected = Expected.Edges.ToList();
             for (var i = 0; i < expected.Count; i++)
             {
-                Assert.Equal(expected[i].Start.X / SizeMm, def.Contours[i].X1, 12);
-                Assert.Equal(expected[i].Start.Y / SizeMm, def.Contours[i].Y1, 12);
+                Assert.Equal(expected[i].Start.X, def.Contours[i].X1, 12);
+                Assert.Equal(expected[i].Start.Y, def.Contours[i].Y1, 12);
             }
         }
 
@@ -187,8 +188,9 @@ namespace SolidWorksQrAddIn.Tests
             var before = instance.EffectiveEdges.ToList();
 
             // The engineer edits the PropertyManager Scale field — the QR's
-            // resize handle. 25 → 50 doubles every definition edge.
-            instance.Scale = 50.0;
+            // resize handle, now a FACTOR (ADR 0004): 1 → 2 doubles every
+            // definition edge (25 mm → 50 mm rendered).
+            instance.Scale = 2.0;
 
             var after = instance.EffectiveEdges.ToList();
             Assert.Equal(before.Count, after.Count);
@@ -204,7 +206,7 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void In_an_inch_document_the_scale_reads_the_size_in_inches()
+        public void In_an_inch_document_the_definition_is_still_real_sized()
         {
             var host = HostWithSelectedPlane();
             host.Document!.MetresPerLengthUnit = 0.0254;
@@ -214,13 +216,13 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Message);
             var instance = Assert.Single(host.Document.Sketches.Single().BlockInstances);
-            // 25 mm = 0.984 in — the Scale field reads the doc-unit size.
-            Assert.Equal(SizeMm / 25.4, instance.Scale, 9);
-            // The definition still spans exactly one document unit — one inch.
+            // Sketch-space geometry is always metres — document units only
+            // change what the UI displays, never the staged content.
+            Assert.Equal(1.0, instance.Scale, 9);
             var xs = instance.Definition.Contours
                 .SelectMany(e => new[] { e.X1, e.X2 }).ToList();
-            Assert.Equal(0.0254 / 2.0, xs.Max(), 12);
-            Assert.Equal(-0.0254 / 2.0, xs.Min(), 12);
+            Assert.Equal(SizeMm / 2.0 / 1000.0, xs.Max(), 12);
+            Assert.Equal(-SizeMm / 2.0 / 1000.0, xs.Min(), 12);
             // And the effective profile geometry is the same 25 mm pattern.
             Assert.Equal(SizeMm / 2.0 / 1000.0,
                 instance.ProfileEdges.Max(e => System.Math.Max(e.X1, e.X2)), 9);
@@ -337,7 +339,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(Core.Hosting.SketchHostContract.CreationUndoName, reg.UndoName);
             Assert.Equal(qrSketch.Name, reg.SketchName);
             // The registration still carries the requested geometry — the
-            // staged edges plus the unit-space squares a redo would re-fold
+            // staged edges plus the staged squares a redo would re-fold
             // into the definition through the same session.
             Assert.Equal(Expected.Info.SegmentCount, reg.Edges.Count);
             Assert.Equal(2, reg.ConstructionSquares!.Count);
@@ -367,7 +369,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(doc.RedoLastStep());
             Assert.Contains(qrSketch, doc.Sketches);
             var instance = Assert.Single(qrSketch.BlockInstances);
-            Assert.Equal(SizeMm, instance.Scale, 9);
+            Assert.Equal(1.0, instance.Scale, 9);
             Assert.Equal(Expected.Info.SegmentCount,
                 instance.ProfileEdges.Count());
             // The construction squares ride back inside the definition too.

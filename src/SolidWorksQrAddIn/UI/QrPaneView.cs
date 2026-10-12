@@ -135,9 +135,10 @@ namespace SolidWorksQrAddIn.UI
             create.Click += OnCreateClicked;
             panel.Children.Add(create);
 
-            // Spec #10: the QR lands as ONE block instance whose PropertyManager
-            // Scale is the size — the static note names that control; the
-            // read-only readout shows the module pitch in document units.
+            // Spec #10 (ADR 0004): the QR lands as ONE block instance whose
+            // PropertyManager Scale is a resize factor — the static note
+            // names that control; the read-only readout shows the module
+            // pitch in document units.
             panel.Children.Add(new TextBlock
             {
                 Text = "Cell size (document units):",

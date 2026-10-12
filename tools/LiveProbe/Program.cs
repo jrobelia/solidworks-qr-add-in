@@ -1618,9 +1618,9 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// <summary>
         /// `LiveProbe.exe blockqr [deployDir] [progId]` — the spec-#10 live
         /// gates (ticket #19, recorded in docs/BLOCK-GATES.md): the QR lands
-        /// as ONE sketch block instance at Scale = size-in-document-units
-        /// whose definition folds in the QR square and the keep-out square
-        /// as construction geometry (ADR 0003).
+        /// as ONE sketch block instance at Scale 1 whose definition folds
+        /// the real-size contours plus the QR square and the keep-out
+        /// square as construction geometry (ADR 0003, ADR 0004).
         ///
         /// Two create routes, chosen live and reported:
         ///   A) in-proc — the deployed build answers BlockSpikeProbe(-1) with
@@ -2054,7 +2054,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (sketch == null) return;
             var sketchFeat = sketch as IFeature;
 
-            // ---------- G-structure: ONE block instance at Scale = size ----------
+            // ---------- G-structure: ONE block instance at Scale 1 ----------
             int instCount = sketch.GetSketchBlockInstanceCount();
             Check(instCount == 1, "the sketch contains exactly ONE block instance",
                 $"count={instCount}");
@@ -2062,8 +2062,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                 ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
             Check(inst != null, "the block instance is readable", inst?.Name ?? "null");
             if (inst == null) return;
-            Check(Math.Abs(inst.Scale - 25.0) < 1e-3,
-                "instance Scale reads the requested size in document units (25 mm)",
+            Check(Math.Abs(inst.Scale - 1.0) < 1e-6,
+                "instance Scale is 1 — the definition carries the real 25 mm " +
+                "size (ADR 0004: unit-def + Scale=size broke the interactive " +
+                "contour picker)",
                 $"Scale={inst.Scale:F4} Scale2={inst.Scale2:F4} Angle={inst.Angle:F3}");
             var ipos = inst.InstancePosition?.ArrayData as double[];
             Check(ipos != null && Math.Abs(ipos[0]) < 1e-9 && Math.Abs(ipos[1]) < 1e-9,
@@ -2098,14 +2100,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                 $"expected={ctx.Expected.Info.SegmentCount}+8");
             // The def sketch reports an offset frame (consexp finding) — the
             // squares are verified by SEGMENT LENGTH, frame-independent:
-            // QR square side = one document unit (0.001 m); keep-out side =
-            // the rendered matrix-boundary side ÷ Scale.
-            double unitKeepSide = keepSide / 25.0;
-            var shortCons = defCons.Where(s => Math.Abs(SegLen(s) - 0.001) < 2e-5).ToList();
-            var longCons = defCons.Where(s => Math.Abs(SegLen(s) - unitKeepSide) < 2e-5).ToList();
+            // QR square side = the real 25 mm (0.025 m); keep-out side =
+            // the rendered matrix-boundary side (ADR 0004 — real-size def).
+            var shortCons = defCons.Where(s => Math.Abs(SegLen(s) - 0.025) < 2e-5).ToList();
+            var longCons = defCons.Where(s => Math.Abs(SegLen(s) - keepSide) < 2e-5).ToList();
             Check(shortCons.Count == 4 && longCons.Count == 4,
-                "def construction segs form the unit QR square and the " +
-                "unit keep-out square",
+                "def construction segs form the QR square and the " +
+                "keep-out square at real size",
                 $"short={shortCons.Count}/4 long={longCons.Count}/4 " +
                 $"lens=[{string.Join(", ", defCons.Select(s => (SegLen(s) * 1000).ToString("F4")))}]");
 
@@ -2113,8 +2114,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             var dims = DisplayDimsOf(sketchFeat);
             var eqs = EquationTexts(doc, out int eqCount);
             Check(dims.Count == 0 && eqCount == 0,
-                "no display dims and no equations — the numeric size surfaces are " +
-                "the block PM Scale field and the pane cell-size readout",
+                "no display dims and no equations — the numeric size surface is " +
+                "the pane cell-size readout (block Scale is a factor)",
                 $"dims={dims.Count} eqs={eqCount}");
 
             // ---------- rendered extent: the squares ride the instance ----------
@@ -2145,11 +2146,11 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
 
             // ---------- Scale tracking: the spec-10 resize promise ----------
-            // Scale IS the size readout (the PM field): at 40 the rendered
+            // Scale is a resize FACTOR (ADR 0004): at 1.6 the rendered
             // squares move to ±20 mm (QR) / ±27.5 mm (keep-out) — picks
             // inside the new keep-out hit, picks beyond it miss.
-            try { inst.Scale = 40.0; } catch (Exception ex) { Console.WriteLine($"#   Scale set threw {ex.GetType().Name}"); }
-            Check(Math.Abs(inst.Scale - 40.0) < 1e-4, "instance Scale edit to 40 accepted",
+            try { inst.Scale = 1.6; } catch (Exception ex) { Console.WriteLine($"#   Scale set threw {ex.GetType().Name}"); }
+            Check(Math.Abs(inst.Scale - 1.6) < 1e-6, "instance Scale edit to 1.6 accepted",
                 $"Scale={inst.Scale:F2}");
             var scan40 = ScanBlockPicks(doc, ext, selMgr,
                 new[] { 0.021, 0.025, 0.027, 0.030 });
@@ -2157,7 +2158,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 "a Scale edit resizes the def-internal squares — the keep-out " +
                 "edge moves to ±27.5 mm",
                 HitsDump(scan40));
-            try { inst.Scale = 25.0; } catch { }
+            try { inst.Scale = 1.0; } catch { }
 
             mgr.InsertSketch(false);
             Check(mgr.ActiveSketch == null, "QR sketch exits edit mode");
