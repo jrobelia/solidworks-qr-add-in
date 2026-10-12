@@ -305,12 +305,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// "editable verbatim" rule): the content box is authoritative free
         /// text, so the content type reverts to Raw and a pending preset-field
         /// failure drops away. The edited text stays — it is the literal
-        /// payload now.
+        /// payload now, and Raw's remembered text (re-picking Raw restores
+        /// it, never a composed preset payload).
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
             _preset.ResetToRaw();
             _content = content ?? string.Empty;
+            _preset.RawContent = _content;   // raw's memory IS the box text
             return Regenerate();
         }
 
@@ -361,8 +363,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// fails the request openly — the composer's message on the status
         /// line, no picture, and an EMPTY content box: the box only ever
         /// shows text the CURRENT type produced, so a stale payload can
-        /// never sit beside fields it was not composed from. An unknown id
-        /// is refused with the composer's UnknownPreset error — the current
+        /// never sit beside fields it was not composed from. Picking Raw
+        /// restores the last hand-typed text — Raw's remembered payload —
+        /// never a composed blob from another type. An unknown id is
+        /// refused with the composer's UnknownPreset error — the current
         /// selection stays in force.
         /// </summary>
         public QrSketchResult SetContentType(string? presetId)
@@ -377,6 +381,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 return Regenerate();
             }
             _preset.Id = preset.Id;
+            if (preset.Id == PayloadComposer.DefaultPresetId)
+                _content = _preset.RawContent;   // raw's own text returns — never a composed payload
             return ComposePreset();
         }
 
@@ -441,12 +447,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
             /// <summary>
             /// Entered field values, remembered per preset — switching types
-            /// and back restores them. "raw" never appears here: its single
-            /// "content" field IS the box's text, so storing it would
-            /// duplicate the truth.
+            /// and back restores them. "raw" never appears here: its memory
+            /// is the last hand-typed payload, kept in <see cref="RawContent"/>
+            /// — a payload, not a set of field inputs.
             /// </summary>
             public readonly Dictionary<string, Dictionary<string, string>> FieldsByPreset =
                 new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// Raw's remembered payload — the last hand-typed free text
+            /// (recorded by <see cref="SetContent"/>, restored by
+            /// <see cref="SetContentType"/> picking Raw). A composed preset
+            /// payload is never inherited as raw content.
+            /// </summary>
+            public string RawContent = string.Empty;
 
             /// <summary>
             /// A pending composition failure — set by the last

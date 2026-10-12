@@ -259,21 +259,37 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Switching_back_to_raw_keeps_the_composed_text_as_literal_content()
+        public void Switching_back_to_raw_restores_the_last_hand_typed_text()
+        {
+            var (session, _) = NewSession();
+            session.SetContent("typed by hand");
+            session.SetContentType("phone");
+            session.SetPresetField("number", "+15550100");
+            Assert.Equal("tel:+15550100", session.Content);
+
+            // Raw remembers its own text — a composed payload is never
+            // inherited as free text. Every type keeps its own memory:
+            // presets their fields, raw its hand-typed box text.
+            var result = session.SetContentType("raw");
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal("raw", session.ContentPresetId);
+            Assert.Equal("typed by hand", session.Content);
+            Assert.True(session.HasValidRequest, session.StatusText);
+        }
+
+        [Fact]
+        public void Switching_back_to_raw_with_no_typed_history_shows_an_empty_box()
         {
             var (session, _) = NewSession();
             session.SetContentType("phone");
             session.SetPresetField("number", "+15550100");
             Assert.Equal("tel:+15550100", session.Content);
 
-            // Raw's only field IS the content box: picking Raw keeps the box's
-            // current payload verbatim — now plain free text again.
-            var result = session.SetContentType("raw");
+            session.SetContentType("raw");
 
-            Assert.True(result.Succeeded, result.Error?.Message);
             Assert.Equal("raw", session.ContentPresetId);
-            Assert.Equal("tel:+15550100", session.Content);
-            Assert.True(session.HasValidRequest, session.StatusText);
+            Assert.Equal(string.Empty, session.Content);
         }
 
         // ---------------- rejections ----------------
