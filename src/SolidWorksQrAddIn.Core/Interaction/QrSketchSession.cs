@@ -14,14 +14,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
     ///      <see cref="SetSizeText"/> and <see cref="SetGrowthText"/> store
-    ///      each input EXACTLY as entered (no trim/resolve/rewrite, no silent
-    ///      replacement of rejected values), re-validate, regenerate the QR
+    ///      each edit EXACTLY as entered (no trimming or replacing rejected
+    ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
     ///      input clears the picture — a stale preview must never look like a
     ///      valid rendering of bad input.
     ///
-    ///      The size text is the FINAL GROWN QR outline width in millimetres,
-    ///      excluding the clear margin (spec "Size and growth"); the growth
+    ///      The size text is the QR code width in the document's length unit,
+    ///      excluding the quiet zone (spec "Size and growth"); the growth
     ///      text is the percentage of cell width grown per side. Scaling is
     ///      uniform: growth changes preserve the entered outline size through
     ///      the cell-pitch recalculation p = S/(N + 2r).
@@ -48,7 +48,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
     /// </summary>
     public sealed class QrSketchSession
     {
-        /// <summary>The size the field starts with (mm): the final grown QR outline width.</summary>
+        /// <summary>The initial physical QR code width (mm), converted to the document's length unit.</summary>
         public const double InitialSizeMm = 25.0;
 
         /// <summary>The per-side outline growth the field starts with, as a cell-width fraction (3%).</summary>
@@ -77,10 +77,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// extrusion profile.
         /// </summary>
         public const string QuietZoneNote =
-            "The sketch carries two construction squares: the grown QR " +
-            "outline and the keep-out square, which bounds the 4-cell quiet " +
-            "zone scanners need around the code. Keep other geometry clear " +
-            "of it — the squares never join an extrusion profile.";
+            "The inner construction square marks the QR code size. The outer " +
+            "keep-out square marks the overall size, including the quiet zone. " +
+            "Keep this margin free of other markings so scanners can read the code. " +
+            "The squares are construction geometry and never form extrusion profiles.";
 
         private const string PromptText = "Enter the text or URL to encode.";
 
@@ -97,6 +97,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private readonly IHostStateWatcher? _hostWatcher;
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
+        private IQrSketchWindow? _attachedView;
         private string _content = string.Empty;
         private string _sizeText = InitialSizeText;
         private string _growthText = InitialGrowthPercentText;
@@ -105,14 +106,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
+        private HostLengthUnit _lengthUnit = HostLengthUnit.Millimetres;
 
         /// <param name="windowFactory">Builds the surface the session drives.</param>
         /// <param name="hostProvider">
-        /// Optional fresh-host factory the session consults ONLY for the
-        /// document's length unit when it formats the cell-size readout and
-        /// info lines — display state, never an insertion route (creates
-        /// still take the host per call). Null or a host that cannot be read
-        /// leaves the readout in millimetres, honestly labelled.
+        /// Optional fresh-host factory consulted for the document's length
+        /// unit when interpreting size input and formatting details. Creates
+        /// still take a separate host per call, never a cached insertion
+        /// route. Without a readable host the initial unit is millimetres;
+        /// a later read failure retains the last known unit.
         /// </param>
         /// <param name="hostWatcher">
         /// Optional host-state change source (active-document switch, length
@@ -126,6 +128,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
         {
             _windowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
             _hostProvider = hostProvider;
+            _lengthUnit = ReadLengthUnit();
+            _sizeText = FormatSizeText(InitialSizeMm, _lengthUnit);
             _hostWatcher = hostWatcher;
             if (_hostWatcher != null)
                 _hostWatcher.Changed += OnHostStateChanged;
@@ -136,13 +140,23 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>Host state changed behind the UI's back — refresh the unit-dependent display.</summary>
         private void OnHostStateChanged() => RefreshInfo();
 
+        public void AttachView(IQrSketchWindow view)
+        {
+            _attachedView = view ?? throw new ArgumentNullException(nameof(view));
+            NotifyWindow();
+        }
+
         // ---------------- inputs → geometry → picture ----------------
 
         /// <summary>The payload exactly as entered — meaningful whitespace included.</summary>
         public string Content => _content;
 
-        /// <summary>The size field exactly as entered (millimetres; "25" initially).</summary>
+        /// <summary>The size field in document units; converted when the document's unit changes.</summary>
         public string SizeText => _sizeText;
+
+        public HostLengthUnit LengthUnit => _lengthUnit;
+
+        public string SizeLabel => "QR code size (" + _lengthUnit.Symbol + "):";
 
         /// <summary>The growth field exactly as entered (percent per side; "3" initially).</summary>
         public string GrowthText => _growthText;
@@ -194,22 +208,49 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>
         /// Re-formats the cell-size readout and info lines against the
         /// document's CURRENT length unit — no regeneration, only display.
-        /// The pane calls this on a light timer and when it is shown, so a
+        /// Host notifications and showing the pane call this, so a
         /// document-unit change or document switch lands live even when the
         /// engineer has not edited a field. Best-effort: a host that cannot
         /// be read leaves the last formatting in place.
         /// </summary>
         public void RefreshInfo()
         {
-            if (_info == null)
+            var unit = ReadLengthUnit();
+            bool unitChanged = !SameUnit(unit, _lengthUnit);
+            if (unitChanged)
+            {
+                if (_sizeMm.HasValue)
+                    _sizeText = FormatSizeText(_sizeMm.Value, unit);
+                _lengthUnit = unit;
+                if (_current?.Error?.Kind == QrSketchErrorKind.InvalidSize)
+                {
+                    if (TryParseSize(_sizeText, _lengthUnit, out _, out string error))
+                    {
+                        Regenerate();
+                        return;
+                    }
+                    _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidSize, error);
+                    StatusText = error;
+                }
+            }
+            if (_info != null)
+            {
+                var lines = BuildInfoLines(_info, _content, out string cellSize);
+                if (!unitChanged && cellSize == CellSizeReadout && LinesEqual(lines, _infoLines))
+                    return;
+                CellSizeReadout = cellSize;
+                _infoLines = lines;
+            }
+            else if (!unitChanged)
                 return;
-            var lines = BuildInfoLines(_info, _content, out string cellSize);
-            if (cellSize == CellSizeReadout && LinesEqual(lines, _infoLines))
-                return;
-            CellSizeReadout = cellSize;
-            _infoLines = lines;
             NotifyWindow();
         }
+
+        private static bool SameUnit(HostLengthUnit a, HostLengthUnit b) =>
+            a.MetresPerUnit == b.MetresPerUnit && a.Symbol == b.Symbol;
+
+        private static string FormatSizeText(double mm, HostLengthUnit unit) =>
+            (mm / (unit.MetresPerUnit * 1000.0)).ToString("G12", CultureInfo.InvariantCulture);
 
         /// <summary>
         /// Records <paramref name="content"/> verbatim and re-validates the
@@ -223,13 +264,17 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
-        /// Records the size field verbatim (millimetres — the final grown QR
-        /// outline width, excluding the clear margin) and re-validates the
+        /// Records the QR code size field in document units, excluding the
+        /// quiet zone, and re-validates the
         /// whole request.
         /// </summary>
-        public QrSketchResult SetSizeText(string sizeText)
+        public QrSketchResult SetSizeText(string sizeText) => SetSizeText(sizeText, _lengthUnit);
+
+        public QrSketchResult SetSizeText(string sizeText, HostLengthUnit inputUnit)
         {
             _sizeText = sizeText ?? string.Empty;
+            if (!SameUnit(inputUnit, _lengthUnit) && TryParseSize(_sizeText, inputUnit, out double mm, out _))
+                _sizeText = FormatSizeText(mm, _lengthUnit);
             return Regenerate();
         }
 
@@ -247,7 +292,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         {
             // Field-level validity first so the error names the field that is
             // actually wrong; the generator still re-checks everything itself.
-            if (!TryParseSize(_sizeText, out double sizeMm, out string sizeError))
+            if (!TryParseSize(_sizeText, _lengthUnit, out double sizeMm, out string sizeError))
             {
                 _sizeMm = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidSize, sizeError);
@@ -290,40 +335,34 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         /// <summary>
         /// The info-section rows for the current request. Dimensions are
-        /// shown in the document's length unit; the QR outline also carries
-        /// its millimetre source because that is what the size field means.
+        /// shown only in the document's current length unit, matching the
+        /// size field's unit without any secondary-unit display.
         /// </summary>
         private IReadOnlyList<QrInfoLine> BuildInfoLines(
             QrSketchInfo info, string content, out string cellSize)
         {
-            var unit = ReadLengthUnit();
+            var unit = _lengthUnit;
             string FormatMm(double mm) =>
                 (mm / 1000.0 / unit.MetresPerUnit).ToString("G4", CultureInfo.InvariantCulture)
                 + " " + unit.Symbol;
 
             cellSize = FormatMm(info.PitchMm);
-            var outline = FormatMm(info.FinalSizeMm);
-            if (unit.MetresPerUnit != HostLengthUnit.Millimetres.MetresPerUnit)
-                outline = info.FinalSizeMm.ToString("G4", CultureInfo.InvariantCulture) + " mm (" + outline + ")";
-
             var lines = new List<QrInfoLine>
             {
-                new QrInfoLine("QR outline", outline),
+                new QrInfoLine("QR code size", FormatMm(info.FinalSizeMm)),
                 new QrInfoLine(
-                    "Footprint (incl. quiet zone)",
+                    "Overall size",
                     FormatMm(info.MatrixCellCount * info.PitchMm)),
-                new QrInfoLine(
-                    "Matrix",
-                    info.CellCount + " × " + info.CellCount + " data cells (" +
-                    info.MatrixCellCount + " × " + info.MatrixCellCount + " incl. quiet zone)"),
-                new QrInfoLine("Cell pitch", cellSize),
+                new QrInfoLine("QR grid", info.CellCount + " × " + info.CellCount + " cells"),
+                new QrInfoLine("With quiet zone", info.MatrixCellCount + " × " + info.MatrixCellCount + " cells"),
+                new QrInfoLine("Cell size", cellSize),
                 new QrInfoLine(
                     "Quiet zone",
                     QrSketchInfo.QuietZoneCellsPerSide + " cells (" +
                     FormatMm(QrSketchInfo.QuietZoneCellsPerSide * info.PitchMm) + ") per side"),
                 new QrInfoLine(
-                    "QR code",
-                    "V" + info.Version + " · ECC M · " + content.Length +
+                    "Encoding",
+                    "Version " + info.Version + " · ECC M · " + content.Length +
                     (content.Length == 1 ? " character" : " characters")),
             };
             return lines;
@@ -344,11 +383,11 @@ namespace SolidWorksQrAddIn.Core.Interaction
             try
             {
                 var state = _hostProvider?.Invoke().CaptureState();
-                return state?.LengthUnit ?? HostLengthUnit.Millimetres;
+                return state?.LengthUnit ?? _lengthUnit;
             }
             catch
             {
-                return HostLengthUnit.Millimetres;
+                return _lengthUnit;
             }
         }
 
@@ -360,7 +399,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         private void NotifyWindow()
         {
-            try { _window?.SyncFromSession(); }
+            try { (_attachedView ?? _window)?.SyncFromSession(); }
             catch { /* a dead dispatcher or stuck view must not trap the session */ }
         }
 
@@ -401,20 +440,22 @@ namespace SolidWorksQrAddIn.Core.Interaction
             return NumericFieldError.None;
         }
 
-        private static bool TryParseSize(string text, out double sizeMm, out string error)
+        private static bool TryParseSize(string text, HostLengthUnit unit, out double sizeMm, out string error)
         {
-            switch (ParseNumericField(text, "mm", v => v > 0.0, out sizeMm))
+            var result = ParseNumericField(text, unit.Symbol,
+                v => v > 0 && v * (unit.MetresPerUnit * 1000.0) > 0 &&
+                     !double.IsInfinity(v * (unit.MetresPerUnit * 1000.0)), out double value);
+            sizeMm = value * (unit.MetresPerUnit * 1000.0);
+            switch (result)
             {
                 case NumericFieldError.Empty:
-                    error = "Size is empty. Enter the final grown QR outline width " +
-                            "in millimetres, excluding the clear margin.";
+                    error = $"Size is empty. Enter the QR code width in {unit.Symbol}, excluding the quiet zone.";
                     return false;
                 case NumericFieldError.NotANumber:
-                    error = $"Size must be a number of millimetres — the final grown QR outline " +
-                            $"width, excluding the clear margin; got '{Shorten(text)}'.";
+                    error = $"Size must be a number in {unit.Symbol}, excluding the quiet zone; got '{Shorten(text)}'.";
                     return false;
                 case NumericFieldError.OutOfRange:
-                    error = $"Size must be a finite positive number of millimetres; got '{Shorten(text)}'.";
+                    error = $"Size must be a finite positive number in {unit.Symbol}; got '{Shorten(text)}'.";
                     return false;
                 default:
                     error = string.Empty;
@@ -428,15 +469,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
             switch (ParseNumericField(text, "%", p => p > 0.0 && p < 50.0, out double percent))
             {
                 case NumericFieldError.Empty:
-                    error = "Outline growth is empty. Enter the percentage of cell width " +
+                    error = "Cell growth is empty. Enter the percentage of cell width " +
                             "grown per side.";
                     return false;
                 case NumericFieldError.NotANumber:
-                    error = $"Outline growth must be a number — percent of cell width grown " +
+                    error = $"Cell growth must be a number — percent of cell width grown " +
                             $"per side; got '{Shorten(text)}'.";
                     return false;
                 case NumericFieldError.OutOfRange:
-                    error = $"Outline growth must be a finite percentage greater than 0% and " +
+                    error = $"Cell growth must be a finite percentage greater than 0% and " +
                             $"less than 50% of cell width per side; got '{Shorten(text)}'.";
                     return false;
                 default:
@@ -535,8 +576,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
         {
             if (_hostWatcher != null)
                 try { _hostWatcher.Changed -= OnHostStateChanged; } catch { }
-            var window = _window;
+            var window = _window ?? _attachedView;
             _window = null;
+            _attachedView = null;
             if (window == null) return;
             try { window.Closed -= OnWindowClosed; } catch { }
             try { window.Close(); } catch { }

@@ -14,7 +14,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             Value = value;
         }
 
-        /// <summary>What the fact is called ("QR outline", "Quiet zone").</summary>
+        /// <summary>What the fact is called ("QR code size", "Quiet zone").</summary>
         public string Label { get; }
 
         /// <summary>The formatted value, already carrying its unit symbol.</summary>

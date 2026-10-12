@@ -7,17 +7,17 @@ moment it is resolved in discussion, not before.
 
 - **Working matrix** — the `(N+8)×(N+8)` cell grid the generator operates
   on: N×N data cells plus the fixed quiet zone as light cells (ADR 0002).
-- **QR square** — the construction square bounding the grown QR-cell extent
-  (side = final size S). Lives INSIDE the block definition at real size
-  (ADR 0003/0004) — renders and tracks the instance's Scale/position.
-- **Keep-out square** — the construction square marking the quiet-zone
-  clearance: the working-matrix boundary, `(N+8) × cellPitch` per side,
-  always present. Same def-internal construction geometry as the QR square.
-- **Quiet zone** — the spec-mandated blank margin around a QR code that
-  scanners require: always the standard 4 modules per side (ISO 18004) — a
-  fixed constant, never a setting. Lives in the working matrix as light
-  cells; shows on the sketch as the keep-out square, never as cuttable
-  profile.
+- **QR code** — the square of marked cells encoding the content, including
+  the finder patterns. Does not include the quiet zone.
+- **QR code size** — the width and height of the QR code, excluding the
+  quiet zone. Cell growth does not change this requested size.
+- **Overall size** — the width and height of the QR code including its quiet
+  zone, bounded by the keep-out square.
+- **QR square** — the inner construction square marking the QR code size.
+- **Keep-out square** — the outer construction square marking the overall
+  reserved area: the QR code plus its quiet zone.
+- **Quiet zone** — the blank four-cell margin on each side of a QR code
+  that scanners require. It must remain clear of other markings.
 - **Cell pitch** — centre-to-centre spacing of QR modules:
   `finalSize / (dataCells + 2 × growthFraction)`.
 - **Size readout** — the numeric size surfaces are the pane's info section

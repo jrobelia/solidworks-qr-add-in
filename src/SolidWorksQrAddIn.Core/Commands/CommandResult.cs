@@ -16,9 +16,8 @@ namespace SolidWorksQrAddIn.Core.Commands
 
         public static CommandResult Success(string createdSketchName, int segmentCount) =>
             new CommandResult(true,
-                $"Created sketch '{createdSketchName}' as one QR block instance " +
-                $"({segmentCount} contour segments folded into its definition); " +
-                "the sketch is open for editing.",
+                $"Created sketch '{createdSketchName}' with one QR code block. " +
+                "The sketch is open for editing.",
                 createdSketchName);
 
         public static CommandResult Failure(string message) =>

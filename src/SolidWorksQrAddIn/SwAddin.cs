@@ -169,6 +169,7 @@ namespace SolidWorksQrAddIn
                     _session, CreateSketchHost,
                     () => { try { _taskPaneView?.ShowView(); } catch { } },
                     () => { try { _taskPaneView?.HideView(); } catch { } });
+                _session.AttachView(_pane);
 
                 _taskPaneView = (ITaskpaneView)_sw.CreateTaskpaneView2(
                     paneIcon, "QR Sketch");

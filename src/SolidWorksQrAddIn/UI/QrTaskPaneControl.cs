@@ -52,6 +52,10 @@ namespace SolidWorksQrAddIn.UI
         /// <summary>The pane tab is currently shown (not hidden/closed).</summary>
         public bool IsOpen => _isOpen;
 
+        public string InfoSnapshot => !IsHandleCreated || !InvokeRequired
+            ? _view.InfoSnapshot
+            : (string)Invoke(new Func<string>(() => _view.InfoSnapshot));
+
         /// <summary>
         /// Show the pane: bring the tab forward so the engineer lands on the
         /// QR UI, and re-pull the session state so a tab re-shown after a

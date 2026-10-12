@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -51,6 +52,8 @@ namespace SolidWorksQrAddIn.UI
         private readonly Func<ISketchHost> _hostProvider;
         private readonly TextBox _contentBox;
         private readonly TextBox _sizeBox;
+        private readonly TextBlock _sizeLabel;
+        private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
@@ -87,16 +90,17 @@ namespace SolidWorksQrAddIn.UI
             panel.Children.Add(_contentBox);
 
             // Spec budget: content, size, growth, picture, Create.
-            panel.Children.Add(new TextBlock
+            _sizeInputUnit = _session.LengthUnit;
+            _sizeLabel = new TextBlock
             {
-                Text = "QR size (mm):",
+                Text = _session.SizeLabel,
                 Margin = new Thickness(0, 8, 0, 4),
-            });
+            };
+            panel.Children.Add(_sizeLabel);
             _sizeBox = new TextBox
             {
-                ToolTip = "Width of the grown QR outline in millimetres — the square " +
-                          "the dark cells span. The 4-cell quiet-zone margin around " +
-                          "it is not included.",
+                ToolTip = "Width and height of the QR code in the document's length unit. " +
+                          "The quiet zone is not included.",
             };
             panel.Children.Add(_sizeBox);
 
@@ -107,9 +111,9 @@ namespace SolidWorksQrAddIn.UI
             });
             _growthBox = new TextBox
             {
-                ToolTip = "How far each dark cell grows past its own outline on every " +
-                          "side, as a percentage of one cell's width. Merges " +
-                          "corner-only contacts between diagonal cells.",
+                ToolTip = "Widens each dark cell on all sides by this percentage of " +
+                          "the cell spacing, helping diagonally touching cells connect. " +
+                          "The QR code size stays fixed.",
             };
             panel.Children.Add(_growthBox);
 
@@ -200,8 +204,6 @@ namespace SolidWorksQrAddIn.UI
             // showing the tab is one more honest moment to re-read, in case
             // the pane missed an event while hidden.
             IsVisibleChanged += (_, __) => { if (IsVisible) _session.RefreshInfo(); };
-            _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
-            _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
 
             // The pane outlives any one "open" — pull the session's existing
             // inputs so a session that outlives a hidden tab still shows the
@@ -228,6 +230,9 @@ namespace SolidWorksQrAddIn.UI
         /// </summary>
         public void SyncFromSession()
         {
+            if (_sizeDirty && (_sizeInputUnit.MetresPerUnit != _session.LengthUnit.MetresPerUnit ||
+                               _sizeInputUnit.Symbol != _session.LengthUnit.Symbol))
+                FlushPendingEdits();
             _suppressFieldEvents = true;
             try
             {
@@ -276,7 +281,7 @@ namespace SolidWorksQrAddIn.UI
             if (_sizeDirty)
             {
                 _sizeDirty = false;
-                _session.SetSizeText(_sizeBox.Text);
+                _session.SetSizeText(_sizeBox.Text, _sizeInputUnit);
             }
             if (_growthDirty)
             {
@@ -304,6 +309,8 @@ namespace SolidWorksQrAddIn.UI
 
         private void RefreshView()
         {
+            _sizeInputUnit = _session.LengthUnit;
+            _sizeLabel.Text = _session.SizeLabel;
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
             RebuildInfoRows();
             ShowStatus(_session.StatusText, isError: !_session.HasValidRequest);
@@ -327,12 +334,19 @@ namespace SolidWorksQrAddIn.UI
                 {
                     Text = lines[i].Label,
                     Foreground = SystemColors.GrayTextBrush,
-                    Margin = new Thickness(0, 0, 10, 0),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 10, 3),
                 };
                 var value = new TextBlock
                 {
                     Text = lines[i].Value,
                     TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 3),
+                    ToolTip = lines[i].Label == "Cell size"
+                        ? "Spacing from one cell to the next, before cell growth."
+                        : lines[i].Label == "Overall size"
+                            ? "Width and height including the quiet zone."
+                            : null,
                 };
                 Grid.SetRow(label, i);
                 Grid.SetRow(value, i);
@@ -343,6 +357,18 @@ namespace SolidWorksQrAddIn.UI
             _infoSection.Visibility = lines.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
+        }
+
+        public string InfoSnapshot
+        {
+            get
+            {
+                var labels = _infoGrid.Children.OfType<TextBlock>();
+                var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
+                string cellText = cell == null ? string.Empty : labels.First(
+                    x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
+                return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText}";
+            }
         }
 
         private void ShowStatus(string text, bool isError)

@@ -178,13 +178,13 @@ namespace SolidWorksQrAddIn.Tests
             // "SW-QR-MVP" → version 1 (N=21, M=29): outline 25 mm, pitch
             // 25/21.06 = 1.187 mm, quiet zone 4 cells = 4.748 mm per side,
             // footprint 29·p = 34.43 mm.
-            Assert.Equal("25 mm", InfoValue(session, "QR outline"));
-            Assert.Equal("34.43 mm", InfoValue(session, "Footprint (incl. quiet zone)"));
-            Assert.Equal("21 × 21 data cells (29 × 29 incl. quiet zone)",
-                InfoValue(session, "Matrix"));
-            Assert.Equal("1.187 mm", InfoValue(session, "Cell pitch"));
+            Assert.Equal("25 mm", InfoValue(session, "QR code size"));
+            Assert.Equal("34.43 mm", InfoValue(session, "Overall size"));
+            Assert.Equal("21 × 21 cells", InfoValue(session, "QR grid"));
+            Assert.Equal("29 × 29 cells", InfoValue(session, "With quiet zone"));
+            Assert.Equal("1.187 mm", InfoValue(session, "Cell size"));
             Assert.Equal("4 cells (4.748 mm) per side", InfoValue(session, "Quiet zone"));
-            Assert.Equal("V1 · ECC M · 9 characters", InfoValue(session, "QR code"));
+            Assert.Equal("Version 1 · ECC M · 9 characters", InfoValue(session, "Encoding"));
         }
 
         [Fact]
@@ -203,10 +203,194 @@ namespace SolidWorksQrAddIn.Tests
             watcher.RaiseChanged();
 
             Assert.Equal("0.04674 in", session.CellSizeReadout);
-            Assert.Equal("0.04674 in", InfoValue(session, "Cell pitch"));
-            // The outline keeps its millimetre source (that is what the size
-            // field means) with the document-unit equivalent alongside.
-            Assert.Equal("25 mm (0.9843 in)", InfoValue(session, "QR outline"));
+            Assert.Equal("0.04674 in", InfoValue(session, "Cell size"));
+            // The size is expressed only in the document's current unit;
+            // the physical size remains the same after conversion.
+            Assert.Equal("0.9843 in", InfoValue(session, "QR code size"));
+        }
+
+        [Fact]
+        public void A_directly_opened_task_pane_receives_unit_changes_without_the_menu_command()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            var pane = new FakeQrWindow();
+            pane.ShowModeless();
+            session.AttachView(pane);
+            session.SetContent(Content);
+            int before = pane.SyncCount;
+
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            watcher.RaiseChanged();
+
+            Assert.Equal("0.04674 in", session.CellSizeReadout);
+            Assert.True(pane.SyncCount > before, "The directly opened pane was not notified.");
+            Assert.Equal(0, session.WindowsCreated);
+        }
+
+        [Fact]
+        public void Inch_size_input_is_converted_to_millimetres_for_geometry()
+        {
+            var host = HostWithSelectedPlane();
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            var (session, _) = NewSession(host);
+
+            session.SetContent(Content);
+            session.SetSizeText("1");
+
+            Assert.True(session.HasValidRequest, session.StatusText);
+            Assert.Equal(25.4, session.RequestedSizeMm!.Value, 10);
+            Assert.Equal(25.4, session.CurrentResult!.Sketch!.Info.FinalSizeMm, 10);
+        }
+
+        [Fact]
+        public void Unit_changes_convert_the_input_without_changing_the_physical_request()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            session.SetSizeText("40");
+            var request = session.CurrentResult;
+            session.OpenOrFocusWindow();
+
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            watcher.RaiseChanged();
+
+            Assert.Equal(40 / 25.4,
+                double.Parse(session.SizeText, System.Globalization.CultureInfo.InvariantCulture), 10);
+            Assert.Equal(40, session.RequestedSizeMm);
+            Assert.Same(request, session.CurrentResult);
+            Assert.All(session.InfoLines, line => Assert.DoesNotContain(" mm", line.Value));
+        }
+
+        [Fact]
+        public void Unit_changes_convert_the_default_even_before_content_is_entered()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+
+            watcher.RaiseChanged();
+
+            Assert.Equal(25 / 25.4,
+                double.Parse(session.SizeText, System.Globalization.CultureInfo.InvariantCulture), 10);
+            Assert.Empty(session.InfoLines);
+        }
+
+        [Fact]
+        public void Size_label_and_input_follow_the_document_unit_without_valid_content()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            Assert.Equal("QR code size (mm):", session.SizeLabel);
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+
+            watcher.RaiseChanged();
+
+            Assert.Equal("QR code size (in):", session.SizeLabel);
+            session.SetSizeText("1 in");
+            Assert.Equal(25.4, session.RequestedSizeMm!.Value, 10);
+        }
+
+        [Fact]
+        public void A_pending_size_edit_keeps_its_original_unit_when_committed_after_a_unit_change()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            var editingUnit = session.LengthUnit;
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            watcher.RaiseChanged();
+
+            session.SetSizeText("40", editingUnit);
+
+            Assert.Equal(40, session.RequestedSizeMm!.Value, 8);
+            Assert.Equal(40 / 25.4,
+                double.Parse(session.SizeText, System.Globalization.CultureInfo.InvariantCulture), 10);
+        }
+
+        [Fact]
+        public void Invalid_size_text_is_not_replaced_by_a_unit_change()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            session.SetSizeText("not a size");
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+
+            watcher.RaiseChanged();
+
+            Assert.Equal("not a size", session.SizeText);
+            Assert.Equal("QR code size (in):", session.SizeLabel);
+            Assert.False(session.HasValidRequest);
+            Assert.Empty(session.InfoLines);
+            Assert.Contains("in", session.StatusText);
+            Assert.DoesNotContain("millimetres", session.StatusText);
+        }
+
+        [Fact]
+        public void A_size_suffix_that_becomes_valid_in_the_new_unit_revalidates_immediately()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            session.SetSizeText("1 in");
+            Assert.False(session.HasValidRequest);
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+
+            watcher.RaiseChanged();
+
+            Assert.True(session.HasValidRequest, session.StatusText);
+            Assert.Equal(25.4, session.RequestedSizeMm!.Value, 10);
+            Assert.Equal("1 in", session.SizeText);
+        }
+
+        [Fact]
+        public void A_repeated_unit_event_does_not_refresh_unchanged_info()
+        {
+            var host = HostWithSelectedPlane();
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            var pane = new FakeQrWindow();
+            session.AttachView(pane);
+            session.SetContent(Content);
+            int before = pane.SyncCount;
+
+            watcher.RaiseChanged();
+
+            Assert.Equal(before, pane.SyncCount);
+        }
+
+        [Fact]
+        public void An_unreadable_host_preserves_the_last_known_unit()
+        {
+            var host = HostWithSelectedPlane();
+            host.Document!.MetresPerLengthUnit = 0.0254;
+            host.Document.LengthUnitSymbol = "in";
+            var watcher = new TestHostStateWatcher();
+            var (session, _) = NewSession(host, watcher);
+            session.SetContent(Content);
+            host.ThrowOnCapture = true;
+
+            watcher.RaiseChanged();
+
+            Assert.Equal("QR code size (in):", session.SizeLabel);
+            Assert.Equal("0.04674 in", session.CellSizeReadout);
         }
 
         [Fact]
