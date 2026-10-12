@@ -13,7 +13,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
     /// headlessly testable core. Owns three things:
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
-    ///      <see cref="SetSizeText"/> and <see cref="SetGrowthText"/> store
+    ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/> and
+    ///      <see cref="SetInvert"/> store
     ///      each edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
@@ -103,6 +104,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private string _growthText = InitialGrowthPercentText;
         private double? _sizeMm = InitialSizeMm;
         private double? _growthFraction = InitialGrowthFractionPerSide;
+        private bool _invert;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
@@ -172,6 +174,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// growth text holds no usable value.
         /// </summary>
         public double? RequestedGrowthFractionPerSide => _growthFraction;
+
+        /// <summary>
+        /// The output polarity in force (ADR 0002): false emits the dark
+        /// cells — black code on a light field; true emits the light cells —
+        /// a white-on-black field for marking/engraving. Default off.
+        /// </summary>
+        public bool Invert => _invert;
 
         /// <summary>The generation result for the current inputs (null until the first edit).</summary>
         public QrSketchResult? CurrentResult => _current;
@@ -288,6 +297,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
             return Regenerate();
         }
 
+        /// <summary>
+        /// Flips the output polarity and re-validates the whole request: with
+        /// <paramref name="invert"/> the emitted contours are the working
+        /// matrix's light cells — a dark field with the code left unmarked —
+        /// and the picture renders that same result (what you see is what
+        /// gets sketched). Applies to future creates only; existing sketches
+        /// are never mutated.
+        /// </summary>
+        public QrSketchResult SetInvert(bool invert)
+        {
+            _invert = invert;
+            return Regenerate();
+        }
+
         private QrSketchResult Regenerate()
         {
             // Field-level validity first so the error names the field that is
@@ -307,7 +330,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
-                _current = QrSketchGenerator.Generate(_content, sizeMm, growthFraction);
+                _current = QrSketchGenerator.Generate(_content, sizeMm, growthFraction, _invert);
             }
 
             if (_current.Succeeded)
@@ -364,6 +387,11 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     "Encoding",
                     "Version " + info.Version + " · ECC M · " + content.Length +
                     (content.Length == 1 ? " character" : " characters")),
+                new QrInfoLine(
+                    "Polarity",
+                    info.Inverted
+                        ? "Inverted — light code on a dark field"
+                        : "Dark code on a light field"),
             };
             return lines;
         }
@@ -518,7 +546,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             try
             {
                 result = _command.Execute(
-                    host, _content, _sizeMm!.Value, _growthFraction!.Value);
+                    host, _content, _sizeMm!.Value, _growthFraction!.Value, _invert);
             }
             catch (Exception ex)
             {

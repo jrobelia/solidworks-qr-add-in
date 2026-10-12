@@ -81,6 +81,10 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   errors (empty content, non-finite/≤0 size, growth outside (0, 0.5), payload
   beyond QR capacity at ECC M), and direct validator rejections (zero area,
   zero-length edge, self-intersection, pinched + pair corner contacts).
+  Inverted polarity (ticket 25, `QrInvertTests`): the emitted contours are
+  the working matrix's light cells — one field bounded at the matrix edge
+  (the keep-out square), the code left as shrunken pockets, the same
+  insertion guard.
 - **Command** (`CreateQrSketchCommand`): eligibility (no doc, assembly/drawing,
   no/other selection, already-editing sketch), insertion request through the
   test adapter, per-request geometry (explicit size/growth; byte-exact payload,
@@ -99,10 +103,12 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   the creation, never prior user work.
 - **Picture** (`QrPictureRenderer`): 4-cell white margin, grown-union fill
   (diagonal overlap rendered, bounded growth), ring/hole/island nesting,
-  orientation, material-area parity, deterministic signature.
+  orientation, material-area parity, deterministic signature — plus the
+  inverted field through the same render path (no second renderer).
 - **Session** (`QrSketchSession`): valid↔invalid transitions with stale-picture
   clearing, exact content, size/growth field parsing (mm / % per side) with
-  useful errors and verbatim-kept rejected text, a plain Ready status with no
+  useful errors and verbatim-kept rejected text, invert toggle → regenerated
+  inverted request + picture + polarity info line, a plain Ready status with no
   version/cell/size readouts, current-request insertion, fresh host
   revalidation (no stale cross-document support), create blocked while
   editing, single-surface lifecycle (focus-or-recreate, close, release — the

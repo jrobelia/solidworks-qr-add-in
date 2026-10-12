@@ -35,8 +35,12 @@ namespace SolidWorksQrAddIn.Core.Commands
     {
         /// <param name="sizeMm">Final grown QR outline width (mm), excluding the clear margin.</param>
         /// <param name="growthFractionPerSide">Per-side outline growth as a fraction of cell width.</param>
+        /// <param name="invert">Output polarity (ADR 0002): emit the working
+        /// matrix's light cells — a dark field with the code left unmarked —
+        /// instead of the dark cells.</param>
         public CommandResult Execute(
-            ISketchHost host, string content, double sizeMm, double growthFractionPerSide)
+            ISketchHost host, string content, double sizeMm, double growthFractionPerSide,
+            bool invert = false)
         {
             if (host == null) throw new ArgumentNullException(nameof(host));
 
@@ -101,7 +105,7 @@ namespace SolidWorksQrAddIn.Core.Commands
 
             // Generate + validate all geometry before the host is touched.
             var generated = QrSketchGenerator.Generate(
-                content, sizeMm, growthFractionPerSide);
+                content, sizeMm, growthFractionPerSide, invert);
             if (!generated.Succeeded)
                 return CommandResult.Failure(
                     $"QR geometry could not be generated: {generated.Error!.Message}");
