@@ -64,6 +64,28 @@ namespace SolidWorksQrAddIn.UI
         /// </summary>
         private static readonly TimeSpan EditDebounce = TimeSpan.FromMilliseconds(400);
 
+        /// <summary>
+        /// One ECC dropdown entry — the level code the session parser and
+        /// probes speak (<see cref="Code"/>, what SelectedValue returns) plus
+        /// the label shown in the list: the code first, then what the level
+        /// means (<see cref="Label"/>).
+        /// </summary>
+        private sealed class EccOption
+        {
+            public string Code { get; }
+            public string Label { get; }
+            public EccOption(string code, string label) { Code = code; Label = label; }
+            public override string ToString() => Label;
+        }
+
+        private static readonly EccOption[] EccOptions =
+        {
+            new EccOption("L", "L — low, ~7% damage recovery"),
+            new EccOption("M", "M — medium, ~15% damage recovery"),
+            new EccOption("Q", "Q — quartile, ~25% damage recovery"),
+            new EccOption("H", "H — high, ~30% damage recovery"),
+        };
+
         private readonly QrSketchSession _session;
         private readonly Func<ISketchHost> _hostProvider;
         private readonly ComboBox _presetCombo;
@@ -176,10 +198,13 @@ namespace SolidWorksQrAddIn.UI
             });
             _eccBox = new ComboBox
             {
-                ItemsSource = new[] { "L", "M", "Q", "H" },
-                ToolTip = "QR error-correction level. A higher level survives more " +
-                          "damage but packs more cells into the same size — " +
-                          "H is densest, L lightest. M is the default.",
+                ItemsSource = EccOptions,
+                DisplayMemberPath = nameof(EccOption.Label),
+                SelectedValuePath = nameof(EccOption.Code),
+                ToolTip = "QR error-correction level — how much damage the code " +
+                          "survives. A higher level recovers more but packs more " +
+                          "cells into the same size — H is densest, L lightest. " +
+                          "M is the default.",
             };
             panel.Children.Add(_eccBox);
 
@@ -275,7 +300,16 @@ namespace SolidWorksQrAddIn.UI
                 Margin = new Thickness(0, 8, 0, 0),
             };
             panel.Children.Add(_status);
-            Content = panel;
+
+            // The pane is taller than the task-pane host once preset fields
+            // and the info section are shown — scroll vertically rather than
+            // clip. Horizontal is disabled so text wraps to the pane width.
+            Content = new ScrollViewer
+            {
+                Content = panel,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            };
 
             _editDebounce = new DispatcherTimer { Interval = EditDebounce };
             _editDebounce.Tick += (_, __) => FlushPendingEdits();
@@ -286,11 +320,11 @@ namespace SolidWorksQrAddIn.UI
             // the level lands in the session immediately.
             _eccBox.SelectionChanged += (_, __) =>
             {
-                if (_suppressFieldEvents || _eccBox.SelectedItem == null)
+                if (_suppressFieldEvents || _eccBox.SelectedValue == null)
                     return;
                 // The shared parser seam — an unrecognized level is refused
                 // rather than coerced, exactly like the probe surface.
-                if (QrEccLevels.TryParse(_eccBox.SelectedItem as string,
+                if (QrEccLevels.TryParse(_eccBox.SelectedValue as string,
                         out QRCodeGenerator.ECCLevel ecc))
                     _session.SetEccLevel(ecc);
             };
@@ -312,7 +346,7 @@ namespace SolidWorksQrAddIn.UI
                 _contentBox.Text = _session.Content;
                 _sizeBox.Text = _session.SizeText;
                 _growthBox.Text = _session.GrowthText;
-                _eccBox.SelectedItem = _session.EccLevel.ToString();
+                _eccBox.SelectedValue = _session.EccLevel.ToString();
                 _invertBox.IsChecked = _session.Invert;
             }
             finally { _suppressFieldEvents = false; }
@@ -352,8 +386,8 @@ namespace SolidWorksQrAddIn.UI
                     _sizeBox.Text = _session.SizeText;
                 if (!_growthDirty && _growthBox.Text != _session.GrowthText)
                     _growthBox.Text = _session.GrowthText;
-                if (!Equals(_eccBox.SelectedItem, _session.EccLevel.ToString()))
-                    _eccBox.SelectedItem = _session.EccLevel.ToString();
+                if (!Equals(_eccBox.SelectedValue, _session.EccLevel.ToString()))
+                    _eccBox.SelectedValue = _session.EccLevel.ToString();
                 // A toggle carries no in-progress state — always re-pull.
                 if (_invertBox.IsChecked != _session.Invert)
                     _invertBox.IsChecked = _session.Invert;
@@ -720,7 +754,7 @@ namespace SolidWorksQrAddIn.UI
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
-                       $"viewEcc={_eccBox.SelectedItem} viewInvert={_invertBox.IsChecked == true}";
+                       $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true}";
             }
         }
 

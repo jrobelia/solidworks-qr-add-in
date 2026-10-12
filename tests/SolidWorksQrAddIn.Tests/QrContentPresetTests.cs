@@ -164,6 +164,27 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
+        public void Switching_types_clears_the_payload_until_the_new_fields_compose()
+        {
+            var (session, _) = NewSession();
+            session.SetContent(PayloadA);
+            Assert.Equal(PayloadA, session.Content);
+
+            // Picking a different type drops the previous payload — the box
+            // only ever shows text the CURRENT type produced, never another
+            // type's leftovers beside the new field inputs.
+            var result = session.SetContentType("phone");
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(string.Empty, session.Content);
+            Assert.False(session.HasValidRequest);
+
+            // The fields composing again re-fills the box verbatim.
+            session.SetPresetField("number", "+15550100");
+            Assert.Equal("tel:+15550100", session.Content);
+        }
+
+        [Fact]
         public void A_compose_error_blocks_create_without_touching_the_host()
         {
             var (session, _) = NewSession();

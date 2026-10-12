@@ -359,11 +359,11 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// remembered fields (defaults on first pick): a composed payload
         /// lands in the content box verbatim; a field set that cannot compose
         /// fails the request openly — the composer's message on the status
-        /// line and no picture — while the box keeps its LAST text until the
-        /// fields compose again (the INVALID status is the signal that the
-        /// box is not what the fields describe). An unknown id is refused
-        /// with the composer's UnknownPreset error — the current selection
-        /// stays in force.
+        /// line, no picture, and an EMPTY content box: the box only ever
+        /// shows text the CURRENT type produced, so a stale payload can
+        /// never sit beside fields it was not composed from. An unknown id
+        /// is refused with the composer's UnknownPreset error — the current
+        /// selection stays in force.
         /// </summary>
         public QrSketchResult SetContentType(string? presetId)
         {
@@ -412,16 +412,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// Composes the current preset's fields. Success lands the literal
         /// payload in <see cref="_content"/> — written directly, NOT through
         /// <see cref="SetContent"/>, which is the manual-edit path that
-        /// reverts to Raw — and clears the compose error. Failure keeps the
-        /// error pending (and the box's last text) for <see cref="Regenerate"/>
-        /// to report.
+        /// reverts to Raw — and clears the compose error. Failure clears the
+        /// content (the box only ever holds text the current type produced)
+        /// and keeps the error pending for <see cref="Regenerate"/> to report.
         /// </summary>
         private QrSketchResult ComposePreset()
         {
             var compose = PayloadComposer.Compose(_preset.Id, PresetFields);
             _preset.ComposeError = compose.Error;
-            if (compose.Succeeded)
-                _content = compose.Content!;
+            _content = compose.Succeeded ? compose.Content! : string.Empty;
             return Regenerate();
         }
 
