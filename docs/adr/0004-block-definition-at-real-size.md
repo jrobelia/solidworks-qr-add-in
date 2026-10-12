@@ -22,11 +22,12 @@ against entity picks; the decisive experiments were the engineer's own:
 - **Explode the add-in's block, re-make a block from the same geometry
   (Tools > Blocks > Make) → the sketch extrudes normally.** A user-made
   block is definition at real size + instance `Scale = 1`.
-- **On a pre-fix sketch, setting `Scale = 1` (shrinking the rendered QR
-  to 1 mm) also restores extrusion** — the interactive picker refuses at
-  `Scale = 25`, not at `Scale = 1`. Whether intermediate factors (0.5,
-  1.6, 2 …) break picking was not isolated; `Scale = 1` is the only
-  verified-working non-trivial state.
+- **On a pre-fix sketch, lowering `Scale` restores extrusion** —
+  engineer-tested values on the unit def: works at `Scale = 1` and `2`,
+  refused at `Scale = 10` and `25`. The cutoff sits somewhere in (2, 10]
+  — mechanism unexplained (a pick-tolerance-versus-def-space-cell-size
+  effect would fit, unverified). `Scale = 1` remains the only state that
+  is verified-working for every def shape.
 
 ## Decision
 
@@ -46,10 +47,11 @@ against entity picks; the decisive experiments were the engineer's own:
 - The interactive extrude path is restored to what a user-made block
   does: region-pick inside a cell, or explode → select-all → extrude.
 - **Caveat, same mechanism:** a later `Scale` edit may re-break
-  interactive region-picking — only `Scale = 1` is verified-working and
-  `Scale = 25` verified-broken; intermediate factors are untested. If
-  picking fails after a resize, explode, or re-insert at the new size
-  instead.
+  interactive region-picking — on the unit def, picking worked at `Scale`
+  1 and 2 and failed at 10 and 25; the real-size def's factor behaviour is
+  untested (its def cells are 25× larger, so the same thresholds may not
+  apply). If picking fails after a resize, explode, or re-insert at the
+  new size instead.
 - "Edit Scale to resize" survives, now in ratio units — slightly less
   direct than typing the mm size (the ADR 0001 readout elegance), which
   is the accepted cost of an extrudable sketch.

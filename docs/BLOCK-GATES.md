@@ -8,13 +8,13 @@ definition (`Scale = 25` carrying the size), selecting the QR sketch and
 clicking Extrude produced SolidWorks' "doubly nested contour" prompt and
 no cell region could be picked. Control experiments: **explode the
 add-in's block and re-make a block by hand (real-size def, `Scale = 1`)
-→ extrudes; and on the same pre-fix sketch, `Scale → 1` alone →
-extrudes.** Verified: broken at `Scale = 25`, working at `Scale = 1`;
-intermediate factors untested, so the safe claim is that `Scale = 1` is
-the known-good state. The fix is to emit the user-made-block shape:
-definition at the staged size, instance at `Scale = 1`; the PM Scale
-field is now a resize factor (a later Scale edit may re-break picking —
-explode or re-insert then).
+→ extrudes; and on the same pre-fix sketch, lowering `Scale` restores
+extrusion.** Verified on the unit def: works at `Scale = 1` and `2`,
+broken at `10` and `25` — the cutoff is between 2 and 10, mechanism
+unexplained. The fix is to emit the user-made-block shape: definition at
+the staged size, instance at `Scale = 1`; the PM Scale field is now a
+resize factor (a later Scale edit may re-break picking — explode or
+re-insert then).
 
 Updated `blockqr` gates (`Program.cs`):
 

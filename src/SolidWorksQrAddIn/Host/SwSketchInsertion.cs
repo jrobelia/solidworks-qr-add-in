@@ -154,7 +154,8 @@ namespace SolidWorksQrAddIn.Host
         /// (1 doc unit) and carried the size on instance Scale — at
         /// Scale 25 SolidWorks' interactive contour picker refused the
         /// sketch ("doubly nested contour"); engineer-verified the same
-        /// block extrudes at Scale 1 (intermediate factors untested). A
+        /// block extrudes at Scale 1 and 2, refuses at 10+ — the cutoff
+        /// sits between 2 and 10. A
         /// block the user makes by hand is always real-size + Scale 1 —
         /// matching that shape restores the interactive extrude path
         /// while keeping every block property (move/scale as a unit,
