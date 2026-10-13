@@ -122,6 +122,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _shapeParamLabel;
         private readonly TextBox _shapeParamBox;
         private readonly CheckBox _invertBox;
+        private readonly CheckBox _keepFunctionSquareBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
         private readonly Grid _infoGrid;
@@ -290,6 +291,24 @@ namespace SolidWorksQrAddIn.UI
             _invertBox.Unchecked += OnInvertToggled;
             panel.Children.Add(_invertBox);
 
+            // The function-pattern carve-out (spec #13, ticket #34): the
+            // same committed-edit checkbox convention as invert — one
+            // click is one session edit, never debounced. Off by default.
+            // Applies to future creates only.
+            _keepFunctionSquareBox = new CheckBox
+            {
+                Content = "Keep function patterns square",
+                ToolTip = "Always draws the QR's structural cells — the corner " +
+                          "finder patterns, the timing bands and the alignment " +
+                          "patterns — as squares, while every other cell takes " +
+                          "the selected shape. Applies to the next sketch " +
+                          "created — existing sketches are never changed.",
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            _keepFunctionSquareBox.Checked += OnKeepFunctionSquareToggled;
+            _keepFunctionSquareBox.Unchecked += OnKeepFunctionSquareToggled;
+            panel.Children.Add(_keepFunctionSquareBox);
+
             var frame = new Border
             {
                 BorderBrush = SystemColors.ControlDarkBrush,
@@ -425,6 +444,7 @@ namespace SolidWorksQrAddIn.UI
                 _shapeBox.SelectedValue = QrCellShapes.CodeFor(_session.CellShape);
                 _shapeParamBox.Text = _session.ShapeParameterText;
                 _invertBox.IsChecked = _session.Invert;
+                _keepFunctionSquareBox.IsChecked = _session.KeepFunctionPatternsSquare;
             }
             finally { _suppressFieldEvents = false; }
             RebuildPresetFields();
@@ -473,6 +493,8 @@ namespace SolidWorksQrAddIn.UI
                 // A toggle carries no in-progress state — always re-pull.
                 if (_invertBox.IsChecked != _session.Invert)
                     _invertBox.IsChecked = _session.Invert;
+                if (_keepFunctionSquareBox.IsChecked != _session.KeepFunctionPatternsSquare)
+                    _keepFunctionSquareBox.IsChecked = _session.KeepFunctionPatternsSquare;
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -739,6 +761,19 @@ namespace SolidWorksQrAddIn.UI
             if (_suppressFieldEvents)
                 return;
             _session.SetInvert(_invertBox.IsChecked == true);
+        }
+
+        /// <summary>
+        /// The carve-out toggle is a committed edit on click — same
+        /// convention as the invert checkbox: pushed into the session at
+        /// once, never through the keystroke debounce.
+        /// </summary>
+        private void OnKeepFunctionSquareToggled(object? sender, RoutedEventArgs e)
+        {
+            if (_suppressFieldEvents)
+                return;
+            _session.SetKeepFunctionPatternsSquare(
+                _keepFunctionSquareBox.IsChecked == true);
         }
 
         private void OnCreateClicked(object? sender, RoutedEventArgs e)

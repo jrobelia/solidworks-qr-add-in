@@ -120,6 +120,7 @@ namespace SolidWorksQrAddIn
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
                   $"preset={_session.ContentPresetId} " +
                   $"ecc={_session.EccLevel} invert={_session.Invert} " +
+                  $"keepFn={_session.KeepFunctionPatternsSquare} " +
                   $"shape={QrCellShapes.CodeFor(_session.CellShape)} " +
                   $"shapeParam={_session.ShapeParameterText} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
@@ -162,6 +163,15 @@ namespace SolidWorksQrAddIn
 
         public string SetQrInvertProbe(bool invert) =>
             FieldProbe(s => s.SetInvert(invert));
+
+        /// <summary>
+        /// The pane's keep-function-patterns-square checkbox, probed: a
+        /// committed toggle through the session setter like every other
+        /// field probe (ticket #34 — ticket #36's live gates drive the
+        /// carve-out through here).
+        /// </summary>
+        public string SetQrKeepFunctionSquareProbe(bool keepSquare) =>
+            FieldProbe(s => s.SetKeepFunctionPatternsSquare(keepSquare));
 
         /// <summary>
         /// The pane's cell-shape selector, probed: parse the picked shape

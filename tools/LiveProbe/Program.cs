@@ -7015,6 +7015,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string SetQrEccProbe(string level) => Invoke("SetQrEccProbe", level);
             public string SetQrInvertProbe(bool invert) => Invoke("SetQrInvertProbe", invert);
+            public string SetQrKeepFunctionSquareProbe(bool keepSquare) => Invoke("SetQrKeepFunctionSquareProbe", keepSquare);
             public string SetQrCellShapeProbe(string shape) => Invoke("SetQrCellShapeProbe", shape);
             public string SetQrShapeParamProbe(string percentText) => Invoke("SetQrShapeParamProbe", percentText);
             public string SetQrContentTypeProbe(string presetId) => Invoke("SetQrContentTypeProbe", presetId);

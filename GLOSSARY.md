@@ -60,6 +60,17 @@ moment it is resolved in discussion, not before.
   same way (pitch = S/N — dots are the sizing knob). Dots are disjoint by
   cap: `f ≤ 1 − (F+M)/u` so the orthogonal neighbour gap clears the
   insertion floor.
+- **Function patterns** — the QR's structural cells: the three corner
+  finder patterns (each as its full 8×8 footprint including the separator
+  ring), the timing bands on row/column 6, and the version's alignment
+  patterns. Format- and version-information cells are NOT function
+  patterns — they carry payload, they take the selected shape.
+- **Keep function patterns square** — the pane's carve-out toggle (spec
+  #13, ticket #34), off by default: when on, emitted cells at function
+  positions always emit the expanded-square primitive while data cells
+  take the selected cell shape. Classification is by matrix position, so
+  under invert the same positions emit square pits. Binary — there is no
+  rounded-finder middle option; under Square the toggle is a no-op.
 
 ## SolidWorks
 
