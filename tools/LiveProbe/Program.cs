@@ -7376,7 +7376,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // Gate C — the dense rung at MaxSegmentCount: every (payload x
             // shape x param) combo climbed up the size ladder; the accepted
-            // row nearest the 8000 bound is measured live, the cheapest
+            // row nearest the bound is measured live, the cheapest
             // TooManySegments row is gate D's over-bound rung.
             var candidates = ShapeCandidates();
             Console.WriteLine($"# gate C candidate table (first accepted rung per combo, " +

@@ -13,7 +13,7 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 | `QuantizationMarginUnits` | 2 units | The dot-% cap's margin `M`: grid rounding moves each polygon vertex up to ~0.71 units, so the cap reserves 2 units on top of the floor to keep the *delivered* gap/edge at or above it. |
 | `MinInsertableFeatureMm` | 0.05 mm | ~5000× above SolidWorks' ~1e-5 mm zero-length tolerance; the fixed 25 mm/3% request clears it with >20× margin on the *delivered* minimum edge (1.116 mm). |
 | `SizeToleranceMm` | 1e-6 mm | Declared tolerance on the final grown outline width; actual conversion error is ~1e-13 mm (pure affine map of integers). |
-| `MaxSegmentCount` | 8 000 segments | Sketch-edit-responsiveness ceiling on the delivered contours — PROVISIONAL pending ticket #36's live measurement. ~2× the largest live-proven insert (the 3 896-segment dense square payload of `docs/ACCEPTANCE.md` §F); see the ticket-#35 section below. |
+| `MaxSegmentCount` | 4 400 segments | Sketch-edit-responsiveness ceiling on the delivered contours — measured live by ticket #36 (the provisional 8 000 measured unresponsive at the bound and tightened to ~1.1× the largest live-proven insert, the 3 896–4 022-segment dense square payload of `docs/ACCEPTANCE.md` §F); see the ticket-#35/#36 section below. |
 | `MaxFacetsPerCorner` | 8 facets | Bound on the rounded-cell corner-arc polygonization — a 32-vertex cell keeps fidelity without flooding the segment count; the delivered-edge floor bounds it further per request. |
 
 ## What is guarded
@@ -198,7 +198,7 @@ which cuts as a separate circular pit in the field. No merged pocket can
 form (nothing ever touches); the keep-out square still marks the matrix
 edge the pit field covers.
 
-## Segment ceiling — MaxSegmentCount (ticket #35, PROVISIONAL)
+## Segment ceiling — MaxSegmentCount (ticket #35; tightened by #36's live measurement)
 
 Squares have made the feature floors the only bounds; the shaped cells of
 spec #13 add a second dimension: **how many** segments a request draws.
@@ -206,15 +206,15 @@ Polygonized circles and rounded corners inflate per-cell segment counts
 ~4–8× over squares at the same density (the ticket's estimate — measured
 below), so a dense shaped QR reaches an uneditable sketch while every
 feature floor still passes. `MaxSegmentCount` caps the delivered contour
-set at **8 000 segments** (`TooManySegments`), enforced on the generated
+set at **4 400 segments** (`TooManySegments`), enforced on the generated
 contours for every shape, before any host mutation.
 
 **This is a sketch-edit-responsiveness bound, not a hard SolidWorks
-limit** — there is no native maximum segment count. The value is
-PROVISIONAL: live sketch-edit responsiveness cannot be measured without
-SolidWorks, so it is established here from the recorded evidence and
-ticket #36's live gates measure insertion time and edit responsiveness
-AT the bound and may tighten it.
+limit** — there is no native maximum segment count. The #35 value of
+8 000 was provisional until live edit responsiveness could be measured;
+ticket #36's gates measured AT the bound and it failed its purpose —
+the disposition and evidence are recorded in the "Why 4 400" section
+below.
 
 ### Worst case per cell, by shape
 
@@ -262,62 +262,59 @@ minutes before the segment count was known (a v34-class request) — the
 exact pre-union count above now refuses those requests right after
 emission, before the boolean runs at all.
 
-### Why 8 000
+### Why 4 400 — measured live by ticket #36
 
-- **~2× the largest live-proven insert.** The dense square run of
-  `docs/ACCEPTANCE.md` §F inserted 3 896 segments natively in ≈6.1 s;
-  the measured insert slope is ≈1.4 ms/segment (941 ms at 252 →
-  6 096 ms at 3 896), so the bound projects to ≈12 s native insert —
-  slow, but bounded and only reached by deliberately dense requests.
-- **Every recorded square run stays accepted** — v1 through the v14
-  dense class (~4 400 worst measured), headroom to roughly v18–v20
-  (~6 700) for plain squares.
-- **Shaped inflation crosses it exactly where payloads get dense:**
-  ≥v11-class rounded (8 396+), ≥v10-class circles (14 697+ at f = 50%);
-  a v6 circle at f = 90% (7 848) sits just inside — the bound is drawn
-  between "a hundred-char URL with fat dots" (legal) and "a dense
-  shaped matrix" (refused).
-- The actionable message names the measured count, the 8 000 budget and
+The provisional 8 000 was measured AT the bound by the `shapes` live gate
+(`docs/SHAPES-GATES.md` has the full run record). At the 7 722-segment
+just-under rung (v6 circle dot 95% @ 60 mm — 858 disjoint dot regions):
+
+| Timing | 7 722-seg rung (old bound) | 4 290-seg rung (shipped bound) |
+|---|---|---|
+| module generation (`gen_ms`, best of 5) | 9 031 ms | 3 316 ms |
+| create round-trip (`create_ms`) | 59 653 ms | 21 911 ms |
+| **native insert** (create−gen) | **≈50 622 ms** | **≈18 595 ms** |
+| block-def segment census | 43 623 ms | 24 931 ms |
+| sketch exit / re-enter edit | 72 ms / 531 ms | 58 ms / 530 ms |
+| **region solve** (`GetSketchRegions`) | **103 109 ms** | **39 965 ms** |
+| warm segment enumeration | 1 ms | 1 ms |
+| exit + document rebuild | 40 ms / 3 218 ms | 37 ms / 2 763 ms |
+
+- **The insert slope is steeper than projected for disjoint dots** —
+  ≈6.6 ms/segment at the 7 722 rung vs the ≈1.4 ms/segment measured on
+  merged square payloads (941 ms at 252 → 6 096 ms at 3 896). Dots pay
+  per *contour* as well as per segment: a dot field is hundreds of
+  separate regions where a merged QR is dozens.
+- **The sketch's region solve is the edit-responsiveness wall:** 103 s
+  at 858 regions — a region pick on the committed sketch stalls for
+  nearly two minutes. At the tightened bound the same 858 dots solve in
+  40 s (vertex count matters too: K = 5 vs K = 9 on the identical dot
+  set). Enter/exit sketch edit stays sub-second and rebuild is ~3 s —
+  the failure is specifically the region-picking path on
+  disjoint-region-heavy sketches.
+- So the bound **tightened to 4 400**: ~1.1× the largest live-proven
+  insert (the 3 896–4 022-segment dense square class, ≈6 s native),
+  which keeps **every recorded square payload legal** while refusing
+  the measured-unresponsive shaped requests — a v6 circle at dot 90%
+  (5 148) is now the cheapest refused rung.
+- What it refuses vs the old bound: v6 circle ≥90% (5 148–7 722),
+  ≥v9-class circles (5 752+) and ≥v9-class low-growth rounded (6 002+),
+  all dense-payload shaped runs — the same classes 8 000 already refused
+  a step denser, plus the rungs the measurement convicted. Squares
+  still clear through the v14 dense class (≤4 022); the earlier
+  "~v18–v20 square" headroom (~6 700) no longer exists — deliberate
+  trade of unproven headroom for a proven-responsive top.
+- **Honest caveat — segments are a blunt proxy.** The edit cost is
+  driven by disjoint regions as much as by vertices: the two measured
+  rungs carry the SAME 858 regions and differ 2.6× on solve time purely
+  through K. A low-K dot field packs MORE regions per segment — a
+  ~4 300-segment triangle-dot field is ~1 400 regions and region picks
+  can still stall past a minute, so the tightened bound bounds the
+  damage without fully curing it. The sharper instrument is a companion
+  ceiling on delivered *contour/region count* — recommended follow-up,
+  not folded into this disposition.
+- The actionable message names the measured count, the 4 400 budget and
   the levers: shorter content (fewer cells), lighter ECC (smaller N),
   squarer shape (fewer segments per cell).
-
-### For ticket #36 (live gates)
-
-Measure AT the bound — a ~7 000–8 000-segment request (e.g. a
-~v18–v20 square payload or ~v9-class rounded) — recording native
-insertion time AND sketch-edit responsiveness (enter/exit sketch edit,
-drag a segment, rebuild) before tightening or loosening. If editing at
-8 000 is fluid the bound can rise (re-admitting ~v23 squares at 9 934);
-if it already lags, any value ≥ ~4 400 keeps every recorded square
-payload accepted.
-
-**Status (recorded by the #36 change):** the live measurement is harnessed
-but still pending an unoccupied SolidWorks seat — LiveProbe `shapes` mode
-refused per convention while the engineer's session ran. What is already
-established (module-side, printed by the harness before the refusal — the
-full table is reproduced in `docs/SHAPES-GATES.md`):
-
-- The rung picked to measure AT the bound: **v6-class circle, dot 95%,
-  60 mm → 7 722 delivered segments** (just under 8 000). The rung one step
-  over: **v14-class circle, dot 50%, 25 mm → 8 040** — `TooManySegments`
-  with the actionable message, 0.5% past the bound.
-- A ~v9-class rounded payload lands **~6 002** segments (in the predicted
-  ~7–8k band's neighbourhood, at growth 10%); dense v14 rounded is
-  refused (`TooManySegments`) at 30% radius already at 60 mm.
-- Every recorded square payload stays legal — the dense v14 square run
-  delivers 3 896–4 022, consistent with the ~4 400 headroom estimate.
-- Circle density moves with SIZE, not just payload: a v6 circle is 5 148
-  segments at 25 mm but 7 722 at 60 mm at dot 90–95% — K follows cell
-  size (the #33 rule), so enlarging a dotted QR can cross the bound.
-- Module generation of the 7 722-segment rung measures **~9–10.4 s**
-  (best of 5, two blocked-run recordings) — the disjoint-dot union has no
-  merge wins; insertion time is recorded both end-to-end (`create_ms`)
-  and net (`create−gen`).
-
-**What remains for a session-free run:** `create_ms`, `exit_ms`,
-`enter_edit_ms`, `region_solve_ms`, `seg_enum_ms`, `exit2_ms` and
-`doc_rebuild_ms` at the 7 722-segment rung — the edit-responsiveness
-numbers that decide whether 8 000 stands, rises, or tightens.
 
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 

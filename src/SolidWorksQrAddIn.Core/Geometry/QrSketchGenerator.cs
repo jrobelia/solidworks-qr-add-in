@@ -728,7 +728,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
         private static string SegmentCeilingMessage(long segmentCount) =>
             $"The generated QR would draw {segmentCount} sketch segments — over " +
             $"the recorded {QrInsertionGuard.MaxSegmentCount}-segment insertion " +
-            "guard (the provisional sketch-edit-responsiveness bound of " +
+            "guard (the sketch-edit-responsiveness bound of " +
             "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
             "error-correction level, or use a squarer cell shape — square " +
             "cells deliver the fewest segments per cell.";
