@@ -71,6 +71,14 @@ moment it is resolved in discussion, not before.
   take the selected cell shape. Classification is by matrix position, so
   under invert the same positions emit square pits. Binary — there is no
   rounded-finder middle option; under Square the toggle is a no-op.
+- **Insertion guard** — the recorded bounds the generator enforces
+  before any host mutation (`QrInsertionGuard`,
+  `docs/INSERTION-GUARD.md`): the feature FLOORS (grid resolution and
+  the 0.05 mm smallest delivered feature, both directions of
+  `BelowInsertionLimit`) and the segment CEILING
+  (`MaxSegmentCount` — `TooManySegments`), a provisional
+  sketch-edit-responsiveness bound pending ticket #36's live
+  measurement. Not a manufacturing or scan-readability assessment.
 
 ## SolidWorks
 

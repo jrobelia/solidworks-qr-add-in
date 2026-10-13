@@ -12,6 +12,7 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 | `MinGridFeatureUnits` | 10 units | Clipper2 integer imprecision is ±1 unit and edges under ~2 units can be dropped; 10 units keeps every feature ≥10× above that noise floor. |
 | `MinInsertableFeatureMm` | 0.05 mm | ~5000× above SolidWorks' ~1e-5 mm zero-length tolerance; the fixed 25 mm/3% request clears it with >20× margin on the *delivered* minimum edge (1.116 mm). |
 | `SizeToleranceMm` | 1e-6 mm | Declared tolerance on the final grown outline width; actual conversion error is ~1e-13 mm (pure affine map of integers). |
+| `MaxSegmentCount` | 8 000 segments | Sketch-edit-responsiveness ceiling on the delivered contours — PROVISIONAL pending ticket #36's live measurement. ~2× the largest live-proven insert (the 3 896-segment dense square payload of `docs/ACCEPTANCE.md` §F); see the ticket-#35 section below. |
 
 ## What is guarded
 
@@ -28,6 +29,15 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 - **Contour validity**: zero area, zero-length edges, self-intersections, and
   residual corner-only contacts reject (`InvalidGeometry`) before any host
   mutation.
+- **Segment ceiling**: the total delivered segments — the sum of vertex
+  counts over every contour (region outlines, holes, islands; construction
+  squares excluded, the same total `QrSketchInfo.SegmentCount` reports and
+  the host actually draws) — must be ≤ `MaxSegmentCount`; over it rejects
+  (`TooManySegments`). The check runs right after the contours are flat,
+  BEFORE the quadratic self-intersection sweep: a request being refused
+  should not pay O(segments²) validation on tens of thousands of edges —
+  a 21 640-segment dense-circle rejection completes in ~0.5 s instead of
+  minutes.
 
 ## Rounded-square cells — the radius cap (ticket #32)
 
@@ -160,6 +170,92 @@ working matrix — including the quiet-zone margin — emits a disjoint dot,
 which cuts as a separate circular pit in the field. No merged pocket can
 form (nothing ever touches); the keep-out square still marks the matrix
 edge the pit field covers.
+
+## Segment ceiling — MaxSegmentCount (ticket #35, PROVISIONAL)
+
+Squares have made the feature floors the only bounds; the shaped cells of
+spec #13 add a second dimension: **how many** segments a request draws.
+Polygonized circles and rounded corners inflate per-cell segment counts
+~4–8× over squares at the same density (the ticket's estimate — measured
+below), so a dense shaped QR reaches an uneditable sketch while every
+feature floor still passes. `MaxSegmentCount` caps the delivered contour
+set at **8 000 segments** (`TooManySegments`), enforced on the generated
+contours for every shape, before any host mutation.
+
+**This is a sketch-edit-responsiveness bound, not a hard SolidWorks
+limit** — there is no native maximum segment count. The value is
+PROVISIONAL: live sketch-edit responsiveness cannot be measured without
+SolidWorks, so it is established here from the recorded evidence and
+ticket #36's live gates measure insertion time and edit responsiveness
+AT the bound and may tighten it.
+
+### Worst case per cell, by shape
+
+- **Square: 4** — the grown rectangle; disjoint cells stay 4/cell
+  delivered, merged cells strip to ≈1.5–1.7/dark cell on real payloads
+  (union + collinear strip).
+- **RoundedSquare: 4(k+1) ≤ 36** — k facets per corner, k ≤ 8 in the
+  clean regime (ρ ≤ g), k ≤ 2 in the groove regime; isolated cells bill
+  all 36. Delivered inflation over the same square run measures
+  ~1.7–3.9× (948 vs 252 at v1; 3 682 vs 1 246 at v6 groove regime;
+  11 730 vs 4 022 at v14).
+- **Circle: K = max(3, ⌈π / arccos(1 − F/ρ)⌉) — the ticket-#33 rule.**
+  K follows cell size (finer polygons at larger sizes): measured 15 at
+  a 25 mm cell, 21 at 50 mm, 29 at 100 mm, 36 at 250 mm (f = 50%), 48 at
+  f = 90–95% on metre-scale cells, 50 worst case — matching the #33
+  bound. Dots are ALWAYS disjoint, so **nothing is ever merged away**:
+  delivered segments = (emitted cells) × K exactly. Real-payload
+  inflation over squares measures ~4–8× (1 824 vs 252 at v1; 7 848 vs
+  1 246 at v6/f = 90%; 21 640 vs 4 022 at v14/f = 50%).
+
+### Where real payloads land (measured on this worktree)
+
+Same-payload comparison at ECC M (the `a`×358 row reproduces the
+ACCEPTANCE.md §F dense class — version 14, N = 73):
+
+| Payload | Square | RoundedSquare | Circle |
+|---|---|---|---|
+| v1 `SW-QR-MVP` | 252 | 948 (f 15%) | 1 824 (f 90%) |
+| v6 ~101 chars | 1 246 (recorded 1 218) | 3 682 (f 30%) | 7 848 (f 90%) / 5 232 (f 50%) |
+| v11 ~250 chars | 3 108 | 8 396 (f 30%) | 15 032 (f 50%) |
+| v14 ~358 chars | 4 022 (recorded 3 896) | 11 730 (f 30%) | 21 640 (f 50%) |
+| v23 ~1 200 chars | 9 934 | — | — |
+
+Worst-case fixtures: checkerboard N = 73 → 10 660 (square) / 11 244
+(rounded) / 29 315 (circle); 2 116 spaced squares → 8 464; 256 spaced
+rounded cells at k = 8 → 9 216; an inverted sparse-21 circle fixture →
+12 600. The union itself is not the guard's friend for circles — a v34
+(2 400-char) circle request spends minutes in the boolean long before
+the segment count is known.
+
+### Why 8 000
+
+- **~2× the largest live-proven insert.** The dense square run of
+  `docs/ACCEPTANCE.md` §F inserted 3 896 segments natively in ≈6.1 s;
+  the measured insert slope is ≈1.4 ms/segment (941 ms at 252 →
+  6 096 ms at 3 896), so the bound projects to ≈12 s native insert —
+  slow, but bounded and only reached by deliberately dense requests.
+- **Every recorded square run stays accepted** — v1 through the v14
+  dense class (~4 400 worst measured), headroom to roughly v18–v20
+  (~6 700) for plain squares.
+- **Shaped inflation crosses it exactly where payloads get dense:**
+  ≥v11-class rounded (8 396+), ≥v10-class circles (14 697+ at f = 50%);
+  a v6 circle at f = 90% (7 848) sits just inside — the bound is drawn
+  between "a hundred-char URL with fat dots" (legal) and "a dense
+  shaped matrix" (refused).
+- The actionable message names the measured count, the 8 000 budget and
+  the levers: shorter content (fewer cells), lighter ECC (smaller N),
+  squarer shape (fewer segments per cell).
+
+### For ticket #36 (live gates)
+
+Measure AT the bound — a ~7 000–8 000-segment request (e.g. a
+~v18–v20 square payload or ~v9-class rounded) — recording native
+insertion time AND sketch-edit responsiveness (enter/exit sketch edit,
+drag a segment, rebuild) before tightening or loosening. If editing at
+8 000 is fluid the bound can rise (re-admitting ~v23 squares at 9 934);
+if it already lags, any value ≥ ~4 400 keeps every recorded square
+payload accepted.
 
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 

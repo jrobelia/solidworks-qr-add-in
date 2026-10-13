@@ -22,7 +22,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      zero-length tolerance while leaving the fixed 25&nbsp;mm / 3%
     ///      request (smallest feature 0.071&nbsp;mm) a 40% margin.
     ///
-    /// Requests that violate either layer are rejected with an actionable
+    ///   3. Segment ceiling: the delivered contour set must not exceed
+    ///      <see cref="MaxSegmentCount"/> segments — the
+    ///      sketch-edit-responsiveness bound of ticket #35 (provisional
+    ///      pending ticket #36's live measurement). Polygonized circles
+    ///      and rounded corners inflate per-cell segment counts ~4–8×
+    ///      over squares at the same density, so a dense shaped QR can
+    ///      reach an uneditable sketch long before the floors trip.
+    ///
+    /// Requests that violate any layer are rejected with an actionable
     /// error — never silently substituted.
     /// </summary>
     public static class QrInsertionGuard
@@ -38,5 +46,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Declared numeric tolerance on the final grown outline size, in mm.</summary>
         public const double SizeToleranceMm = 1e-6;
+
+        /// <summary>
+        /// Most sketch segments the generated contours may deliver to the
+        /// host — the sketch-edit-responsiveness ceiling (ticket #35).
+        /// PROVISIONAL pending ticket #36's live measurement of insertion
+        /// time and sketch-edit responsiveness at the bound, which may
+        /// tighten it. The recorded evidence (docs/INSERTION-GUARD.md):
+        /// the largest live-proven insert is the ~3 900-segment dense
+        /// square payload of docs/ACCEPTANCE.md §F (≈6.1 s native) —
+        /// 8 000 leaves ~2× headroom over it while refusing the
+        /// ≥8.3k-segment requests the shaped cells inflate the same
+        /// matrices into.
+        /// </summary>
+        public const int MaxSegmentCount = 8_000;
     }
 }

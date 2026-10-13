@@ -44,6 +44,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// full insertion-floor gap, nor fall below what a polygon dot can
         /// resolve).</summary>
         InvalidShapeParameter,
+
+        /// <summary>The generated contours would deliver more sketch segments
+        /// than the recorded <see cref="QrInsertionGuard.MaxSegmentCount"/>
+        /// budget — the provisional sketch-edit-responsiveness bound
+        /// (docs/INSERTION-GUARD.md, ticket #35).</summary>
+        TooManySegments,
     }
 
     /// <summary>An actionable generation failure — what is wrong and what to change.</summary>

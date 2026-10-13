@@ -77,7 +77,8 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   (adjacent merge, diagonal finite overlap, finder ring→hole→island nesting),
   the real `SW-QR-MVP` payload (version 1, N=21, exact 25 mm centred outline,
   bit-identical shared endpoints, nonzero-area closed contours), insertion-guard
-  rejections (rounding growth, light-gap collapse, sub-0.05 mm features), input
+  rejections (rounding growth, light-gap collapse, sub-0.05 mm features, the
+  segment ceiling), input
   errors (empty content, non-finite/≤0 size, growth outside (0, 0.5), payload
   beyond QR capacity — the error names the selected ECC level), and direct
   validator rejections (zero area, zero-length edge, self-intersection,

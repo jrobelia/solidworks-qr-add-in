@@ -594,8 +594,13 @@ namespace SolidWorksQrAddIn.Tests
             // corner-contact checks above cover the table).
             foreach (var invert in new[] { false, true })
             {
+                // 25 mm keeps the inverted run under the ticket-#35 segment
+                // ceiling: the whole working matrix emits disjoint dots
+                // (~1 600 pits at v7), so the delivered total is (light
+                // cells) × K — a 60 mm cell buys K = 6 ≈ 9 654 segments,
+                // over the 8 000 budget; at 25 mm K = 4 lands ~6 400.
                 var result = QrSketchGenerator.Generate(
-                    CarveOutRequest(QrCellShape.Circle, 0.5, sizeMm: 60.0,
+                    CarveOutRequest(QrCellShape.Circle, 0.5, sizeMm: 25.0,
                         invert: invert, version: version));
                 Assert.True(result.Succeeded,
                     $"v{version} invert={invert}: {result.Error?.Message}");
