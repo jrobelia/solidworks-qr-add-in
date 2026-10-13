@@ -10,9 +10,11 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 |---|---|---|
 | `GridUnitsPerCell` | 10 000 units/cell | Normalized integer grid for Clipper2 topology. |
 | `MinGridFeatureUnits` | 10 units | Clipper2 integer imprecision is ±1 unit and edges under ~2 units can be dropped; 10 units keeps every feature ≥10× above that noise floor. |
+| `QuantizationMarginUnits` | 2 units | The dot-% cap's margin `M`: grid rounding moves each polygon vertex up to ~0.71 units, so the cap reserves 2 units on top of the floor to keep the *delivered* gap/edge at or above it. |
 | `MinInsertableFeatureMm` | 0.05 mm | ~5000× above SolidWorks' ~1e-5 mm zero-length tolerance; the fixed 25 mm/3% request clears it with >20× margin on the *delivered* minimum edge (1.116 mm). |
 | `SizeToleranceMm` | 1e-6 mm | Declared tolerance on the final grown outline width; actual conversion error is ~1e-13 mm (pure affine map of integers). |
 | `MaxSegmentCount` | 8 000 segments | Sketch-edit-responsiveness ceiling on the delivered contours — PROVISIONAL pending ticket #36's live measurement. ~2× the largest live-proven insert (the 3 896-segment dense square payload of `docs/ACCEPTANCE.md` §F); see the ticket-#35 section below. |
+| `MaxFacetsPerCorner` | 8 facets | Bound on the rounded-cell corner-arc polygonization — a 32-vertex cell keeps fidelity without flooding the segment count; the delivered-edge floor bounds it further per request. |
 
 ## What is guarded
 
@@ -33,11 +35,14 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
   counts over every contour (region outlines, holes, islands; construction
   squares excluded, the same total `QrSketchInfo.SegmentCount` reports and
   the host actually draws) — must be ≤ `MaxSegmentCount`; over it rejects
-  (`TooManySegments`). The check runs right after the contours are flat,
-  BEFORE the quadratic self-intersection sweep: a request being refused
-  should not pay O(segments²) validation on tens of thousands of edges —
-  a 21 640-segment dense-circle rejection completes in ~0.5 s instead of
-  minutes.
+  (`TooManySegments`). Under Circle the check is even earlier: disjoint
+  dots can never union-merge, so the dot contribution is known exactly —
+  (emitted non-function cells) × K — right after emission, BEFORE the
+  Clipper union that on dense circle sets costs minutes by itself; the
+  post-union check right after the contours are flat stays the
+  authoritative count for every shape (it also runs BEFORE the quadratic
+  self-intersection sweep, so a refused request never pays O(segments²)
+  validation on tens of thousands of edges).
 
 ## Rounded-square cells — the radius cap (ticket #32)
 
@@ -143,6 +148,28 @@ at or above F. At 25 mm / N = 21 (F ≈ 421) the cap is f ≈ 95.8%; at
 any host mutation; `f ≤ 0` or non-finite and `f > 1` reject on the same
 kind (the declared domain is the feasible band).
 
+**Tightened cap under a live function-pattern carve-out.** When
+`KeepFunctionPatternsSquare` is on AND the matrix is a real QR version
+(the mask is live), emitted function cells are the **bare u×u cell
+square** — growth is 0 under Circle, so the square reaches all the way to
+its cell edges. A dot orthogonally beside one then keeps only
+`u·(1−f)/2` of light channel: the square takes the half of the gap a
+second dot would have kept. Holding the same floor+margin against the
+halved channel tightens the cap to
+
+    f ≤ 1 − 2(F + M)/u       (keepFn live, e.g. f ≈ 91.6% at 25 mm / N=21)
+
+and rejects above it with `InvalidShapeParameter`, naming the
+function-square adjacency. The adjacency is reachable in both polarities
+(dark timing/finder cells beside dark data cells normally; the
+always-light separator ring emitting square pits beside light data cells
+under invert). keepFn×RoundedSquare needs no change: its function squares
+are the same GROWN cell every emitted cell is, so both sides of a shared
+boundary reach ±g and the narrowest emitted↔emitted channel stays
+`u−2g` — a rounded cell's corner arcs only recede inward. `MinLightGapMm`
+reports the true minimum either way: `u·(1−f)` dots-only, `u·(1−f)/2`
+under a live carve-out.
+
 **Polygon-circle fidelity — K follows cell size.** Each dot is an
 inscribed regular K-gon (vertices on the nominal circle, so the polygon
 can never reach past the dot's diameter). K is the COARSEST polygon whose
@@ -204,9 +231,15 @@ AT the bound and may tighten it.
   a 25 mm cell, 21 at 50 mm, 29 at 100 mm, 36 at 250 mm (f = 50%), 48 at
   f = 90–95% on metre-scale cells, 50 worst case — matching the #33
   bound. Dots are ALWAYS disjoint, so **nothing is ever merged away**:
-  delivered segments = (emitted cells) × K exactly. Real-payload
-  inflation over squares measures ~4–8× (1 824 vs 252 at v1; 7 848 vs
-  1 246 at v6/f = 90%; 21 640 vs 4 022 at v14/f = 50%).
+  delivered segments = (emitted cells) × K exactly — and with a live
+  carve-out, (emitted non-function cells) × K is a guaranteed lower
+  bound (the function squares merge among themselves but every dot
+  still delivers its K vertices). Because the dot contribution is
+  known before the union runs, a circle request whose dots alone bust
+  the budget refuses `TooManySegments` BEFORE the boolean — the union
+  no longer gets to spend its minutes first (next paragraph).
+  Real-payload inflation over squares measures ~4–8× (1 824 vs 252 at
+  v1; 7 848 vs 1 246 at v6/f = 90%; 21 640 vs 4 022 at v14/f = 50%).
 
 ### Where real payloads land (measured on this worktree)
 
@@ -224,9 +257,10 @@ ACCEPTANCE.md §F dense class — version 14, N = 73):
 Worst-case fixtures: checkerboard N = 73 → 10 660 (square) / 11 244
 (rounded) / 29 315 (circle); 2 116 spaced squares → 8 464; 256 spaced
 rounded cells at k = 8 → 9 216; an inverted sparse-21 circle fixture →
-12 600. The union itself is not the guard's friend for circles — a v34
-(2 400-char) circle request spends minutes in the boolean long before
-the segment count is known.
+12 600. On dense circle sets the Clipper union alone used to spend
+minutes before the segment count was known (a v34-class request) — the
+exact pre-union count above now refuses those requests right after
+emission, before the boolean runs at all.
 
 ### Why 8 000
 

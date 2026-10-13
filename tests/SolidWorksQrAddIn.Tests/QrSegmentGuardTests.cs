@@ -47,6 +47,15 @@ namespace SolidWorksQrAddIn.Tests
             return cells;
         }
 
+        private static bool[,] AllDark(int n)
+        {
+            var cells = new bool[n, n];
+            for (var r = 0; r < n; r++)
+                for (var c = 0; c < n; c++)
+                    cells[r, c] = true;
+            return cells;
+        }
+
         // ---------------- the guard fires on every shape ----------------
 
         [Fact]
@@ -64,6 +73,31 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.False(result.Succeeded);
             Assert.Equal(QrSketchErrorKind.TooManySegments, result.Error!.Kind);
+        }
+
+        [Fact]
+        public void A_dense_circle_payload_rejects_before_the_union_runs()
+        {
+            // Disjoint dots can never merge, so the delivered total is
+            // exactly (emitted cells) × K — the guard can refuse BEFORE the
+            // boolean union, which on dense circle sets costs minutes by
+            // itself (docs/INSERTION-GUARD.md names the v34 class). This
+            // 151×151 all-dark fixture emits 22 801 dots — its union is
+            // that minutes-class work — yet the request still fails with
+            // the same error kind and actionable message the post-union
+            // check reports.
+            var result = QrSketchGenerator.GenerateFromCells(
+                AllDark(151), 200.0, Growth, invert: false,
+                QrCellShape.Circle, cellShapeParameter: 0.5);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(QrSketchErrorKind.TooManySegments, result.Error!.Kind);
+            var count = Regex.Match(result.Error.Message, @"(\d+) sketch segments");
+            Assert.True(count.Success,
+                $"message names no segment count: {result.Error.Message}");
+            Assert.True(
+                int.Parse(count.Groups[1].Value) > QrInsertionGuard.MaxSegmentCount,
+                $"reported count should exceed the budget: {result.Error.Message}");
         }
 
         [Fact]

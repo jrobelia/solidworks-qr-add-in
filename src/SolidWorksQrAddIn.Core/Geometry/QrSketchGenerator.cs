@@ -32,7 +32,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   5. union (Clipper2 NonZero) and clip to the working-matrix square —
     ///      a guaranteed no-op in normal mode (grown dark cells cannot reach
     ///      the 4-cell border), the real field edge under invert — into a
-    ///      PolyTree64 with outer/hole/island nesting preserved;
+    ///      PolyTree64 with outer/hole/island nesting preserved. Circle
+    ///      requests whose disjoint dots alone bust the segment ceiling are
+    ///      refused BEFORE this step — dots never merge, so
+    ///      (emitted dot cells) × K is already the delivered dot count;
     ///   6. strip redundant collinear vertices (epsilon 0);
     ///   7. validate on the grid: the segment ceiling
     ///      <see cref="QrInsertionGuard.MaxSegmentCount"/> first — it
@@ -235,6 +238,22 @@ namespace SolidWorksQrAddIn.Core.Geometry
                         "or adjust the growth percentage.");
             }
 
+            // ---------- the function-pattern carve-out mask ----------
+            // Spec #13, ticket #34: when the request asks for it, cells at
+            // the QR's structural positions (finders + separators, timing
+            // bands, alignment patterns — classified by DATA-matrix
+            // position, never by darkness, so the same positions emit
+            // square pits under invert) emit the expanded-square primitive
+            // at the lattice's own growth g — under Circle that is the bare
+            // cell square, growth never applying to Circle at all. The mask
+            // is null for fixture version 0 and any non-real pairing: the
+            // carve-out is inert. Computed before the shape checks because
+            // a LIVE mask changes what the Circle dot-% cap must guarantee
+            // (the square–dot channel below).
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            bool[,]? functionMask =
+                keepFunctionPatternsSquare ? QrFunctionPatterns.FunctionMask(n, version) : null;
+
             // ---------- cell shape ----------
             // Spec #13 (tickets #32/#33): the per-cell primitive. Square is
             // today's grown rectangle, emitted unchanged; RoundedSquare cuts
@@ -250,6 +269,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int facetsPerCorner = 0;
             double dotRadiusUnits = 0.0;
             int dotSides = 0;
+            double dotChannelUnits = 0.0;
             if (cellShape == QrCellShape.RoundedSquare)
             {
                 double p = cellShapeParameter;
@@ -311,7 +331,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     //    interior boundary — interior corners are covered by
                     //    the neighbouring grown cells — so the finest
                     //    polygonization whose edges clear the floor, up to
-                    //    MaxFacetsPerCorner, is emitted. In the groove
+                    //    <see cref="QrInsertionGuard.MaxFacetsPerCorner"/>,
+                    //    is emitted. In the groove
                     //    regime (ρ > g) corner arcs of side-adjacent cells
                     //    cross: at most 2 facets per corner keep every
                     //    crossing a clean vertex (the facet touching each
@@ -321,7 +342,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     //    for even one facet is refused, like growth that
                     //    rounds to zero; so is a radius whose straight edges
                     //    vanish (ρ near h).
-                    for (int k = radiusUnits > g ? 2 : MaxFacetsPerCorner; k >= 1; k--)
+                    for (int k = radiusUnits > g ? 2 : QrInsertionGuard.MaxFacetsPerCorner;
+                         k >= 1; k--)
                     {
                         var probe = RoundedCellPath(0, 0, u + 2 * g, u + 2 * g, radiusUnits, k);
                         if (MinEdgeUnits(probe) >= floorUnits)
@@ -360,11 +382,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 // The same insertion floor the lattice checks enforce, in
                 // grid units; plus the quantization margin — grid rounding
                 // displaces each vertex up to ~0.71 units, so two facing
-                // dots lose ≤ √2 of the nominal gap. Reserving 2 units
-                // keeps the DELIVERED gap/edge at or above the floor.
+                // dots lose ≤ √2 of the nominal gap. Reserving
+                // <see cref="QrInsertionGuard.QuantizationMarginUnits"/> keeps
+                // the DELIVERED gap/edge at or above the floor.
                 double floorUnits = Math.Max(QrInsertionGuard.MinGridFeatureUnits,
                     QrInsertionGuard.MinInsertableFeatureMm / mmPerUnit);
-                const double marginUnits = 2.0;
+                double marginUnits = QrInsertionGuard.QuantizationMarginUnits;
 
                 // The one-sided cap (the 2r = p tangency of the merged
                 // regime is gone): the orthogonal neighbour gap
@@ -373,14 +396,34 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 double r = p * u / 2.0;
                 double dotDiameterUnits = 2.0 * r;
                 double gapUnits = u - dotDiameterUnits;
-                if (gapUnits < floorUnits + marginUnits)
-                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
-                        $"Dot size {p:P1} of cell pitch leaves a gap of at most " +
-                        $"{(gapUnits - marginUnits) * mmPerUnit:F4} mm between " +
-                        "neighbouring dots — below the recorded " +
-                        $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion " +
-                        $"floor. Stay at or under " +
-                        $"{(u - floorUnits - marginUnits) / u:P1}.");
+                // A LIVE carve-out halves the binding channel: emitted
+                // function cells are the bare u×u square, so a dot beside
+                // one keeps only u·(1−f)/2 of light channel — the square
+                // takes the half of the gap a second dot would have kept.
+                // The same floor+margin must hold against the halved
+                // channel, tightening the cap to f ≤ 1−2(F+M)/u. (The
+                // square's own edge is exact integers — the margin still
+                // covers the dot side's rounding with room to spare.)
+                dotChannelUnits = functionMask != null ? gapUnits / 2.0 : gapUnits;
+                if (dotChannelUnits < floorUnits + marginUnits)
+                    return functionMask != null
+                        ? QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                            $"Dot size {p:P1} of cell pitch leaves a light channel of " +
+                            $"at most {(dotChannelUnits - marginUnits) * mmPerUnit:F4} mm " +
+                            "between a dot and an emitted function-pattern square — " +
+                            "under the live carve-out a function cell is the bare cell " +
+                            "square, taking the half of the channel a second dot would " +
+                            "keep — below the recorded " +
+                            $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion " +
+                            $"floor. Stay at or under " +
+                            $"{(u - 2.0 * (floorUnits + marginUnits)) / u:P1}.")
+                        : QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                            $"Dot size {p:P1} of cell pitch leaves a gap of at most " +
+                            $"{(gapUnits - marginUnits) * mmPerUnit:F4} mm between " +
+                            "neighbouring dots — below the recorded " +
+                            $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion " +
+                            $"floor. Stay at or under " +
+                            $"{(u - floorUnits - marginUnits) / u:P1}.");
 
                 // The polygon-circle fidelity rule (docs/INSERTION-GUARD.md):
                 // an inscribed K-gon's chord sagitta ρ·(1−cos(π/K)) must stay
@@ -410,22 +453,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // The polarity select is the only mode switch (ADR 0002): dark
             // cells emit normally, light cells emit under invert — across the
             // WHOLE working matrix, so the quiet zone becomes field. The
-            // shape select dispatches the primitive inside this same loop.
-            //
-            // Spec #13, ticket #34 — the function-pattern carve-out: when the
-            // request asks for it, cells at the QR's structural positions
-            // (finders + separators, timing bands, alignment patterns —
-            // classified by DATA-matrix position, never by darkness, so the
-            // same positions emit square pits under invert) emit the
-            // expanded-square primitive at the lattice's own growth g —
-            // under Circle that is the bare cell square, growth never
-            // applying to Circle at all. The mask is null for fixture
-            // version 0 and any non-real pairing: the carve-out is inert.
-            int q = QrSketchInfo.QuietZoneCellsPerSide;
-            bool[,]? functionMask =
-                keepFunctionPatternsSquare ? QrFunctionPatterns.FunctionMask(n, version) : null;
+            // shape select dispatches the primitive inside this same loop,
+            // with the carve-out mask above diverting function positions to
+            // the square primitive.
             var subject = new Paths64();
             int emittedCount = 0;
+            int emittedNonFunctionCount = 0;
             for (var row = 0; row < m; row++)
                 for (var col = 0; col < m; col++)
                 {
@@ -438,6 +471,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     bool functionCell = functionMask != null &&
                         row >= q && row < q + n && col >= q && col < q + n &&
                         functionMask[row - q, col - q];
+                    if (!functionCell) emittedNonFunctionCount++;
                     var cell = functionCell || !(rounded || circle)
                         ? SquareCellPath(x0, y0, x1, y1)
                         : rounded
@@ -452,6 +486,23 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     invert
                         ? "The cell matrix contains no light cells; nothing would be sketched."
                         : "The cell matrix contains no dark cells; nothing would be sketched.");
+
+            // ---------- exact pre-union segment rejection for Circle (ticket #35) ----------
+            // Disjoint dots can never union-merge — every emitted dot
+            // delivers exactly its K polygon vertices — so under Circle the
+            // dot contribution to the delivered segment total is known
+            // BEFORE the boolean runs: emittedNonFunctionCount·K exactly
+            // with the carve-out off, and a guaranteed lower bound with it
+            // on (the emitted function squares add vertices but merge among
+            // themselves). Refusing here spares a dense circle request the
+            // Clipper union itself, which on its own can cost minutes
+            // (docs/INSERTION-GUARD.md); the post-union check below stays
+            // the authoritative count for every shape.
+            if (circle &&
+                (long)emittedNonFunctionCount * dotSides >
+                    QrInsertionGuard.MaxSegmentCount)
+                return QrSketchResult.Fail(QrSketchErrorKind.TooManySegments,
+                    SegmentCeilingMessage((long)emittedNonFunctionCount * dotSides));
 
             // ADR 0002: all geometry is clipped to the working-matrix square
             // [0, M·U] — a guaranteed no-op in normal mode (grown dark cells
@@ -476,7 +527,6 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // ---------- tree → validated grid contours ----------
             var gridRegions = new List<GridRegion>(tree.Count);
             var flatPaths = new List<Path64>();
-            var flatIsHole = new List<bool>();
             for (var i = 0; i < tree.Count; i++)
             {
                 var node = tree.Child(i);
@@ -485,7 +535,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                         "Union returned a hole at the top level — unexpected nesting.");
                 var region = ReadRegion(node);
                 gridRegions.Add(region);
-                Flatten(region, flatPaths, flatIsHole);
+                Flatten(region, flatPaths);
             }
 
             // ---------- segment ceiling (ticket #35) ----------
@@ -502,12 +552,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 segmentCount += path.Count;
             if (segmentCount > QrInsertionGuard.MaxSegmentCount)
                 return QrSketchResult.Fail(QrSketchErrorKind.TooManySegments,
-                    $"The generated QR would draw {segmentCount} sketch segments — over " +
-                    $"the recorded {QrInsertionGuard.MaxSegmentCount}-segment insertion " +
-                    "guard (the provisional sketch-edit-responsiveness bound of " +
-                    "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
-                    "error-correction level, or use a squarer cell shape — square " +
-                    "cells deliver the fewest segments per cell.");
+                    SegmentCeilingMessage(segmentCount));
 
             var violation = ContourValidator.FindViolation(flatPaths);
             if (violation != null)
@@ -524,7 +569,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var contours = new List<QrContour>(flatPaths.Count);
             foreach (var gr in gridRegions)
                 regions.Add(ConvertRegion(gr, contours,
-                    p => ToMetres(p, mPerUnit, gridCentre)));
+                    pt => ToMetres(pt, mPerUnit, gridCentre)));
 
             double grownUnits = n * (double)u + 2 * g;
 
@@ -532,15 +577,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // segmentCount was already totalled for the ceiling check.
             long minEdgeUnits = long.MaxValue;
             foreach (var path in flatPaths)
-            {
-                for (var i = 0; i < path.Count; i++)
-                {
-                    var a = path[i];
-                    var b = path[(i + 1) % path.Count];
-                    long len = Math.Max(Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y));
-                    if (len < minEdgeUnits) minEdgeUnits = len;
-                }
-            }
+                minEdgeUnits = Math.Min(minEdgeUnits, MinEdgeUnits(path));
             double minEdgeMm = minEdgeUnits * mmPerUnit;
             if (minEdgeMm < QrInsertionGuard.MinInsertableFeatureMm)
                 return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
@@ -556,10 +593,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 growthMmPerSide: g * mmPerUnit,
                 finalSizeMm: (n * (double)u + 2 * g) * mmPerUnit,
                 minEdgeMm: minEdgeMm,
-                // Circles: the narrowest un-emitted channel is the
-                // delivered gap between neighbouring dots — the cap keeps it
-                // at or over the floor.
-                minLightGapMm: (u - 2 * (circle ? dotRadiusUnits : g)) * mmPerUnit,
+                // Circles: the narrowest un-emitted channel is the delivered
+                // gap between neighbouring dots — the cap keeps it at or
+                // over the floor. Under a LIVE carve-out it is the halved
+                // square–dot channel the tightened cap reasons about.
+                minLightGapMm: (circle ? dotChannelUnits : u - 2 * g) * mmPerUnit,
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount,
                 inverted: invert,
@@ -590,13 +628,6 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             return QrSketchResult.Ok(new QrSketch(regions, contours, squares, info));
         }
-
-        /// <summary>
-        /// Arc facets per corner for the rounded-square primitive — bounded
-        /// at 8 (a 32-vertex cell keeps fidelity without flooding the segment
-        /// count; the delivered-edge floor bounds it further per request).
-        /// </summary>
-        private const int MaxFacetsPerCorner = 8;
 
         /// <summary>
         /// The expanded-square cell primitive: the grown rect [x0,y0]–[x1,y1]
@@ -689,6 +720,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
             return path;
         }
 
+        /// <summary>
+        /// The actionable segment-ceiling refusal — the count, the budget
+        /// and the levers — shared by the pre-union exact count (Circle)
+        /// and the post-union measured count so both report identically.
+        /// </summary>
+        private static string SegmentCeilingMessage(long segmentCount) =>
+            $"The generated QR would draw {segmentCount} sketch segments — over " +
+            $"the recorded {QrInsertionGuard.MaxSegmentCount}-segment insertion " +
+            "guard (the provisional sketch-edit-responsiveness bound of " +
+            "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
+            "error-correction level, or use a squarer cell shape — square " +
+            "cells deliver the fewest segments per cell.";
+
         /// <summary>The shortest edge of a grid path under the Chebyshev metric the guard uses.</summary>
         private static long MinEdgeUnits(Path64 path)
         {
@@ -743,16 +787,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
             return region;
         }
 
-        private static void Flatten(GridRegion region, List<Path64> paths, List<bool> isHole)
+        private static void Flatten(GridRegion region, List<Path64> paths)
         {
             paths.Add(region.Path);
-            isHole.Add(false);
             foreach (var hole in region.Holes)
             {
                 paths.Add(hole.Path);
-                isHole.Add(true);
                 foreach (var island in hole.Islands)
-                    Flatten(island, paths, isHole);
+                    Flatten(island, paths);
             }
         }
 

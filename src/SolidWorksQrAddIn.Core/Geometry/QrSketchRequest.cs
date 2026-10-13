@@ -58,8 +58,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// fraction of the grown cell's half-width in [0, 1] (0 emits the
         /// square primitive); for <see cref="QrCellShape.Circle"/> the dot
         /// size — the circle diameter as a fraction of cell pitch in (0, 1],
-        /// further capped so neighbouring dots keep a full-floor gap
-        /// (docs/INSERTION-GUARD.md). Inert for shapes that declare no
+        /// further capped so neighbouring dots keep a full-floor gap —
+        /// tightened to twice that bound beside an emitted function-pattern
+        /// square under a live carve-out (docs/INSERTION-GUARD.md). Inert
+        /// for shapes that declare no
         /// parameter — Square ignores it entirely, so the pane can keep the
         /// field disabled without clearing it.
         /// </summary>
