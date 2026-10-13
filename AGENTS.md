@@ -19,8 +19,9 @@ Single-context layout: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`, both
 ## Repo guides
 
 - Build/test, repo layout, LiveProbe live-verify harness → `docs/BUILDING.md`
-- Deploy/register/unregister, add-in debug log, SolidWorks-side fixes → `docs/DEPLOYMENT.md`
+- Add-in missing/not loaded, registration, installer recovery, or debug log: read `docs/DEPLOYMENT.md` (especially Dev-machine setup).
 - Live acceptance gates (need exclusive SolidWorks access) → `docs/ACCEPTANCE.md`
 - Proven `CreateLine` coordinate conventions → `docs/SKETCH-COORDINATES.md`
 - Geometry insertion limits → `docs/INSERTION-GUARD.md`
-- Pack/verify + HKCU registration scripts → `scripts/`
+- Manual QA/build refresh: with SolidWorks closed, run `scripts/sync-dev-deploy.ps1` from the branch/worktree under test, then restart SolidWorks; details in `docs/DEPLOYMENT.md`.
+- Dev registration setup/recovery after installer tests: `scripts/register-addin-dev.ps1` requests UAC and replaces this add-in's registration keys; get approval before running it. Details in `docs/DEPLOYMENT.md`.
