@@ -36,6 +36,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// composed into a payload — a required field is missing or a field
         /// holds a value its preset cannot encode.</summary>
         InvalidPayload,
+
+        /// <summary>The cell-shape parameter was non-finite or outside its
+        /// declared domain (the corner radius leaves [0, 1] of the grown
+        /// cell's half-width — edge-inverting).</summary>
+        InvalidShapeParameter,
     }
 
     /// <summary>An actionable generation failure — what is wrong and what to change.</summary>

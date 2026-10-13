@@ -61,9 +61,12 @@ namespace SolidWorksQrAddIn.Core
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
         /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
-        /// invert=&lt;bool&gt; unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
+        /// invert=&lt;bool&gt; shape=&lt;code&gt; shapeParam=&lt;text&gt;
+        /// unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
         /// size/growth are the field texts exactly as shown (initially 25
-        /// and 3); preset is the content-type id (initially "raw").
+        /// and 3); preset is the content-type id (initially "raw"); shape is
+        /// the cell-shape code (initially "square") and shapeParam its
+        /// parameter text (initially "10", inert under Square).
         /// </summary>
         string WindowStateProbe();
 
@@ -104,6 +107,25 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrInvertProbe(bool invert);
+
+        /// <summary>
+        /// Picks the per-cell shape exactly like the pane's shape selector:
+        /// "square" or "rounded" (case-insensitive). Returns
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;"
+        /// for the revalidated request, and "ERROR unknown cell shape …" for
+        /// anything outside the shape names.
+        /// </summary>
+        string SetQrCellShapeProbe(string shape);
+
+        /// <summary>
+        /// Pushes the shape-parameter text into the session exactly like the
+        /// pane's corner-radius box (percent of the cell half-width):
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// Inert while the shape is Square.
+        /// </summary>
+        string SetQrShapeParamProbe(string percentText);
 
         /// <summary>
         /// Picks the content-type preset exactly like the pane's dropdown:

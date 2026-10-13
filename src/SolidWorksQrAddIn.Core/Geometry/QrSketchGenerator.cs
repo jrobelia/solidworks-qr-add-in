@@ -22,7 +22,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   4. expand every EMITTED cell by g = round(r·U) units on all four
     ///      sides — dark cells emit in normal mode (quiet-zone cells are
     ///      light and never emit), light cells emit under invert (the whole
-    ///      matrix becomes the field);
+    ///      matrix becomes the field) — as one primitive per cell in the
+    ///      request's <see cref="QrCellShape"/>: the grown rectangle, or a
+    ///      polygonized rounded rect for RoundedSquare;
     ///   5. union (Clipper2 NonZero) and clip to the working-matrix square —
     ///      a guaranteed no-op in normal mode (grown dark cells cannot reach
     ///      the 4-cell border), the real field edge under invert — into a
@@ -105,7 +107,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
-                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert);
+                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert,
+                request.CellShape, request.CellShapeParameter);
         }
 
         /// <summary>
@@ -115,10 +118,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// the encoded path funnels through it with a full encoded matrix —
         /// both are padded into the same (N+8)×(N+8) working matrix.
         /// <paramref name="invert"/> selects the emitted polarity exactly as in
-        /// <see cref="Generate"/>.
+        /// <see cref="Generate"/>; <paramref name="cellShape"/> and
+        /// <paramref name="cellShapeParameter"/> pick the per-cell primitive
+        /// exactly like <see cref="QrSketchRequest.CellShape"/>.
         /// </summary>
         public static QrSketchResult GenerateFromCells(
-            bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false)
+            bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false,
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
         {
             if (darkCells == null)
                 throw new ArgumentNullException(nameof(darkCells));
@@ -133,7 +139,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             for (var row = 0; row < n; row++)
                 for (var col = 0; col < n; col++)
                     matrix[row + q, col + q] = darkCells[row, col];
-            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert);
+            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert,
+                cellShape, cellShapeParameter);
         }
 
         /// <summary>
@@ -143,10 +150,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <paramref name="invert"/> flips which cells emit: dark cells
         /// normally, light cells under invert — the only mode switch; growth,
         /// union, clipping, validation and conversion run identically.
+        /// <paramref name="cellShape"/> picks the primitive each emitted cell
+        /// contributes — the union/validate/convert downstream is shape-blind.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
-            bool invert)
+            bool invert, QrCellShape cellShape, double cellShapeParameter)
         {
             int m = matrix.GetLength(0);
             int n = dataCells;
@@ -195,10 +204,112 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion guard. Increase the size " +
                     "or adjust the growth percentage.");
 
+            // ---------- cell shape ----------
+            // Spec #13 (ticket #32): the per-cell primitive. Square is today's
+            // grown rectangle, emitted unchanged; RoundedSquare cuts each
+            // corner with a polygonized quarter-arc of radius ρ = f·h where h
+            // is the GROWN cell's half-width (u/2 + g) — union, clipping,
+            // nesting, validation and conversion downstream run identically
+            // on either primitive. The three recorded bounds below are the
+            // radius cap of docs/INSERTION-GUARD.md.
+            bool rounded = false;
+            double radiusUnits = 0.0;
+            int facetsPerCorner = 0;
+            if (cellShape == QrCellShape.RoundedSquare)
+            {
+                double p = cellShapeParameter;
+                if (double.IsNaN(p) || double.IsInfinity(p) || p < 0.0)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Corner radius must be a finite fraction of the grown cell's " +
+                        $"half-width in [0, 1]; got '{p}'.");
+                // The edge-inversion bound: each cell edge keeps a straight
+                // segment of length 2h−2ρ; ρ > h makes adjacent corner arcs
+                // pass each other and invert the edge.
+                if (p > 1.0)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Corner radius {p:P1} of the grown cell's half-width is over " +
+                        "100% — the corner arcs on each edge would pass each other and " +
+                        "invert the edge. Stay within 0–100%.");
+                if (p > 0.0)
+                {
+                    double halfWidthUnits = u / 2.0 + g;
+                    radiusUnits = p * halfWidthUnits;
+                    // The insertion floor in grid units — the same two bounds
+                    // the lattice checks just enforced.
+                    double floorUnits = Math.Max(QrInsertionGuard.MinGridFeatureUnits,
+                        QrInsertionGuard.MinInsertableFeatureMm / mmPerUnit);
+                    // 1. The diagonal-overlap cap (docs/INSERTION-GUARD.md):
+                    //    grown diagonal cells overlap in a 2g×2g square; while
+                    //    ρ ≤ 2g each corner cap stays on its own side of that
+                    //    square — the union provably covers it whole for ANY
+                    //    polygonization, identical to squares. Past 2g the
+                    //    facing corner caps meet: diagonal cells pinch to a
+                    //    lens and then part — growth's finite diagonal
+                    //    overlap is lost, so the radius is capped at 2g.
+                    if (radiusUnits > 2.0 * g)
+                        return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
+                            $"Corner radius {p:P1} of the grown cell's half-width passes " +
+                            $"the diagonal-overlap bound {2.0 * g / halfWidthUnits:P1} " +
+                            $"({2 * g} of {u} grid units): past it the corner arcs of " +
+                            "diagonally touching cells leave the overlap square and the " +
+                            "finite overlap growth guarantees is lost. Reduce the corner " +
+                            "radius or increase the outline growth.");
+                    // 2. The merge-groove band (docs/INSERTION-GUARD.md):
+                    //    where two EMITTED cells share a side their grown
+                    //    outlines overlap by 2g. Radius ρ ≤ g keeps each
+                    //    corner arc inside that overlap — merges stay flush,
+                    //    identical to squares. Past g a V-groove opens on
+                    //    the shared boundary whose edges scale with ρ−g;
+                    //    under the floor it is a sliver. The band
+                    //    g < ρ < g+F rejects before the union can fail
+                    //    downstream (spec story 9's near-tangent band).
+                    if (radiusUnits > g && radiusUnits - g < floorUnits)
+                        return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
+                            $"Corner radius {p:P1} of the grown cell's half-width opens a " +
+                            $"groove where neighbouring cells merge of about " +
+                            $"{(radiusUnits - g) * mmPerUnit:F4} mm — below the recorded " +
+                            $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion floor. " +
+                            $"Stay at or under {g / halfWidthUnits:P1} (corners merge flush) " +
+                            $"or raise the radius past {(g + floorUnits) / halfWidthUnits:P1}.");
+                    // 3. The primitive must itself resolve above the floor.
+                    //    In the clean regime (ρ ≤ g) no arc ever lies on an
+                    //    interior boundary — interior corners are covered by
+                    //    the neighbouring grown cells — so the finest
+                    //    polygonization whose edges clear the floor, up to
+                    //    MaxFacetsPerCorner, is emitted. In the groove
+                    //    regime (ρ > g) corner arcs of side-adjacent cells
+                    //    cross: at most 2 facets per corner keep every
+                    //    crossing a clean vertex (the facet touching each
+                    //    edge is collinear with the chamfer — verified on
+                    //    the grid); a finer polygonization could strand a
+                    //    mid-facet stub below the floor. A radius too small
+                    //    for even one facet is refused, like growth that
+                    //    rounds to zero; so is a radius whose straight edges
+                    //    vanish (ρ near h).
+                    for (int k = radiusUnits > g ? 2 : MaxFacetsPerCorner; k >= 1; k--)
+                    {
+                        var probe = RoundedCellPath(0, 0, u + 2 * g, u + 2 * g, radiusUnits, k);
+                        if (MinEdgeUnits(probe) >= floorUnits)
+                        {
+                            facetsPerCorner = k;
+                            break;
+                        }
+                    }
+                    if (facetsPerCorner == 0)
+                        return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
+                            $"Corner radius {p:P1} of the grown cell's half-width resolves " +
+                            $"to {radiusUnits:F1} grid units — its cell edges would sit below " +
+                            $"the {QrInsertionGuard.MinInsertableFeatureMm} mm insertion floor. " +
+                            "Adjust the corner radius or pick Square cells.");
+                    rounded = true;
+                }
+            }
+
             // ---------- expand emitted cells + union, clipped to the matrix ----------
             // The polarity select is the only mode switch (ADR 0002): dark
             // cells emit normally, light cells emit under invert — across the
-            // WHOLE working matrix, so the quiet zone becomes field.
+            // WHOLE working matrix, so the quiet zone becomes field. The
+            // shape select dispatches the primitive inside this same loop.
             var subject = new Paths64();
             int emittedCount = 0;
             for (var row = 0; row < m; row++)
@@ -210,12 +321,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     long y0 = (long)row * u - g;
                     long x1 = ((long)col + 1) * u + g;
                     long y1 = ((long)row + 1) * u + g;
-                    var rect = new Path64(4)
-                    {
-                        new Point64(x0, y0), new Point64(x1, y0),
-                        new Point64(x1, y1), new Point64(x0, y1),
-                    };
-                    subject.Add(rect);
+                    var cell = rounded
+                        ? RoundedCellPath(x0, y0, x1, y1, radiusUnits, facetsPerCorner)
+                        : new Path64(4)
+                        {
+                            new Point64(x0, y0), new Point64(x1, y0),
+                            new Point64(x1, y1), new Point64(x0, y1),
+                        };
+                    subject.Add(cell);
                 }
             if (emittedCount == 0)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
@@ -309,7 +422,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 minLightGapMm: (u - 2 * g) * mmPerUnit,
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount,
-                inverted: invert);
+                inverted: invert,
+                cellShape: cellShape,
+                cellShapeParameter: rounded ? cellShapeParameter : 0.0);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction
@@ -333,6 +448,77 @@ namespace SolidWorksQrAddIn.Core.Geometry
             };
 
             return QrSketchResult.Ok(new QrSketch(regions, contours, squares, info));
+        }
+
+        /// <summary>
+        /// Arc facets per corner for the rounded-square primitive — bounded
+        /// at 8 (a 32-vertex cell keeps fidelity without flooding the segment
+        /// count; the delivered-edge floor bounds it further per request).
+        /// </summary>
+        private const int MaxFacetsPerCorner = 8;
+
+        /// <summary>
+        /// One rounded-rectangle cell on the integer grid: the rect
+        /// [x0,y0]–[x1,y1] with each corner replaced by a quarter-arc of
+        /// <paramref name="radiusUnits"/> polygonized into
+        /// <paramref name="facetsPerCorner"/> facets. Vertices are emitted
+        /// CCW like the square primitive — the straight edges come free as
+        /// the chords between consecutive corner arcs. Duplicate points a
+        /// degenerate radius would emit are dropped (the caller guarantees
+        /// the radius clears the grid floor, so the path keeps &gt;4 vertices
+        /// and nonzero area).
+        /// </summary>
+        private static Path64 RoundedCellPath(
+            long x0, long y0, long x1, long y1, double radiusUnits, int facetsPerCorner)
+        {
+            var path = new Path64(4 * (facetsPerCorner + 1));
+            double r = radiusUnits;
+            // Corner arcs in CCW order — BL 180°→270°, BR 270°→360°,
+            // TR 0°→90°, TL 90°→180°; each arc's first point is the incoming
+            // straight edge's endpoint.
+            AppendCornerArc(path, x0 + r, y0 + r, r, 180.0, facetsPerCorner);
+            AppendCornerArc(path, x1 - r, y0 + r, r, 270.0, facetsPerCorner);
+            AppendCornerArc(path, x1 - r, y1 - r, r, 0.0, facetsPerCorner);
+            AppendCornerArc(path, x0 + r, y1 - r, r, 90.0, facetsPerCorner);
+            // An exact-half-width radius makes the left edge vanish — never
+            // leave a duplicated closing point.
+            if (path.Count > 1 && path[path.Count - 1] == path[0])
+                path.RemoveAt(path.Count - 1);
+            return path;
+        }
+
+        /// <summary>
+        /// Emits one quarter-arc: the arc's start point plus one vertex per
+        /// facet end, skipping any vertex that rounds onto the previous one
+        /// (grid quantization can collapse facets for very small radii).
+        /// </summary>
+        private static void AppendCornerArc(
+            Path64 path, double cx, double cy, double r, double startDegrees, int facets)
+        {
+            double stepDegrees = 90.0 / facets;
+            for (var j = 0; j <= facets; j++)
+            {
+                double a = (startDegrees + j * stepDegrees) * Math.PI / 180.0;
+                var pt = new Point64(
+                    (long)Math.Round(cx + r * Math.Cos(a)),
+                    (long)Math.Round(cy + r * Math.Sin(a)));
+                if (path.Count == 0 || path[path.Count - 1] != pt)
+                    path.Add(pt);
+            }
+        }
+
+        /// <summary>The shortest edge of a grid path under the Chebyshev metric the guard uses.</summary>
+        private static long MinEdgeUnits(Path64 path)
+        {
+            long min = long.MaxValue;
+            for (var i = 0; i < path.Count; i++)
+            {
+                var a = path[i];
+                var b = path[(i + 1) % path.Count];
+                long len = Math.Max(Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y));
+                if (len < min) min = len;
+            }
+            return min;
         }
 
         private static SketchPoint2[] SquareVertices(double half) =>

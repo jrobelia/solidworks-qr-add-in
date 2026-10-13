@@ -42,6 +42,16 @@ moment it is resolved in discussion, not before.
   `invert` — a white code on a dark field bounded by the keep-out square,
   for marking/engraving (ADR 0002). The same contour result feeds the
   preview — no second renderer.
+- **Cell shape** — the per-cell primitive each emitted cell contributes to
+  the union (spec #13): `square` (today's grown rectangle, the default) or
+  `rounded square` (the grown rectangle with each corner cut by a
+  polygonized quarter-arc, ticket #32). One path per emitted cell either
+  way — the union/validate/insert path downstream is shape-blind.
+- **Cell-shape parameter** — the single knob a non-square shape takes; for
+  rounded square it is the corner radius as a fraction of the GROWN cell's
+  half-width (`ρ = f·(u/2+g)`), capped by the bounds recorded in
+  `docs/INSERTION-GUARD.md`. Inert while the shape is square — the pane
+  field is disabled but its text is kept verbatim.
 
 ## SolidWorks
 

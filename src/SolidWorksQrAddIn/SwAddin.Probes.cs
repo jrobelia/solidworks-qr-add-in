@@ -120,6 +120,8 @@ namespace SolidWorksQrAddIn
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
                   $"preset={_session.ContentPresetId} " +
                   $"ecc={_session.EccLevel} invert={_session.Invert} " +
+                  $"shape={QrCellShapes.CodeFor(_session.CellShape)} " +
+                  $"shapeParam={_session.ShapeParameterText} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -160,6 +162,28 @@ namespace SolidWorksQrAddIn
 
         public string SetQrInvertProbe(bool invert) =>
             FieldProbe(s => s.SetInvert(invert));
+
+        /// <summary>
+        /// The pane's cell-shape selector, probed: parse the picked shape
+        /// through <see cref="QrCellShapes"/> and apply it through the
+        /// session setter like every other field probe — an unrecognized
+        /// shape never reaches the session.
+        /// </summary>
+        public string SetQrCellShapeProbe(string shape)
+        {
+            if (!QrCellShapes.TryParse(shape, out QrCellShape cellShape))
+                return $"ERROR unknown cell shape '{shape}' — expected square or rounded.";
+            return FieldProbe(s => s.SetCellShape(cellShape));
+        }
+
+        /// <summary>
+        /// The pane's shape-parameter field, probed: the text goes to the
+        /// session verbatim (percent of the cell half-width — the rounded
+        /// corner radius) — the same growth-field discipline, inert while
+        /// the shape is Square.
+        /// </summary>
+        public string SetQrShapeParamProbe(string percentText) =>
+            FieldProbe(s => s.SetShapeParameterText(percentText));
 
         public string SetQrContentTypeProbe(string presetId) =>
             FieldProbe(s => s.SetContentType(presetId));
