@@ -894,13 +894,18 @@ namespace SolidWorksQrAddIn.UI
                 var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
+                // viewStatus is LAST — the status line is free text (spaces)
+                // and stays verbatim for the pane-status checks of the
+                // spec-13 live gates (ticket #36).
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
                        $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
                        $"viewGrowthEnabled={_growthBox.IsEnabled} " +
                        $"viewShape={_shapeBox.SelectedValue} " +
                        $"viewShapeParam={_shapeParamBox.Text} " +
                        $"viewShapeParamLabel={_shapeParamLabel.Text} " +
-                       $"viewShapeParamEnabled={_shapeParamBox.IsEnabled}";
+                       $"viewShapeParamEnabled={_shapeParamBox.IsEnabled} " +
+                       $"viewKeepFn={_keepFunctionSquareBox.IsChecked == true} " +
+                       $"viewStatus={_status.Text}";
             }
         }
 

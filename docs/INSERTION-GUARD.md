@@ -257,6 +257,34 @@ drag a segment, rebuild) before tightening or loosening. If editing at
 if it already lags, any value ≥ ~4 400 keeps every recorded square
 payload accepted.
 
+**Status (recorded by the #36 change):** the live measurement is harnessed
+but still pending an unoccupied SolidWorks seat — LiveProbe `shapes` mode
+refused per convention while the engineer's session ran. What is already
+established (module-side, printed by the harness before the refusal — the
+full table is reproduced in `docs/SHAPES-GATES.md`):
+
+- The rung picked to measure AT the bound: **v6-class circle, dot 95%,
+  60 mm → 7 722 delivered segments** (just under 8 000). The rung one step
+  over: **v14-class circle, dot 50%, 25 mm → 8 040** — `TooManySegments`
+  with the actionable message, 0.5% past the bound.
+- A ~v9-class rounded payload lands **~6 002** segments (in the predicted
+  ~7–8k band's neighbourhood, at growth 10%); dense v14 rounded is
+  refused (`TooManySegments`) at 30% radius already at 60 mm.
+- Every recorded square payload stays legal — the dense v14 square run
+  delivers 3 896–4 022, consistent with the ~4 400 headroom estimate.
+- Circle density moves with SIZE, not just payload: a v6 circle is 5 148
+  segments at 25 mm but 7 722 at 60 mm at dot 90–95% — K follows cell
+  size (the #33 rule), so enlarging a dotted QR can cross the bound.
+- Module generation of the 7 722-segment rung measures **~9–10.4 s**
+  (best of 5, two blocked-run recordings) — the disjoint-dot union has no
+  merge wins; insertion time is recorded both end-to-end (`create_ms`)
+  and net (`create−gen`).
+
+**What remains for a session-free run:** `create_ms`, `exit_ms`,
+`enter_edit_ms`, `region_solve_ms`, `seg_enum_ms`, `exit2_ms` and
+`doc_rebuild_ms` at the 7 722-segment rung — the edit-responsiveness
+numbers that decide whether 8 000 stands, rises, or tightens.
+
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 
 Since ticket 4 the size and growth are engineer-entered fields — the

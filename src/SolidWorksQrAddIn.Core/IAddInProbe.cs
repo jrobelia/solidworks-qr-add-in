@@ -68,7 +68,9 @@ namespace SolidWorksQrAddIn.Core
         /// and 3); preset is the content-type id (initially "raw"); keepFn is
         /// the keep-function-patterns-square toggle (initially false); shape
         /// is the cell-shape code (initially "square") and shapeParam its
-        /// parameter text (initially "10", inert under Square).
+        /// parameter text (initially "10", inert under Square). The trailing
+        /// view* fields are the pane's own rendered state — viewStatus is the
+        /// status line verbatim, last because it is free text.
         /// </summary>
         string WindowStateProbe();
 

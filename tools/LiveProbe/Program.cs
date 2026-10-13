@@ -118,6 +118,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "xsettings", StringComparison.OrdinalIgnoreCase))
                 return XsettingsMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "shapes", StringComparison.OrdinalIgnoreCase))
+                return ShapesMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -6919,6 +6922,938 @@ namespace SolidWorksQrAddIn.LiveProbe
                     return true;
             return false;
         }
+
+        // =====================================================================
+        // `shapes` — spec-13 live gates (ticket #36), recorded in
+        // docs/SHAPES-GATES.md:
+        //   A. a disjoint-dots (Circle) QR inserts through the pane path and
+        //      extrudes via per-cell region selection — every emitted dot
+        //      region individually selectable, a subset extrudes;
+        //   B. a rounded-square QR at a FEASIBLE request (no radius resolves
+        //      at the initial 25 mm/3% — the #32 note) extrudes a boss and a
+        //      shallow cut with no contact failures, the keep-function-square
+        //      carve-out verified natively on a finder ring;
+        //   C. a dense shaped payload at the MaxSegmentCount bound — native
+        //      insertion time + sketch-edit responsiveness measured;
+        //   D. one rung over the bound — TooManySegments surfacing on the
+        //      pane status line with no host mutation.
+        //
+        // Like `xsettings`, every module-side expectation is computed and
+        // printed BEFORE the occupied-seat refusal, so a blocked run still
+        // shows exactly what the live half would check.
+        // =====================================================================
+
+        /// <summary>The module's verdict at any shape settings — what the live session must answer.</summary>
+        private static QrSketchResult ShapeVerdict(
+            string content, double sizeMm, double growthFraction,
+            QrCellShape shape, double shapeParam, bool keepFn) =>
+            QrSketchGenerator.Generate(new QrSketchRequest(content, sizeMm, growthFraction)
+            {
+                CellShape = shape,
+                CellShapeParameter = shapeParam,
+                KeepFunctionPatternsSquare = keepFn,
+            });
+
+        /// <summary>
+        /// One dense-gate candidate: a (content, shape, parameter, growth)
+        /// combo climbed up the size ladder. `verdict` is the first accepted
+        /// rung, or the first refused rung when nothing accepted — the
+        /// segment ceiling candidates are exactly the TooManySegments rows.
+        /// </summary>
+        private sealed class ShapeCandidate
+        {
+            public string Tag = "";
+            public string Content = "";
+            public QrCellShape Shape;
+            public double Param;            // fraction — paramText for probes is (Param*100)
+            public double Growth;           // fraction — inert under Circle
+            public double SizeMm;
+            public QrSketchResult Verdict = null!;
+            public bool IsAccepted => Verdict.Succeeded;
+            public bool IsOverBound =>
+                !Verdict.Succeeded &&
+                Verdict.Error!.Kind == QrSketchErrorKind.TooManySegments;
+            public int Segments => Verdict.Succeeded ? Verdict.Sketch!.Info.SegmentCount : -1;
+        }
+
+        /// <summary>One dense-search combo result line for the module-phase table.</summary>
+        private static List<ShapeCandidate> ShapeCandidates()
+        {
+            // A mid payload between `medium` (~v6) and `dense` (~v14) so the
+            // ~v9-class rounded rung of the #35 analysis is in the table.
+            var contents = new List<(string tag, string content)>(PerfPayloads)
+            {
+                ("mid", "https://intranet.openaeros.local/parts/OA-ACCUTECH-SHIPPING-COVER" +
+                        "?rev=C&checked=2026-10-09&bin=W4-017&qa=PASS&station=CELL-4" +
+                        "&operator=JROBELIA&note=machined-all-over"),
+            };
+            var combos = new[]
+            {
+                (QrCellShape.Square, 0.00, 0.03),
+                (QrCellShape.RoundedSquare, 0.10, 0.03),
+                (QrCellShape.RoundedSquare, 0.10, 0.10),
+                (QrCellShape.RoundedSquare, 0.30, 0.10),
+                (QrCellShape.Circle, 0.50, 0.03),
+                (QrCellShape.Circle, 0.70, 0.03),
+                (QrCellShape.Circle, 0.90, 0.03),
+                (QrCellShape.Circle, 0.95, 0.03),
+            };
+            var results = new List<ShapeCandidate>();
+            foreach (var (tag, content) in contents)
+                foreach (var (shape, param, growth) in combos)
+                {
+                    ShapeCandidate? cand = null;
+                    foreach (var size in GuardLadderMm)
+                    {
+                        var v = ShapeVerdict(content, size, growth, shape, param, keepFn: false);
+                        if (v.Succeeded)
+                        {
+                            cand = new ShapeCandidate
+                            {
+                                Tag = tag, Content = content, Shape = shape, Param = param,
+                                Growth = growth, SizeMm = size, Verdict = v,
+                            };
+                            break;
+                        }
+                        // Only the ceiling rejection makes an over-bound
+                        // rung — a floor refusal keeps climbing.
+                        if (v.Error!.Kind == QrSketchErrorKind.TooManySegments)
+                        {
+                            cand ??= new ShapeCandidate
+                            {
+                                Tag = tag, Content = content, Shape = shape, Param = param,
+                                Growth = growth, SizeMm = size, Verdict = v,
+                            };
+                            break;
+                        }
+                    }
+                    if (cand != null) results.Add(cand);
+                }
+            return results;
+        }
+
+        /// <summary>
+        /// The spec-13 discriminator: only a build carrying the cell-shape
+        /// probes and the pane status readback reports shape=/keepFn= AND
+        /// viewStatus= in WindowStateProbe. A stale registered build either
+        /// lacks the members (InvokeMember throws) or reports without them.
+        /// </summary>
+        private static bool ProbeHasShapes(IAddInProbe? probe)
+        {
+            if (probe == null) { Console.WriteLine("# no add-in object present"); return false; }
+            try
+            {
+                string state = probe.WindowStateProbe();
+                Console.WriteLine($"# discriminator WindowStateProbe -> {state}");
+                return state.Contains("shape=") && state.Contains("keepFn=") &&
+                       state.Contains("viewStatus=");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# discriminator WindowStateProbe -> {ex.GetType().Name} " +
+                    "(the answering build predates spec-13/ticket-36)");
+                return false;
+            }
+        }
+
+        /// <summary>The pane's rendered status line, out of the trailing viewStatus= field.</summary>
+        private static string ViewStatusOf(string windowState)
+        {
+            const string key = "viewStatus=";
+            int i = windowState.IndexOf(key, StringComparison.Ordinal);
+            return i < 0 ? "" : windowState.Substring(i + key.Length).Trim();
+        }
+
+        /// <summary>Number of material regions the module emits — region boundaries + hole islands.</summary>
+        private static int MaterialRegionCount(QrSketch expected) =>
+            expected.Regions.Count +
+            expected.Regions.Sum(r => r.Holes.Sum(h => h.Islands.Count));
+
+        /// <summary>
+        /// The native material regions of the committed QR sketch — every
+        /// ISketchRegion whose bounding box matches a module material
+        /// contour (region outlines + nested islands) at 1e-9 m. regionTotal
+        /// reports everything SolidWorks enumerated, material or not.
+        /// </summary>
+        private static List<ISketchRegion> MaterialRegionsOf(ISldWorks sw, IModelDoc2 doc,
+            string sketchName, QrSketch expected, out int regionTotal)
+        {
+            regionTotal = -1;
+            var found = new List<ISketchRegion>();
+            var feat = FindSketchFeature(doc, sketchName);
+            var sketch = feat?.GetSpecificFeature2() as ISketch;
+            if (sketch == null) return found;
+            var regions = sketch.GetSketchRegions() as object[];
+            if (regions == null) { regionTotal = 0; return found; }
+            regionTotal = regions.Length;
+
+            var mu = sw.IGetMathUtility();
+            var m2s = sketch.ModelToSketchTransform;
+            var material = new List<(double minX, double maxX, double minY, double maxY)>();
+            foreach (var rg in expected.Regions)
+            {
+                material.Add(ModuleBBox(rg.Boundary));
+                foreach (var h in rg.Holes)
+                    foreach (var isl in h.Islands)
+                        material.Add(ModuleBBox(isl.Boundary));
+            }
+            foreach (var ro in regions)
+            {
+                if (!(ro is ISketchRegion region)) continue;
+                var bb = RegionBBox(region, mu, m2s);
+                if (material.Any(mb => BBoxEquals(bb, mb, 1e-9)))
+                    found.Add(region);
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// Gate A's core: on the committed dots sketch, every emitted dot is
+        /// its own disjoint region — clear the selection, then Select each
+        /// material region ON ITS OWN. Returns (total, matched, selectable).
+        /// </summary>
+        private static (int total, int matched, int selectable) DotsRegionCensus(
+            ISldWorks sw, IModelDoc2 doc, string sketchName, QrSketch expected, string tag)
+        {
+            var regions = MaterialRegionsOf(sw, doc, sketchName, expected, out int total);
+            int selectable = 0;
+            foreach (var region in regions)
+            {
+                doc.ClearSelection2(true);
+                try { if (region.Select(false, 0)) selectable++; } catch { }
+            }
+            doc.ClearSelection2(true);
+            Console.WriteLine($"#   {tag} region census: native={total} " +
+                $"material-matched={regions.Count} individually-selectable={selectable} " +
+                $"(module emits {MaterialRegionCount(expected)} dots)");
+            return (total, regions.Count, selectable);
+        }
+
+        /// <summary>Selects up to `take` of the sketch's material regions (appended) — the subset extrude.</summary>
+        private static int SelectMaterialRegionSubset(ISldWorks sw, IModelDoc2 doc,
+            string sketchName, QrSketch expected, int take)
+        {
+            var regions = MaterialRegionsOf(sw, doc, sketchName, expected, out _);
+            doc.ClearSelection2(true);
+            int selected = 0;
+            foreach (var region in regions.Take(take))
+                try { if (region.Select(true, 0)) selected++; } catch { }
+            return selected;
+        }
+
+        /// <summary>
+        /// Re-enters the committed QR sketch and explodes its block instance —
+        /// the fallback when the block-form sketch does not enumerate
+        /// selectable regions. Leaves the sketch committed with raw lines.
+        /// </summary>
+        private static bool ExplodeQrSketchBlock(IModelDoc2 doc, IModelDocExtension ext,
+            ISketchManager mgr, string sketchName, string tag)
+        {
+            doc.ClearSelection2(true);
+            if (!ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault))
+            {
+                Console.WriteLine($"#   {tag}: sketch feature no longer selects for explode");
+                return false;
+            }
+            mgr.InsertSketch(true);
+            var bk = mgr.ActiveSketch as ISketch;
+            if (bk == null || bk.GetSketchBlockInstanceCount() == 0)
+            {
+                try { mgr.InsertSketch(false); } catch { }
+                return false;
+            }
+            var bi = bk.IGetSketchBlockInstances(0) as ISketchBlockInstance;
+            bool ok = false;
+            try { mgr.ExplodeSketchBlockInstance((SketchBlockInstance)bi!); ok = true; }
+            catch (Exception ex) { Console.WriteLine($"#   {tag}: explode threw {ex.GetType().Name}"); }
+            try { mgr.InsertSketch(false); } catch { }
+            doc.ClearSelection2(true);
+            return ok;
+        }
+
+        /// <summary>
+        /// The 1:1 material-contour bbox census on a sketch that ALREADY
+        /// holds raw lines (post-explode) — VerifyExplodedModuleIdentical's
+        /// contour half without requiring a block instance to explode.
+        /// </summary>
+        private static void RawSketchContourCheck(IModelDoc2 doc, IModelDocExtension ext,
+            ISketchManager mgr, string sketchName, QrSketch expected, string tag)
+        {
+            doc.ClearSelection2(true);
+            bool reentered = ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            Check(reentered, $"the committed QR sketch re-selects for the contour census ({tag})");
+            if (!reentered) return;
+            mgr.InsertSketch(true);
+            var bk = mgr.ActiveSketch as ISketch;
+            Check(bk != null, $"the QR sketch re-enters edit mode ({tag})");
+            if (bk == null) { try { mgr.InsertSketch(false); } catch { } return; }
+
+            object? rawContours = null;
+            try { rawContours = bk.GetSketchContours(); } catch { }
+            var nativeAll = rawContours is object[] arr
+                ? arr.Cast<ISketchContour>().ToList() : new List<ISketchContour>();
+            var materialNative = nativeAll.Where(ContourIsMaterial).ToList();
+            const double tol = 1e-9;
+            var nativeBoxes = materialNative.Select(NativeBBox).ToList();
+            var used = new bool[nativeBoxes.Count];
+            int matched = 0;
+            foreach (var mc in expected.Contours)
+            {
+                var mb = ModuleBBox(mc);
+                int hit = -1;
+                for (var i = 0; i < nativeBoxes.Count; i++)
+                    if (!used[i] && BBoxEquals(mb, nativeBoxes[i], tol)) { hit = i; break; }
+                if (hit >= 0) { used[hit] = true; matched++; }
+            }
+            Check(matched == expected.Contours.Count &&
+                  materialNative.Count == expected.Contours.Count,
+                $"every native contour matches a module contour bbox 1:1 ({tag})",
+                $"matched={matched} nativeMaterial={materialNative.Count} " +
+                $"nativeTotal={nativeAll.Count} expected={expected.Contours.Count}");
+            mgr.InsertSketch(false);
+            doc.ClearSelection2(true);
+        }
+
+        /// <summary>
+        /// Gate B's native carve-out check: on the exploded (raw-line) QR
+        /// sketch, the finder ring's outer contour must carry the SQUARE
+        /// primitive's edge count — the keep-function-squares cells —
+        /// strictly fewer edges than the all-rounded counterfactual emits
+        /// for the same extent (chamfered corners).
+        /// </summary>
+        private static void FinderRingNativeCheck(IModelDoc2 doc, IModelDocExtension ext,
+            ISketchManager mgr, string sketchName,
+            QrSketch expectedKeep, QrSketch expectedNoKeep, string tag)
+        {
+            // A finder ring = the ring→hole→island nested region (v1 has
+            // three identical ones — any one proves the carve-out).
+            var ring = expectedKeep.Regions
+                .FirstOrDefault(r => r.Holes.Any(h => h.Islands.Count > 0));
+            Check(ring != null, $"a finder ring→hole→island region exists in the module output ({tag})");
+            if (ring == null) return;
+            var ringBox = ModuleBBox(ring.Boundary);
+            int keepVerts = ring.Boundary.Vertices.Count;
+            var counter = expectedNoKeep.Contours
+                .FirstOrDefault(c => BBoxEquals(ModuleBBox(c), ringBox, 1e-9));
+            int noKeepVerts = counter?.Vertices.Count ?? -1;
+            Check(noKeepVerts > keepVerts,
+                $"the all-rounded counterfactual emits MORE finder-ring edges " +
+                $"than the carve-out — the checkbox changes the emitted geometry ({tag})",
+                $"keepFn ring outer={keepVerts} verts, all-rounded={noKeepVerts} verts");
+
+            doc.ClearSelection2(true);
+            bool reentered = ext.SelectByID2(sketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                (int)swSelectOption_e.swSelectOptionDefault);
+            Check(reentered, $"the QR sketch re-selects for the finder-ring census ({tag})");
+            if (!reentered) return;
+            mgr.InsertSketch(true);
+            var bk = mgr.ActiveSketch as ISketch;
+            Check(bk != null, $"the QR sketch re-enters edit mode ({tag})");
+            if (bk == null) { try { mgr.InsertSketch(false); } catch { } return; }
+            object? rawContours = null;
+            try { rawContours = bk.GetSketchContours(); } catch { }
+            var nativeAll = rawContours is object[] arr
+                ? arr.Cast<ISketchContour>().ToList() : new List<ISketchContour>();
+            var native = nativeAll.Where(ContourIsMaterial)
+                .FirstOrDefault(c => BBoxEquals(NativeBBox(c), ringBox, 1e-9));
+            Check(native != null,
+                $"a native contour sits at the finder ring's extent ({tag})");
+            int nativeSegs = -1;
+            if (native != null)
+            {
+                try { nativeSegs = ((object[])native.GetSketchSegments()).Length; } catch { }
+            }
+            Check(nativeSegs == keepVerts,
+                $"the native finder ring carries the SQUARE primitive's edge count " +
+                $"— function cells emitted square, natively ({tag})",
+                $"native={nativeSegs} keepFn-module={keepVerts} all-rounded-module={noKeepVerts}");
+            mgr.InsertSketch(false);
+            doc.ClearSelection2(true);
+        }
+
+        private static double TimeMs(System.Action a)
+        {
+            var t = System.Diagnostics.Stopwatch.StartNew();
+            a();
+            t.Stop();
+            return t.Elapsed.TotalMilliseconds;
+        }
+
+        private static int ShapesMain(string[] args)
+        {
+            string deployDir = args.Length > 0
+                ? args[0]
+                : Path.Combine(System.Environment.GetFolderPath(
+                        System.Environment.SpecialFolder.LocalApplicationData),
+                    "SolidWorksQrAddIn");
+            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+            // ================= module-side expectations =================
+            // Everything a live verdict will be asserted against is computed
+            // and printed BEFORE the occupied-seat refusal — a blocked run
+            // is still self-diagnosing (the xsettings convention).
+
+            Console.WriteLine("# spec-13 live gates — cell shapes (ticket #36)");
+
+            // Gate A — disjoint dots: the v1 payload at the window's initial
+            // 25 mm, dot size 50% of pitch. Growth does not apply to circles
+            // (the generator never consults it — the growth-0 layout map).
+            var squareAtInitial = Verdict(PayloadA, QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide,
+                QRCodeGenerator.ECCLevel.M, invert: false);
+            var dotsAtDefaultParam = ShapeVerdict(PayloadA, QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide,
+                QrCellShape.Circle, 0.10, keepFn: false);
+            var dots = ShapeVerdict(PayloadA, QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide,
+                QrCellShape.Circle, 0.50, keepFn: false);
+            if (!squareAtInitial.Succeeded || !dotsAtDefaultParam.Succeeded || !dots.Succeeded)
+            {
+                Console.WriteLine("# FATAL: module cannot build the gate-A fixtures — " +
+                    $"square={VerdictName(squareAtInitial)} " +
+                    $"dots@10={VerdictName(dotsAtDefaultParam)} dots@50={VerdictName(dots)}");
+                return 1;
+            }
+            var dotsSketch = dots.Sketch!;
+            Console.WriteLine($"# gate A (dots): '{PayloadA}' @ 25mm circle dot=50% -> " +
+                $"N={dotsSketch.Info.CellCount} contours={dotsSketch.Info.ContourCount} " +
+                $"segs={dotsSketch.Info.SegmentCount} dots={MaterialRegionCount(dotsSketch)} " +
+                $"minEdge={dotsSketch.Info.MinEdgeMm:F4}mm");
+            string dotsSig = QrPictureRenderer.Render(dotsSketch,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+
+            // Gate B — rounded square: at the initial 25 mm/3% NO radius
+            // resolves (#32's feasible-domain note); 60 mm/10% accepts.
+            // The carve-out variant is the gate request; the all-rounded
+            // counterfactual discriminates the native finder-ring check.
+            var roundedAtInitial = ShapeVerdict(PayloadA, QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide,
+                QrCellShape.RoundedSquare, 0.10, keepFn: false);
+            var roundedAt60x3 = ShapeVerdict(PayloadA, 60.0, 0.03,
+                QrCellShape.RoundedSquare, 0.10, keepFn: false);
+            var roundedNoKeep = ShapeVerdict(PayloadA, 60.0, 0.10,
+                QrCellShape.RoundedSquare, 0.10, keepFn: false);
+            var roundedGate = ShapeVerdict(PayloadA, 60.0, 0.10,
+                QrCellShape.RoundedSquare, 0.10, keepFn: true);
+            if (roundedAtInitial.Succeeded ||
+                roundedAtInitial.Error!.Kind != QrSketchErrorKind.BelowInsertionLimit)
+            {
+                Console.WriteLine("# FATAL: module no longer refuses rounded at the " +
+                    $"initial 25mm/3% — expected BelowInsertionLimit, got " +
+                    VerdictName(roundedAtInitial));
+                return 1;
+            }
+            if (!roundedAt60x3.Succeeded || !roundedNoKeep.Succeeded || !roundedGate.Succeeded)
+            {
+                Console.WriteLine("# FATAL: module cannot build the gate-B fixtures — " +
+                    $"60mm/3%={VerdictName(roundedAt60x3)} " +
+                    $"60mm/10%={VerdictName(roundedNoKeep)} " +
+                    $"keepFn={VerdictName(roundedGate)}");
+                return 1;
+            }
+            var roundedSketch = roundedGate.Sketch!;
+            Console.WriteLine($"# gate B (rounded): '{PayloadA}' @ 60mm growth=10% " +
+                $"radius=10% keepFn -> N={roundedSketch.Info.CellCount} " +
+                $"contours={roundedSketch.Info.ContourCount} " +
+                $"segs={roundedSketch.Info.SegmentCount} " +
+                $"minEdge={roundedSketch.Info.MinEdgeMm:F4}mm | " +
+                $"refusal at 25mm/3%: {roundedAtInitial.Error!.Message}");
+            string roundedSig = QrPictureRenderer.Render(roundedSketch,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+            {
+                var ringKeep = roundedSketch.Regions
+                    .FirstOrDefault(r => r.Holes.Any(h => h.Islands.Count > 0));
+                var counter = roundedNoKeep.Sketch!.Contours.FirstOrDefault(
+                    c => ringKeep != null && BBoxEquals(ModuleBBox(c), ModuleBBox(ringKeep.Boundary), 1e-9));
+                Console.WriteLine($"# gate B carve-out discriminator: finder-ring outer " +
+                    $"verts keepFn={ringKeep?.Boundary.Vertices.Count ?? -1} " +
+                    $"all-rounded={counter?.Vertices.Count ?? -1}");
+            }
+
+            // Gate C — the dense rung at MaxSegmentCount: every (payload x
+            // shape x param) combo climbed up the size ladder; the accepted
+            // row nearest the 8000 bound is measured live, the cheapest
+            // TooManySegments row is gate D's over-bound rung.
+            var candidates = ShapeCandidates();
+            Console.WriteLine($"# gate C candidate table (first accepted rung per combo, " +
+                $"MaxSegmentCount={QrInsertionGuard.MaxSegmentCount}):");
+            foreach (var c in candidates)
+            {
+                var info = c.Verdict.Succeeded ? c.Verdict.Sketch!.Info : null;
+                Console.WriteLine($"#   {c.Tag,-6} {QrCellShapes.CodeFor(c.Shape),-7} " +
+                    $"param={c.Param * 100:F0}%" +
+                    (c.Shape == QrCellShape.Circle
+                        ? " growth=n/a (inert under Circle)"
+                        : $" growth={c.Growth * 100:F0}%") +
+                    $" @ {c.SizeMm:F0}mm -> {(c.IsAccepted
+                        ? $"VALID v{info!.Version} N={info.CellCount} " +
+                          $"segs={info.SegmentCount}"
+                        : $"INVALID {c.Verdict.Error!.Kind}")}");
+            }
+            var inBound = candidates.Where(c => c.IsAccepted && c.Segments <= QrInsertionGuard.MaxSegmentCount)
+                .OrderByDescending(c => c.Segments).FirstOrDefault();
+            var overBound = candidates.Where(c => c.IsOverBound)
+                .OrderBy(c => c.SizeMm).FirstOrDefault();
+            if (inBound == null || overBound == null)
+            {
+                Console.WriteLine("# FATAL: the candidate table has no under-bound and/or " +
+                    "no over-bound rung — the dense gates cannot be exercised");
+                return 1;
+            }
+            var denseSketch = inBound.Verdict.Sketch!;
+            Console.WriteLine($"# gate C rung: {inBound.Tag} {QrCellShapes.CodeFor(inBound.Shape)} " +
+                $"param={inBound.Param * 100:F0}% @ {inBound.SizeMm:F0}mm -> " +
+                $"segs={inBound.Segments} (bound {QrInsertionGuard.MaxSegmentCount})");
+            Console.WriteLine($"# gate D rung: {overBound.Tag} {QrCellShapes.CodeFor(overBound.Shape)} " +
+                $"param={overBound.Param * 100:F0}% @ {overBound.SizeMm:F0}mm -> " +
+                overBound.Verdict.Error!.Message);
+            double genMs = double.MaxValue;
+            for (var i = 0; i < 5; i++)
+            {
+                var t0 = System.Diagnostics.Stopwatch.StartNew();
+                ShapeVerdict(inBound.Content, inBound.SizeMm, inBound.Growth,
+                    inBound.Shape, inBound.Param, keepFn: false);
+                t0.Stop();
+                genMs = Math.Min(genMs, t0.Elapsed.TotalMilliseconds);
+            }
+            Console.WriteLine($"# gate C module generation: gen_ms={genMs:F1} (best of 5)");
+
+            // ================= refuse while any SolidWorks process lives =================
+            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
+            {
+                Console.WriteLine("# FATAL: the spec-13 shape gates require SolidWorks " +
+                    "closed — a SLDWORKS.exe process is already running. Refusing to " +
+                    "attach; the probe never mutates or kills an occupied seat.");
+                return 1;
+            }
+
+            ISldWorks? sw = null;
+            try
+            {
+                sw = AttachOrLaunch(progId);
+                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
+                WaitForStartup(sw);
+                int openDocs = 0;
+                try { openDocs = sw.GetDocumentCount(); } catch { }
+                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
+                if (sw.Visible || openDocs > 0)
+                {
+                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
+                        "refusing to mutate an interactive session.");
+                    return 1;
+                }
+                _spawnedFresh = true;
+
+                // ---- the answering build must expose the spec-13 probe surface ----
+                var probe = TryGetProbe(sw);
+                if (!ProbeHasShapes(probe))
+                {
+                    string local = Path.Combine(
+                        System.Environment.GetFolderPath(
+                            System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll");
+                    foreach (var p in new[]
+                             {
+                                 dllPath, local,
+                                 @"C:\Program Files\SolidWorks QR Add-In\SolidWorksQrAddIn.dll",
+                             })
+                        try { sw.UnloadAddIn(p); } catch { }
+                    int lr = sw.LoadAddIn(dllPath);
+                    Console.WriteLine($"# LoadAddIn({dllPath}) -> {lr}");
+                    if (lr != 0) return 1;
+                    probe = TryGetProbe(sw);
+                }
+                Check(ProbeHasShapes(probe),
+                    "the answering build exposes the spec-13 probe surface " +
+                    "(shape=/keepFn=/viewStatus= in WindowStateProbe)");
+                if (!ProbeHasShapes(probe)) return 1;
+                Check(probe!.AddinStateProbe().StartsWith("CONNECTED"),
+                    "add-in connected", probe.AddinStateProbe());
+
+                string opened = probe.OpenQrWindowProbe();
+                Check(opened.Contains("open=True") && opened.Contains("windows=1"),
+                    "pane opened through the command entry", opened);
+                string fresh = probe.WindowStateProbe();
+                Check(fresh.Contains("shape=square") && fresh.Contains("keepFn=False") &&
+                      fresh.Contains("shapeParam=10"),
+                    "a fresh session starts square with the shape parameter at its initial 10%",
+                    fresh);
+
+                // ---------- negative plumbing ----------
+                string badShape = probe.SetQrCellShapeProbe("bogus");
+                Check(badShape.StartsWith("ERROR") && badShape.Contains("unknown cell shape"),
+                    "an unrecognised cell shape never reaches the session", badShape);
+                Check(probe.WindowStateProbe().Contains("shape=square"),
+                    "the refused shape leaves the current selection in force",
+                    probe.WindowStateProbe());
+
+                string template = sw.GetUserPreferenceStringValue(
+                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                Check(File.Exists(template), "default part template exists", template);
+                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
+                Check(doc != null, "gate part document created");
+                if (doc == null) return 1;
+                try
+                {
+                    var ext = (IModelDocExtension)doc.Extension;
+                    var mgr = (ISketchManager)doc.SketchManager;
+                    var fm = (IFeatureManager)doc.FeatureManager;
+
+                    // ================= GATE A — disjoint dots =================
+
+                    string rcA = probe.SetQrContentProbe(PayloadA);
+                    Check(ResponseMatchesVerdict(rcA, squareAtInitial),
+                        "payload content accepts at the initial square request — " +
+                        "live verdict matches the module", rcA);
+                    string rshapeA = probe.SetQrCellShapeProbe("circle");
+                    Check(ResponseMatchesVerdict(rshapeA, dotsAtDefaultParam),
+                        "switching to Circle revalidates — live verdict matches the module " +
+                        "(dot parameter still at its initial 10%)", rshapeA);
+                    string rparamA = probe.SetQrShapeParamProbe("50");
+                    Check(ResponseMatchesVerdict(rparamA, dots),
+                        "dot size 50% of pitch revalidates — live verdict matches the module",
+                        rparamA);
+                    string dotsState = probe.WindowStateProbe();
+                    Check(dotsState.Contains("shape=circle") &&
+                          dotsState.Contains("viewShape=circle") &&
+                          dotsState.Contains("viewGrowthEnabled=False") &&
+                          dotsState.Contains("viewShapeParamLabel=Dot size"),
+                        "the pane reports Circle: shape=circle, growth field disabled, " +
+                        "the parameter relabelled 'Dot size'", dotsState);
+                    Check(probe.PreviewSignatureProbe().Contains($"sha={dotsSig}"),
+                        "the live preview renders exactly the module's dotted picture",
+                        probe.PreviewSignatureProbe());
+
+                    doc.ClearSelection2(true);
+                    Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault),
+                        "Front Plane selected for the dots create");
+                    string crA = probe.CreateQrFromWindowProbe();
+                    Check(crA.StartsWith("OK"), "the disjoint-dots create succeeds", crA);
+                    string dotsName = crA.StartsWith("OK") && crA.Split(' ').Length > 1
+                        ? crA.Split(' ')[1] : "";
+                    var dotsLive = mgr.ActiveSketch as ISketch;
+                    Check(dotsLive != null, "the dots sketch is left open in edit mode");
+                    if (dotsLive != null)
+                    {
+                        VerifyXsettingsBlock(dotsLive, dotsSketch, "dots");
+                        mgr.InsertSketch(false);
+                        Check(mgr.ActiveSketch == null, "the dots sketch exits edit mode");
+                    }
+
+                    // Per-cell region selection on the committed sketch —
+                    // the engineer's route. Every emitted dot is its own
+                    // disjoint region; each must be individually selectable.
+                    int dotsEmitted = MaterialRegionCount(dotsSketch);
+                    var (dotsTotal, dotsMatched, dotsSelectable) =
+                        DotsRegionCensus(sw, doc, dotsName, dotsSketch, "dots");
+                    Check(dotsMatched == dotsEmitted,
+                        "every emitted dot has a native sketch region " +
+                        "(region census on the committed QR sketch)",
+                        $"nativeRegions={dotsTotal} matched={dotsMatched} emitted={dotsEmitted}");
+                    Check(dotsSelectable == dotsMatched && dotsMatched == dotsEmitted,
+                        "every emitted dot region is individually selectable",
+                        $"selectable={dotsSelectable}/{dotsEmitted}");
+                    bool dotsExploded = false;
+                    if (dotsMatched != dotsEmitted)
+                    {
+                        // Fallback diagnostics: explode the block to raw lines
+                        // and re-census — the doc records which route held.
+                        dotsExploded = ExplodeQrSketchBlock(doc, ext, mgr, dotsName, "dots");
+                        Console.WriteLine($"#   dots explode-after-census -> {dotsExploded}");
+                        var (t2, m2, s2) = DotsRegionCensus(sw, doc, dotsName, dotsSketch,
+                            "dots-exploded");
+                        Check(m2 == dotsEmitted && s2 == dotsEmitted,
+                            "every emitted dot region is individually selectable " +
+                            "after exploding the block",
+                            $"nativeRegions={t2} matched={m2} selectable={s2}");
+                    }
+
+                    var plateA = CreateBackingPlate(doc, ext, mgr, fm);
+                    Check(plateA != null, "backing plate for the dots extrude",
+                        plateA?.Name ?? "null");
+                    if (plateA != null)
+                    {
+                        int take = Math.Max(1, dotsEmitted / 4);
+                        int subset = SelectMaterialRegionSubset(sw, doc, dotsName, dotsSketch, take);
+                        Check(subset == take,
+                            $"a {take}-dot subset of the per-cell regions selects for the boss",
+                            $"selected={subset}");
+                        var boss = fm.FeatureExtrusion3(
+                            true, false, false, (int)swEndConditions_e.swEndCondBlind, 0,
+                            0.002, 0.0, false, false, false, false, 0.0, 0.0,
+                            false, false, false, false,
+                            true, true, true,
+                            (int)swStartConditions_e.swStartSketchPlane, 0.0, false) as IFeature;
+                        Check(boss != null,
+                            "the selected dot subset extrudes a boss — no contact failures",
+                            boss == null ? "FeatureExtrusion3 returned null" : boss.Name);
+                    }
+                    if (!dotsExploded)
+                        VerifyExplodedModuleIdentical(doc, ext, mgr, dotsName,
+                            dotsSketch, "dots");
+                    else
+                        RawSketchContourCheck(doc, ext, mgr, dotsName, dotsSketch, "dots");
+
+                    // ================= GATE B — rounded square =================
+
+                    // The shape-parameter text persists across shape
+                    // switches (verbatim-field discipline): left at "50" the
+                    // rounded request would carry radius 50%. Reset it to
+                    // the gate's 10% while still on Circle (a 10% dot), so
+                    // the rounded switch lands exactly the module's fixture.
+                    string rparamB = probe.SetQrShapeParamProbe("10");
+                    Check(ResponseMatchesVerdict(rparamB, dotsAtDefaultParam),
+                        "the shape-parameter field resets to 10% under Circle — " +
+                        "live verdict matches the module", rparamB);
+                    string rshapeB = probe.SetQrCellShapeProbe("rounded");
+                    Check(ResponseMatchesVerdict(rshapeB, roundedAtInitial),
+                        "Rounded at the initial 25mm/3% is refused exactly as the module " +
+                        "says — no radius resolves there (the #32 feasible-domain note)",
+                        roundedAtInitial.Error!.Message);
+                    string rsz60 = probe.SetQrSizeProbe("60");
+                    Check(ResponseMatchesVerdict(rsz60, roundedAt60x3),
+                        "size 60mm revalidates — live verdict matches the module", rsz60);
+                    string rgr10 = probe.SetQrGrowthProbe("10");
+                    Check(ResponseMatchesVerdict(rgr10, roundedNoKeep),
+                        "growth 10% opens the feasible band — live verdict matches the module",
+                        roundedNoKeep.Succeeded ? "" : roundedNoKeep.Error?.Message ?? "");
+                    string badParam = probe.SetQrShapeParamProbe("bogus");
+                    Check(badParam.StartsWith("INVALID") &&
+                          badParam.Contains("InvalidShapeParameter"),
+                        "a malformed shape parameter is refused by name", badParam);
+                    Check(ResponseMatchesVerdict(probe.SetQrShapeParamProbe("10"), roundedNoKeep),
+                        "corner radius 10% revalidates — live verdict matches the module",
+                        roundedNoKeep.Succeeded ? "" : roundedNoKeep.Error?.Message ?? "");
+                    Check(ResponseMatchesVerdict(probe.SetQrKeepFunctionSquareProbe(true),
+                            roundedGate),
+                        "the keep-function-squares carve-out revalidates — " +
+                        "live verdict matches the module",
+                        roundedGate.Succeeded ? "" : roundedGate.Error?.Message ?? "");
+                    string roundedState = probe.WindowStateProbe();
+                    Check(roundedState.Contains("keepFn=True") &&
+                          roundedState.Contains("shape=rounded") &&
+                          roundedState.Contains("viewKeepFn=True"),
+                        "the pane reports the carve-out end-to-end " +
+                        "(keepFn=True + the rendered checkbox)", roundedState);
+                    Check(probe.PreviewSignatureProbe().Contains($"sha={roundedSig}"),
+                        "the live preview renders exactly the module's rounded+carve-out picture",
+                        probe.PreviewSignatureProbe());
+
+                    doc.ClearSelection2(true);
+                    Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault),
+                        "Front Plane selected for the rounded create");
+                    string crB = probe.CreateQrFromWindowProbe();
+                    Check(crB.StartsWith("OK"),
+                        "the rounded-square create succeeds (60mm/10%/radius10%/keepFn)", crB);
+                    string roundedName = crB.StartsWith("OK") && crB.Split(' ').Length > 1
+                        ? crB.Split(' ')[1] : "";
+                    var roundedLive = mgr.ActiveSketch as ISketch;
+                    Check(roundedLive != null, "the rounded sketch is left open in edit mode");
+                    if (roundedLive != null)
+                    {
+                        VerifyXsettingsBlock(roundedLive, roundedSketch, "rounded");
+                        mgr.InsertSketch(false);
+                        Check(mgr.ActiveSketch == null, "the rounded sketch exits edit mode");
+                    }
+
+                    // Boss + shallow cut through the committed sketch's
+                    // material regions — the established feature route.
+                    var roundedRegions = MaterialRegionsOf(sw, doc, roundedName,
+                        roundedSketch, out int roundedTotal);
+                    bool roundedExploded = false;
+                    Check(roundedRegions.Count == MaterialRegionCount(roundedSketch),
+                        "the rounded QR's material regions enumerate on the committed sketch",
+                        $"nativeRegions={roundedTotal} matched={roundedRegions.Count} " +
+                        $"expected={MaterialRegionCount(roundedSketch)}");
+                    if (roundedRegions.Count == 0)
+                    {
+                        roundedExploded = ExplodeQrSketchBlock(doc, ext, mgr, roundedName,
+                            "rounded");
+                        Console.WriteLine($"#   rounded explode-before-features -> {roundedExploded}");
+                    }
+                    FeatureChecks(sw, doc, ext, mgr, roundedName, roundedSketch, "rounded-gate");
+
+                    if (!roundedExploded)
+                        VerifyExplodedModuleIdentical(doc, ext, mgr, roundedName,
+                            roundedSketch, "rounded");
+                    else
+                        RawSketchContourCheck(doc, ext, mgr, roundedName, roundedSketch, "rounded");
+                    FinderRingNativeCheck(doc, ext, mgr, roundedName,
+                        roundedSketch, roundedNoKeep.Sketch!, "rounded");
+
+                    // ================= GATE C — dense rung at the bound =================
+
+                    string denseResp = DriveShapeRequest(probe, inBound, inv);
+                    Check(ResponseMatchesVerdict(denseResp,
+                            ShapeVerdict(inBound.Content, inBound.SizeMm, inBound.Growth,
+                                inBound.Shape, inBound.Param, keepFn: false)),
+                        "the dense rung drives through the pane — live verdict matches the module",
+                        denseResp);
+                    string denseState = probe.WindowStateProbe();
+                    Check(denseState.Contains(
+                            $"shape={QrCellShapes.CodeFor(inBound.Shape)}"),
+                        "the session reports the dense rung's shape", denseState);
+
+                    doc.ClearSelection2(true);
+                    Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault),
+                        "Front Plane selected for the dense create");
+                    double createMs = 0;
+                    string crC = "";
+                    createMs = TimeMs(() => crC = probe.CreateQrFromWindowProbe());
+                    Check(crC.StartsWith("OK"),
+                        $"the dense create succeeds — {inBound.Segments} segments natively", crC);
+                    string denseName = crC.StartsWith("OK") && crC.Split(' ').Length > 1
+                        ? crC.Split(' ')[1] : "";
+                    var denseLive = mgr.ActiveSketch as ISketch;
+                    double censusMs = 0, exitMs = 0, enterMs = 0, regionsMs = 0,
+                        segsMs = 0, exit2Ms = 0, rebuildMs = 0;
+                    int nativeSegs = -1, nativeRegions = -1;
+                    if (denseLive != null)
+                    {
+                        // The native census while the sketch is open: the
+                        // block def must carry the module's segment count.
+                        censusMs = TimeMs(() =>
+                        {
+                            var inst = denseLive.GetSketchBlockInstanceCount() > 0
+                                ? denseLive.IGetSketchBlockInstances(0) as ISketchBlockInstance
+                                : null;
+                            var ds = (inst?.Definition as ISketchBlockDefinition)?.GetSketch()
+                                as ISketch;
+                            object? raw = null;
+                            try { raw = ds?.GetSketchSegments(); } catch { }
+                            nativeSegs = raw is object[] a
+                                ? a.Count(s => s is ISketchLine &&
+                                      !((s as ISketchSegment)?.ConstructionGeometry ?? false))
+                                : -1;
+                        });
+                        Check(nativeSegs == inBound.Segments,
+                            "the native block def carries the module's segment count 1:1",
+                            $"nativeMaterialSegs={nativeSegs} expected={inBound.Segments} " +
+                            $"(WindowStateProbe segs corroborated by the setter's VALID line)");
+                        exitMs = TimeMs(() => mgr.InsertSketch(false));
+                        Check(mgr.ActiveSketch == null, "the dense sketch exits edit mode");
+
+                        // Sketch-edit responsiveness, honestly: re-enter the
+                        // committed feature, solve its regions, enumerate its
+                        // segments, exit again, rebuild the document.
+                        doc.ClearSelection2(true);
+                        bool sel = ext.SelectByID2(denseName, "SKETCH", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault);
+                        Check(sel, "the committed dense sketch re-selects for edit timings");
+                        if (sel)
+                        {
+                            enterMs = TimeMs(() => mgr.InsertSketch(true));
+                            var back = mgr.ActiveSketch as ISketch;
+                            Check(back != null, "the dense sketch re-enters edit mode",
+                                $"enter_ms={enterMs:F0}");
+                            if (back != null)
+                            {
+                                regionsMs = TimeMs(() =>
+                                {
+                                    try { nativeRegions = back.GetSketchRegionCount(); } catch { }
+                                    try { nativeRegions = (back.GetSketchRegions()
+                                        as object[])?.Length ?? nativeRegions; } catch { }
+                                });
+                                segsMs = TimeMs(() =>
+                                {
+                                    try { _ = back.GetSketchSegments(); } catch { }
+                                });
+                                exit2Ms = TimeMs(() => mgr.InsertSketch(false));
+                            }
+                        }
+                        rebuildMs = TimeMs(() => { try { doc.EditRebuild3(); } catch { } });
+                        Console.WriteLine($"PERF dense-rung segs={inBound.Segments} " +
+                            $"gen_ms={genMs:F1} create_ms={createMs:F0} " +
+                            $"native_insert_ms≈{createMs - genMs:F0} " +
+                            $"def_census_ms={censusMs:F0} exit_ms={exitMs:F0} " +
+                            $"enter_edit_ms={enterMs:F0} region_solve_ms={regionsMs:F0} " +
+                            $"(regions={nativeRegions}) seg_enum_ms={segsMs:F0} " +
+                            $"exit2_ms={exit2Ms:F0} doc_rebuild_ms={rebuildMs:F0}");
+                    }
+
+                    // ================= GATE D — one rung over the bound =================
+
+                    string overResp = DriveShapeRequest(probe, overBound, inv);
+                    Check(overResp.StartsWith("INVALID") && overResp.Contains("TooManySegments"),
+                        "the over-bound request rejects TooManySegments at the pane", overResp);
+                    string overState = probe.WindowStateProbe();
+                    Check(overState.Contains("hasRequest=False"),
+                        "the rejected request leaves no valid request", overState);
+                    string status = ViewStatusOf(overState);
+                    Check(status.Contains("segment") &&
+                          status.Contains(QrInsertionGuard.MaxSegmentCount.ToString()),
+                        "the rejection surfaces on the pane status line verbatim", status);
+
+                    int featsBeforeRefusal = FindSketchFeatureNames(doc).Count;
+                    string refusedCreate = probe.CreateQrFromWindowProbe();
+                    Check(refusedCreate.StartsWith("ERROR"),
+                        "create REFUSES the over-bound request", refusedCreate);
+                    Check(FindSketchFeatureNames(doc).Count == featsBeforeRefusal &&
+                          mgr.ActiveSketch == null,
+                        "the refused create touched neither the feature tree " +
+                        "nor the sketch-edit state");
+                }
+                finally
+                {
+                    try { sw.CloseDoc(doc.GetTitle()); } catch { }
+                }
+
+                try { sw.UnloadAddIn(dllPath); } catch { }
+                Console.WriteLine(_failures == 0
+                    ? "# SHAPES ALL CHECKS PASSED"
+                    : $"# {_failures} check(s) failed");
+                return _failures == 0 ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
+                return 1;
+            }
+            finally
+            {
+                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Drives one gate-C/D candidate through the pane probes in field
+        /// order (shape -> keepFn -> param -> growth -> size -> content) and
+        /// returns the content edit's verdict — the fully-determined request.
+        /// Every response is printed for the record.
+        /// </summary>
+        private static string DriveShapeRequest(IAddInProbe probe, ShapeCandidate c,
+            System.Globalization.CultureInfo inv)
+        {
+            Console.WriteLine($"#   drive {c.Tag} {QrCellShapes.CodeFor(c.Shape)} " +
+                $"param={c.Param * 100:F0}% growth={c.Growth * 100:F0}% size={c.SizeMm:F0}mm");
+            string r;
+            r = probe.SetQrCellShapeProbe(QrCellShapes.CodeFor(c.Shape));
+            Console.WriteLine($"#     shape -> {Trim140(r)}");
+            r = probe.SetQrKeepFunctionSquareProbe(false);
+            Console.WriteLine($"#     keepFn -> {Trim140(r)}");
+            if (c.Shape != QrCellShape.Square)
+            {
+                r = probe.SetQrShapeParamProbe((c.Param * 100.0).ToString("G4", inv));
+                Console.WriteLine($"#     param -> {Trim140(r)}");
+            }
+            if (c.Shape != QrCellShape.Circle)
+            {
+                r = probe.SetQrGrowthProbe((c.Growth * 100.0).ToString("G4", inv));
+                Console.WriteLine($"#     growth -> {Trim140(r)}");
+            }
+            r = probe.SetQrSizeProbe(c.SizeMm.ToString("G4", inv));
+            Console.WriteLine($"#     size -> {Trim140(r)}");
+            return probe.SetQrContentProbe(c.Content);
+        }
+
+        private static string Trim140(string s) => s.Length <= 140 ? s : s.Substring(0, 140) + "…";
 
         private static ISldWorks? AttachOrLaunch(string progId)
         {

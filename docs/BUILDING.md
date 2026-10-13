@@ -204,7 +204,21 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe shapes $deploy    # spec-13 cell-shape gates
 ```
+
+The `shapes` mode (ticket #36) is the spec-13 live gate — it drives the
+cell-shape probes (`SetQrCellShapeProbe`, `SetQrShapeParamProbe`,
+`SetQrKeepFunctionSquareProbe`) through the pane path, creates a
+disjoint-dots QR and a feasible rounded-square QR, verifies region
+selection and boss/cut extrusion with no contact failures, measures
+insertion time and sketch-edit responsiveness at a near-`MaxSegmentCount`
+rung, and asserts a `TooManySegments` rejection surfaces on the pane status
+line without host mutation. Like `xsettings` it **refuses to run while any
+`SLDWORKS.exe` process exists**, printing its module-side expectations —
+the candidate table, the picked rungs, generation timing — before the
+refusal so a blocked run still shows what the live half would check. Gate
+results are recorded in `docs/SHAPES-GATES.md`.
 
 The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
 extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
