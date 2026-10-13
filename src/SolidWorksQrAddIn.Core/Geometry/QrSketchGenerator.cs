@@ -34,8 +34,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      the 4-cell border), the real field edge under invert — into a
     ///      PolyTree64 with outer/hole/island nesting preserved;
     ///   6. strip redundant collinear vertices (epsilon 0);
-    ///   7. validate on the grid: nonzero area, no zero-length edges, no
-    ///      self-intersections, no residual corner-only contacts;
+    ///   7. validate on the grid: the segment ceiling
+    ///      <see cref="QrInsertionGuard.MaxSegmentCount"/> first — it
+    ///      refuses before the quadratic sweep can cost minutes — then
+    ///      nonzero area, no zero-length edges, no self-intersections,
+    ///      no residual corner-only contacts;
     ///   8. convert to physical sketch metres — a pure affine map, so shared
     ///      endpoints stay bit-identical — centred on the origin, matrix row 0
     ///      at +y so the QR is upright rather than mirrored.
@@ -485,6 +488,27 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 Flatten(region, flatPaths, flatIsHole);
             }
 
+            // ---------- segment ceiling (ticket #35) ----------
+            // The delivered segment total is known as soon as the contours
+            // are flat — count it BEFORE the quadratic self-intersection
+            // sweep: a request we are about to refuse should not pay the
+            // O(n²) validation cost on tens of thousands of segments.
+            // Shaped cells inflate this total ~4–8× over squares at the
+            // same density (the polygon dots/facets are never merged
+            // away), so the ceiling — not the feature floors — is the
+            // binding bound on payload density under Circle/RoundedSquare.
+            int segmentCount = 0;
+            foreach (var path in flatPaths)
+                segmentCount += path.Count;
+            if (segmentCount > QrInsertionGuard.MaxSegmentCount)
+                return QrSketchResult.Fail(QrSketchErrorKind.TooManySegments,
+                    $"The generated QR would draw {segmentCount} sketch segments — over " +
+                    $"the recorded {QrInsertionGuard.MaxSegmentCount}-segment insertion " +
+                    "guard (the provisional sketch-edit-responsiveness bound of " +
+                    "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
+                    "error-correction level, or use a squarer cell shape — square " +
+                    "cells deliver the fewest segments per cell.");
+
             var violation = ContourValidator.FindViolation(flatPaths);
             if (violation != null)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
@@ -504,12 +528,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             double grownUnits = n * (double)u + 2 * g;
 
-            // Actual smallest delivered edge (integer units → mm).
+            // Actual smallest delivered edge (integer units → mm);
+            // segmentCount was already totalled for the ceiling check.
             long minEdgeUnits = long.MaxValue;
-            int segmentCount = 0;
             foreach (var path in flatPaths)
             {
-                segmentCount += path.Count;
                 for (var i = 0; i < path.Count; i++)
                 {
                     var a = path[i];
