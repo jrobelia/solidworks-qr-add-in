@@ -61,11 +61,13 @@ namespace SolidWorksQrAddIn.Core
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
         /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
-        /// invert=&lt;bool&gt; shape=&lt;code&gt; shapeParam=&lt;text&gt;
+        /// invert=&lt;bool&gt; keepFn=&lt;bool&gt; shape=&lt;code&gt;
+        /// shapeParam=&lt;text&gt;
         /// unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
         /// size/growth are the field texts exactly as shown (initially 25
-        /// and 3); preset is the content-type id (initially "raw"); shape is
-        /// the cell-shape code (initially "square") and shapeParam its
+        /// and 3); preset is the content-type id (initially "raw"); keepFn is
+        /// the keep-function-patterns-square toggle (initially false); shape
+        /// is the cell-shape code (initially "square") and shapeParam its
         /// parameter text (initially "10", inert under Square).
         /// </summary>
         string WindowStateProbe();
@@ -107,6 +109,16 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrInvertProbe(bool invert);
+
+        /// <summary>
+        /// Flips the function-pattern carve-out exactly like the pane's
+        /// "Keep function patterns square" checkbox (ticket #34): with it
+        /// on, finder/alignment/timing cells emit the square primitive
+        /// while data cells take the selected shape. Returns
+        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// </summary>
+        string SetQrKeepFunctionSquareProbe(bool keepSquare);
 
         /// <summary>
         /// Picks the per-cell shape exactly like the pane's shape selector:

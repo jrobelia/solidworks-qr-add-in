@@ -68,7 +68,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
             int contourCount, int segmentCount, bool inverted = false,
-            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0,
+            bool keepFunctionPatternsSquare = false)
         {
             Version = version;
             CellCount = cellCount;
@@ -84,6 +85,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             Inverted = inverted;
             CellShape = cellShape;
             CellShapeParameter = cellShapeParameter;
+            KeepFunctionPatternsSquare = keepFunctionPatternsSquare;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -145,6 +147,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// fraction of cell pitch for Circle; 0 otherwise.
         /// </summary>
         public double CellShapeParameter { get; }
+
+        /// <summary>
+        /// Whether the emitted geometry actually carved the function
+        /// patterns out to the square primitive (spec #13, ticket #34):
+        /// true only when the request asked for it AND the matrix was a
+        /// real QR version — fixture version 0 always reports false.
+        /// </summary>
+        public bool KeepFunctionPatternsSquare { get; }
     }
 
     /// <summary>

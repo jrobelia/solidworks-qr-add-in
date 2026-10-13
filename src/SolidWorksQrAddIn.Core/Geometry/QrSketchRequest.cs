@@ -64,5 +64,30 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// field disabled without clearing it.
         /// </summary>
         public double CellShapeParameter { get; set; }
+
+        /// <summary>
+        /// The function-pattern carve-out (spec #13, ticket #34): when on,
+        /// emitted cells at the QR's structural positions — the three
+        /// corner finders (each as its full 8×8 footprint including the
+        /// separator ring), the timing bands, and the version's alignment
+        /// patterns — emit the expanded-square primitive while data cells
+        /// take <see cref="CellShape"/>. Binary: off means function cells
+        /// take the selected shape like any other cell — there is no
+        /// rounded-finder middle option. Under Square itself the flag is a
+        /// no-op; under Circle the lattice is the growth-0 map, so the
+        /// function square is the bare cell square (growth never applies
+        /// under Circle). Default false. See
+        /// <see cref="QrFunctionPatterns"/> for the position model.
+        /// </summary>
+        public bool KeepFunctionPatternsSquare { get; set; }
+
+        /// <summary>
+        /// Test seam: forces the encoder's <c>requestedVersion</c> so the
+        /// carve-out can be exercised at a chosen QR version — null leaves
+        /// automatic version selection (the only mode the pane uses).
+        /// Internal: visible to the test assembly, not part of the pane's
+        /// request surface.
+        /// </summary>
+        internal int? RequestedVersion { get; set; }
     }
 }

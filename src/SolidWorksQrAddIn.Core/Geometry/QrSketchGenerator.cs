@@ -80,7 +80,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
             try
             {
                 using (var generator = new QRCodeGenerator())
-                using (var data = generator.CreateQrCode(request.Content, request.EccLevel))
+                using (var data = generator.CreateQrCode(request.Content, request.EccLevel,
+                           forceUtf8: false, utf8BOM: false,
+                           eciMode: QRCodeGenerator.EciMode.Default,
+                           requestedVersion: request.RequestedVersion ?? -1))
                 {
                     // ModuleMatrix IS the working matrix (ADR 0002): N×N data
                     // cells plus the standard 4-cell light quiet zone on every
@@ -112,7 +115,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
                 request.SizeMm, request.GrowthFractionPerSide, version, request.Invert,
-                request.CellShape, request.CellShapeParameter);
+                request.CellShape, request.CellShapeParameter,
+                request.KeepFunctionPatternsSquare);
         }
 
         /// <summary>
@@ -125,10 +129,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <see cref="Generate"/>; <paramref name="cellShape"/> and
         /// <paramref name="cellShapeParameter"/> pick the per-cell primitive
         /// exactly like <see cref="QrSketchRequest.CellShape"/>.
+        /// <paramref name="keepFunctionPatternsSquare"/> is accepted for
+        /// parity with the request but is inert here — fixtures report
+        /// version 0 and version 0 has no function cells.
         /// </summary>
         public static QrSketchResult GenerateFromCells(
             bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false,
-            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0,
+            bool keepFunctionPatternsSquare = false)
         {
             if (darkCells == null)
                 throw new ArgumentNullException(nameof(darkCells));
@@ -144,7 +152,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 for (var col = 0; col < n; col++)
                     matrix[row + q, col + q] = darkCells[row, col];
             return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert,
-                cellShape, cellShapeParameter);
+                cellShape, cellShapeParameter, keepFunctionPatternsSquare);
         }
 
         /// <summary>
@@ -156,10 +164,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// union, clipping, validation and conversion run identically.
         /// <paramref name="cellShape"/> picks the primitive each emitted cell
         /// contributes — the union/validate/convert downstream is shape-blind.
+        /// <paramref name="keepFunctionPatternsSquare"/> is the ticket-#34
+        /// carve-out: emitted cells at function-pattern positions emit the
+        /// expanded-square primitive instead of the selected shape.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
-            bool invert, QrCellShape cellShape, double cellShapeParameter)
+            bool invert, QrCellShape cellShape, double cellShapeParameter,
+            bool keepFunctionPatternsSquare)
         {
             int m = matrix.GetLength(0);
             int n = dataCells;
@@ -396,6 +408,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // cells emit normally, light cells emit under invert — across the
             // WHOLE working matrix, so the quiet zone becomes field. The
             // shape select dispatches the primitive inside this same loop.
+            //
+            // Spec #13, ticket #34 — the function-pattern carve-out: when the
+            // request asks for it, cells at the QR's structural positions
+            // (finders + separators, timing bands, alignment patterns —
+            // classified by DATA-matrix position, never by darkness, so the
+            // same positions emit square pits under invert) emit the
+            // expanded-square primitive at the lattice's own growth g —
+            // under Circle that is the bare cell square, growth never
+            // applying to Circle at all. The mask is null for fixture
+            // version 0 and any non-real pairing: the carve-out is inert.
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            bool[,]? functionMask =
+                keepFunctionPatternsSquare ? QrFunctionPatterns.FunctionMask(n, version) : null;
             var subject = new Paths64();
             int emittedCount = 0;
             for (var row = 0; row < m; row++)
@@ -407,17 +432,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     long y0 = (long)row * u - g;
                     long x1 = ((long)col + 1) * u + g;
                     long y1 = ((long)row + 1) * u + g;
-                    var cell = rounded
-                        ? RoundedCellPath(x0, y0, x1, y1, radiusUnits, facetsPerCorner)
-                        : circle
-                            ? CircleCellPath(
+                    bool functionCell = functionMask != null &&
+                        row >= q && row < q + n && col >= q && col < q + n &&
+                        functionMask[row - q, col - q];
+                    var cell = functionCell || !(rounded || circle)
+                        ? SquareCellPath(x0, y0, x1, y1)
+                        : rounded
+                            ? RoundedCellPath(x0, y0, x1, y1, radiusUnits, facetsPerCorner)
+                            : CircleCellPath(
                                 (long)col * u + u / 2, (long)row * u + u / 2,
-                                dotRadiusUnits, dotSides)
-                            : new Path64(4)
-                            {
-                                new Point64(x0, y0), new Point64(x1, y0),
-                                new Point64(x1, y1), new Point64(x0, y1),
-                            };
+                                dotRadiusUnits, dotSides);
                     subject.Add(cell);
                 }
             if (emittedCount == 0)
@@ -517,7 +541,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 segmentCount: segmentCount,
                 inverted: invert,
                 cellShape: cellShape,
-                cellShapeParameter: rounded || circle ? cellShapeParameter : 0.0);
+                cellShapeParameter: rounded || circle ? cellShapeParameter : 0.0,
+                keepFunctionPatternsSquare: functionMask != null);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction
@@ -549,6 +574,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// count; the delivered-edge floor bounds it further per request).
         /// </summary>
         private const int MaxFacetsPerCorner = 8;
+
+        /// <summary>
+        /// The expanded-square cell primitive: the grown rect [x0,y0]–[x1,y1]
+        /// as one CCW 4-vertex path — today's square output, and the
+        /// primitive the function-pattern carve-out emits (ticket #34).
+        /// </summary>
+        private static Path64 SquareCellPath(long x0, long y0, long x1, long y1) =>
+            new Path64(4)
+            {
+                new Point64(x0, y0), new Point64(x1, y0),
+                new Point64(x1, y1), new Point64(x0, y1),
+            };
 
         /// <summary>
         /// One rounded-rectangle cell on the integer grid: the rect

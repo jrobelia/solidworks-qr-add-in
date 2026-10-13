@@ -145,6 +145,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
         private bool _invert;
+        private bool _keepFunctionPatternsSquare;
         private QrCellShape _cellShape = QrCellShape.Square;
         private string _shapeParameterText = InitialShapeParameterPercentText;
         private double? _shapeParameterFraction;
@@ -561,6 +562,30 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// The function-pattern carve-out in force (spec #13, ticket #34):
+        /// when on, the QR's structural cells — corner finders (separator
+        /// included), timing bands and the version's alignment patterns —
+        /// emit the expanded-square primitive while data cells take the
+        /// selected shape. Binary: off means function cells take the
+        /// selected shape like any other. Default off.
+        /// </summary>
+        public bool KeepFunctionPatternsSquare => _keepFunctionPatternsSquare;
+
+        /// <summary>
+        /// Flips the function-pattern carve-out and re-validates the whole
+        /// request: with <paramref name="keepSquare"/> the emitted cells at
+        /// function-pattern positions always emit the square primitive —
+        /// under Circle the bare cell square, since growth never applies to
+        /// Circle — and the picture renders that same result. Applies to
+        /// future creates only; existing sketches are never mutated.
+        /// </summary>
+        public QrSketchResult SetKeepFunctionPatternsSquare(bool keepSquare)
+        {
+            _keepFunctionPatternsSquare = keepSquare;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// The per-cell shape in force (spec #13, tickets #32/#33) —
         /// <see cref="QrCellShape.Square"/>, today's grown rectangle and the
         /// default, <see cref="QrCellShape.RoundedSquare"/>, or
@@ -655,6 +680,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 Invert = _invert,
                 CellShape = _cellShape,
                 CellShapeParameter = _shapeParameterFraction ?? 0.0,
+                KeepFunctionPatternsSquare = _keepFunctionPatternsSquare,
             };
 
         private QrSketchResult Regenerate()
@@ -784,6 +810,12 @@ namespace SolidWorksQrAddIn.Core.Interaction
                               "% of cell pitch"
                             : "Square"),
             };
+            // The carve-out is a fact about the emitted geometry too —
+            // shown only while it is on (off is the conventional output).
+            if (info.KeepFunctionPatternsSquare)
+                lines.Add(new QrInfoLine(
+                    "Function patterns",
+                    "Square — finder, alignment and timing cells"));
             return lines;
         }
 
