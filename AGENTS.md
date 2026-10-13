@@ -1,26 +1,27 @@
 # SolidWorks QR Add-In
 
-Standalone SolidWorks add-in that generates a native QR sketch from text or a URL. Specification: issue #8 (working copy: `.scratch/MVP-SPEC.md`). Evidence and rationale: `docs/RESEARCH.md`.
+Standalone SolidWorks add-in that generates a native QR sketch from text or a URL. Original MVP: GitHub issue #8. Design evidence and rationale: `docs/RESEARCH.md`.
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues live in GitHub Issues on this repo (`gh` CLI). Specs and tickets are published as issues with native sub-issue and blocked-by edges; ticket #1–#7 are sub-issues of spec issue #8. See `docs/agents/issue-tracker.md`.
+For specs and tickets, read the relevant GitHub issue, comments, child tickets, and blocking edges with `gh`. Follow `docs/agents/issue-tracker.md` for tracker operations.
 
 ### Triage labels
 
-The five canonical roles use identical label strings: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+For triage, use the role-to-label mapping in `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context layout: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`, both created lazily. See `docs/agents/domain.md`.
+Before exploring or changing a module, read `GLOSSARY.md` and relevant ADRs in `docs/adr/`; follow `docs/agents/domain.md` for domain-document rules.
 
 ## Repo guides
 
-- Build/test, repo layout, LiveProbe live-verify harness → `docs/BUILDING.md`
+- Before changing Core, SolidWorks adapters, UI, or tests, read `docs/BUILDING.md` for module boundaries, build/test commands, and layout.
 - Add-in missing/not loaded, registration, installer recovery, or debug log: read `docs/DEPLOYMENT.md` (especially Dev-machine setup).
-- Live acceptance gates (need exclusive SolidWorks access) → `docs/ACCEPTANCE.md`
+- Before running LiveProbe, read the session-safety and invocation instructions in `docs/BUILDING.md`; use a session-free SolidWorks instance.
+- For acceptance/QA, read `docs/ACCEPTANCE.md` and relevant `docs/*-GATES.md` records available on the branch under test; report automated results and manual QA separately.
 - Proven `CreateLine` coordinate conventions → `docs/SKETCH-COORDINATES.md`
 - Geometry insertion limits → `docs/INSERTION-GUARD.md`
 - Manual QA/build refresh: with SolidWorks closed, run `scripts/sync-dev-deploy.ps1` from the branch/worktree under test, then restart SolidWorks; details in `docs/DEPLOYMENT.md`.
