@@ -59,7 +59,9 @@ moment it is resolved in discussion, not before.
   as a fraction of cell pitch. Under Circle the growth field is inert the
   same way (pitch = S/N — dots are the sizing knob). Dots are disjoint by
   cap: `f ≤ 1 − (F+M)/u` so the orthogonal neighbour gap clears the
-  insertion floor.
+  insertion floor — tightened to `f ≤ 1 − 2(F+M)/u` under a live
+  keep-function-patterns-square carve-out, where a bare function square
+  beside a dot halves the light channel.
 - **Function patterns** — the QR's structural cells: the three corner
   finder patterns (each as its full 8×8 footprint including the separator
   ring), the timing bands on row/column 6, and the version's alignment

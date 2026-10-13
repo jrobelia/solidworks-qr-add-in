@@ -35,9 +35,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// Parses the cell-shape text the UI surfaces accept — the pane's shape
     /// dropdown and the probe's <c>SetQrCellShapeProbe</c> argument both
     /// speak the canonical codes below (case-insensitive, surrounding
-    /// whitespace ignored). Anything else is refused by returning false —
-    /// an unrecognized shape is never silently coerced to another one.
-    /// Host-free Core code.
+    /// whitespace ignored) — the same strictness
+    /// <see cref="QrEccLevels"/> applies. Anything else is refused by
+    /// returning false — an unrecognized shape is never silently coerced
+    /// to another one. Host-free Core code.
     /// </summary>
     public static class QrCellShapes
     {
@@ -60,18 +61,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
             switch ((text ?? string.Empty).Trim().ToLowerInvariant())
             {
                 case SquareCode:
-                case "squares":
                     shape = QrCellShape.Square;
                     return true;
                 case RoundedSquareCode:
-                case "roundedsquare":
-                case "rounded-square":
                     shape = QrCellShape.RoundedSquare;
                     return true;
                 case CircleCode:
-                case "circles":
-                case "dot":
-                case "dots":
                     shape = QrCellShape.Circle;
                     return true;
                 default:
@@ -85,5 +80,40 @@ namespace SolidWorksQrAddIn.Core.Geometry
             shape == QrCellShape.RoundedSquare ? RoundedSquareCode
                 : shape == QrCellShape.Circle ? CircleCode
                 : SquareCode;
+
+        // ----- the small per-shape descriptor -----
+        // The facts the session's field plumbing switches on, kept beside
+        // the codes so a new shape family updates one place (the
+        // generator's primitive dispatch stays in QrSketchGenerator).
+
+        /// <summary>
+        /// Whether the per-side growth field applies to
+        /// <paramref name="shape"/> — every shape except Circle, whose dots
+        /// size off the shape parameter alone (the layout runs the
+        /// growth-0 map; the growth text is kept verbatim but never
+        /// consulted, the same inert-field treatment the shape parameter
+        /// gets under Square).
+        /// </summary>
+        public static bool GrowthApplies(QrCellShape shape) =>
+            shape != QrCellShape.Circle;
+
+        /// <summary>
+        /// Whether the shape-parameter field applies to
+        /// <paramref name="shape"/> — RoundedSquare's corner radius and
+        /// Circle's dot size; the pane disables the field under Square.
+        /// </summary>
+        public static bool ShapeParameterApplies(QrCellShape shape) =>
+            shape != QrCellShape.Square;
+
+        /// <summary>
+        /// The shape-parameter field's label as the pane should show it —
+        /// its meaning follows the shape: RoundedSquare's corner radius as
+        /// a percent of the cell half-width, Circle's dot size as a percent
+        /// of cell pitch (the dot diameter).
+        /// </summary>
+        public static string ShapeParameterLabel(QrCellShape shape) =>
+            shape == QrCellShape.Circle
+                ? "Dot size (% of cell pitch):"
+                : "Corner radius (% of cell half-width):";
     }
 }

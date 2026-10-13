@@ -41,8 +41,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// declared domain (the corner radius leaves [0, 1] of the grown
         /// cell's half-width — edge-inverting; the dot size leaves its
         /// disjoint-dots band — the diameter cannot exceed the pitch minus a
-        /// full insertion-floor gap, nor fall below what a polygon dot can
-        /// resolve).</summary>
+        /// full insertion-floor gap (minus two floor gaps beside an emitted
+        /// function-pattern square under a live carve-out), nor fall below
+        /// what a polygon dot can resolve).</summary>
         InvalidShapeParameter,
 
         /// <summary>The generated contours would deliver more sketch segments

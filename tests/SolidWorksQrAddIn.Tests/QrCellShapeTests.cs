@@ -105,6 +105,8 @@ namespace SolidWorksQrAddIn.Tests
             for (var i = 0; i < expectedEdges.Count; i++)
             {
                 Assert.Equal(expectedEdges[i].Start.X, actualEdges[i].Start.X);
+                Assert.Equal(expectedEdges[i].Start.Y, actualEdges[i].Start.Y);
+                Assert.Equal(expectedEdges[i].End.X, actualEdges[i].End.X);
                 Assert.Equal(expectedEdges[i].End.Y, actualEdges[i].End.Y);
             }
         }
@@ -124,6 +126,8 @@ namespace SolidWorksQrAddIn.Tests
             for (var i = 0; i < a.Count; i++)
             {
                 Assert.Equal(a[i].Start.X, b[i].Start.X);
+                Assert.Equal(a[i].Start.Y, b[i].Start.Y);
+                Assert.Equal(a[i].End.X, b[i].End.X);
                 Assert.Equal(a[i].End.Y, b[i].End.Y);
             }
         }
@@ -459,17 +463,21 @@ namespace SolidWorksQrAddIn.Tests
         [InlineData("square", QrCellShape.Square)]
         [InlineData(" Square ", QrCellShape.Square)]
         [InlineData("ROUNDED", QrCellShape.RoundedSquare)]
-        [InlineData("rounded-square", QrCellShape.RoundedSquare)]
         public void Shape_names_parse_case_insensitively(string text, QrCellShape expected)
         {
             Assert.True(QrCellShapes.TryParse(text, out QrCellShape shape));
             Assert.Equal(expected, shape);
         }
 
-        [Fact]
-        public void An_unrecognized_shape_name_is_refused_not_coerced()
+        [Theory]
+        [InlineData("blob")]
+        [InlineData("rounded-square")]
+        [InlineData("dots")]
+        public void An_unrecognized_shape_name_is_refused_not_coerced(string text)
         {
-            Assert.False(QrCellShapes.TryParse("blob", out _));
+            // Canonical codes only — the same strictness QrEccLevels applies;
+            // an unrecognized shape is never silently coerced.
+            Assert.False(QrCellShapes.TryParse(text, out _));
         }
 
         [Fact]

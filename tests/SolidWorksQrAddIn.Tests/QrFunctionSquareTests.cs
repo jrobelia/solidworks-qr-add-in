@@ -476,7 +476,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(0.0, sketch.Info.GrowthMmPerSide, 12);
         }
 
-        /// <summary>Every island nested anywhere inside a region's holes.</summary>
+        /// <summary>
+        /// Every island sitting inside a region's holes — one nesting level
+        /// (a finder's 3×3 centre inside its band hole), not a recursive
+        /// walk.
+        /// </summary>
         private static IEnumerable<QrRegion> IslandsOf(QrRegion region) =>
             region.Holes.SelectMany(h => h.Islands);
 
@@ -620,6 +624,125 @@ namespace SolidWorksQrAddIn.Tests
             // Square emissions in the function zones amid the rounded field.
             Assert.Contains(sketch.Contours, c => c.Vertices.Count == 4);
             Assert.Contains(sketch.Contours, c => c.Vertices.Count > 4);
+        }
+
+        // ---------------- the keepFn × Circle square–dot channel ----------------
+
+        [Fact]
+        public void The_dot_cap_tightens_where_function_squares_can_neighbour_dots()
+        {
+            // 50 mm / v2 (N = 25): the insertion floor is F = 250 grid
+            // units, so the plain dot cap sits at f ≤ 1−(F+M)/u ≈ 97.5%.
+            // But a LIVE carve-out emits bare-cell function squares: a dot
+            // beside one leaves a light channel of u·(1−f)/2 — HALF the
+            // dot–dot gap — so the cap tightens to f ≤ 1−2(F+M)/u ≈ 94.96%.
+            // f = 0.96 fits the dots-only bound but not the carve-out one.
+            var withoutCarveOut = QrSketchGenerator.Generate(new QrSketchRequest(
+                "HELLO", 50.0, Growth)
+            {
+                CellShape = QrCellShape.Circle,
+                CellShapeParameter = 0.96,
+                RequestedVersion = 2,
+            });
+            var withCarveOut = QrSketchGenerator.Generate(
+                CarveOutRequest(QrCellShape.Circle, 0.96, sizeMm: 50.0, version: 2));
+
+            Assert.True(withoutCarveOut.Succeeded, withoutCarveOut.Error?.Message);
+            Assert.False(withCarveOut.Succeeded);
+            Assert.Equal(QrSketchErrorKind.InvalidShapeParameter, withCarveOut.Error!.Kind);
+            Assert.Contains("function", withCarveOut.Error.Message,
+                System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void A_dot_size_under_the_tightened_cap_stays_accepted()
+        {
+            // f = 0.94 leaves a square–dot channel of u·(1−f)/2 = 300
+            // units — over the F + M = 252 floor at 50 mm / v2.
+            var result = QrSketchGenerator.Generate(
+                CarveOutRequest(QrCellShape.Circle, 0.94, sizeMm: 50.0, version: 2));
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+        }
+
+        [Fact]
+        public void The_square_dot_adjacency_the_cap_guards_is_reachable_in_both_polarities()
+        {
+            // The tightened cap guards a REAL layout, not a hypothetical:
+            // an emitting function cell (bare square) orthogonally beside
+            // an emitting data cell (dot) leaves exactly the u·(1−f)/2
+            // channel. Normal mode needs a dark·dark pair — the dark
+            // timing cells supply the function side; invert needs a
+            // light·light pair — the always-light separator ring emits
+            // square pits beside light data cells. Scan the real encoded
+            // matrix (classification is positional, never by darkness).
+            int n = CellsFor(2);
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            var matrix = EncodeWorkingMatrix("HELLO", 2);
+            var mask = QrFunctionPatterns.FunctionMask(n, 2)!;
+
+            bool AdjacentPairExists(bool emittedWhenDark)
+            {
+                for (var r = 0; r < n; r++)
+                    for (var c = 0; c < n; c++)
+                        foreach (var (dr, dc) in new[] { (1, 0), (0, 1) })
+                        {
+                            int r2 = r + dr, c2 = c + dc;
+                            if (r2 >= n || c2 >= n || mask[r, c] == mask[r2, c2])
+                                continue;   // need exactly one function cell
+                            if (matrix[q + r, q + c] == emittedWhenDark &&
+                                matrix[q + r2, q + c2] == emittedWhenDark)
+                                return true;
+                        }
+                return false;
+            }
+
+            Assert.True(AdjacentPairExists(true),
+                "normal polarity: a dark data cell beside a dark function square");
+            Assert.True(AdjacentPairExists(false),
+                "inverted polarity: a light data cell beside a light function square");
+        }
+
+        [Fact]
+        public void The_light_gap_info_reports_the_halved_channel_under_the_live_carve_out()
+        {
+            // Under keepFn + Circle the narrowest un-emitted channel is the
+            // square–dot one — u·(1−f)/2. At 50 mm / f = 0.9 that is 500
+            // grid units = 0.1 mm, half the 0.2 mm dot–dot figure the
+            // dots-only report gives.
+            var sketch = QrSketchGenerator.Generate(
+                CarveOutRequest(QrCellShape.Circle, 0.9, sizeMm: 50.0, version: 2)).Sketch!;
+
+            Assert.Equal(0.1, sketch.Info.MinLightGapMm, 6);
+        }
+
+        [Fact]
+        public void An_over_cap_dot_size_with_the_carve_out_rejects_before_the_host()
+        {
+            var host = HostWithSelectedPlane();
+
+            var result = new CreateQrSketchCommand().Execute(host,
+                CarveOutRequest(QrCellShape.Circle, 0.96, sizeMm: 50.0, version: 2));
+
+            Assert.False(result.Succeeded);
+            Assert.Empty(host.Document!.Sketches);
+        }
+
+        [Fact]
+        public void The_light_channel_bound_is_not_halved_for_rounded_cells()
+        {
+            // keepFn × RoundedSquare needs no cap change: the carved-out
+            // function square is the same GROWN cell every emitted cell is
+            // — both sides of a shared boundary reach ±g, and a rounded
+            // cell's corner arcs only recede INWARD, so the narrowest
+            // emitted↔emitted channel stays u−2g (unlike Circle's bare
+            // u×u function square). The info value keeps reporting it.
+            var sketch = QrSketchGenerator.Generate(
+                CarveOutRequest(QrCellShape.RoundedSquare, 0.11, sizeMm: 50.0, version: 2))
+                .Sketch!;
+
+            Assert.Equal(sketch.Info.PitchMm - 2 * sketch.Info.GrowthMmPerSide,
+                sketch.Info.MinLightGapMm, 9);
         }
 
         // ---------------- quiet zone and keep-out unchanged ----------------
