@@ -42,6 +42,17 @@ moment it is resolved in discussion, not before.
   `invert` — a white code on a dark field bounded by the keep-out square,
   for marking/engraving (ADR 0002). The same contour result feeds the
   preview — no second renderer.
+- **Payload template** — engineer-entered text that may contain `$PRP`
+  property references. It is input to resolution, not necessarily the
+  encoded payload.
+- **Resolved payload** — the literal text produced by resolving every
+  property reference in a payload template against the active document.
+  This is the text the QR encodes.
+- **Nested ring** — a closed emitted band whose hole contains another
+  emitted region (`ring → hole → island`), as in a QR finder pattern.
+- **Ring split** — a finite-width channel through a nested ring that
+  connects its hole to the surrounding space, so the ring no longer forms
+  a closed nested profile.
 
 ## SolidWorks
 
