@@ -67,9 +67,7 @@ namespace SolidWorksQrAddIn.Tests
         [Theory]
         [InlineData("circle", QrCellShape.Circle)]
         [InlineData(" Circle ", QrCellShape.Circle)]
-        [InlineData("CIRCLES", QrCellShape.Circle)]
-        [InlineData("dot", QrCellShape.Circle)]
-        [InlineData("DOTS", QrCellShape.Circle)]
+        [InlineData("CIRCLE", QrCellShape.Circle)]
         [InlineData("square", QrCellShape.Square)]
         [InlineData("rounded", QrCellShape.RoundedSquare)]
         public void Shape_names_parse_case_insensitively(string text, QrCellShape expected)

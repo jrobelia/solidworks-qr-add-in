@@ -601,14 +601,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// but never consulted — the same inert-field treatment the shape
         /// parameter gets under Square — and the pane disables the field.
         /// </summary>
-        public bool GrowthApplies => _cellShape != QrCellShape.Circle;
+        public bool GrowthApplies => QrCellShapes.GrowthApplies(_cellShape);
 
         /// <summary>
         /// True while the shape-parameter field applies — RoundedSquare's
         /// corner radius and Circle's dot size; the pane disables the field
         /// under Square. The text itself is always kept verbatim either way.
         /// </summary>
-        public bool ShapeParameterApplies => _cellShape != QrCellShape.Square;
+        public bool ShapeParameterApplies => QrCellShapes.ShapeParameterApplies(_cellShape);
 
         /// <summary>
         /// The shape-parameter field's label as the pane should show it —
@@ -616,9 +616,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// radius as a percent of the cell half-width, Circle's dot size as
         /// a percent of cell pitch (the dot diameter).
         /// </summary>
-        public string ShapeParameterLabel => _cellShape == QrCellShape.Circle
-            ? "Dot size (% of cell pitch):"
-            : "Corner radius (% of cell half-width):";
+        public string ShapeParameterLabel => QrCellShapes.ShapeParameterLabel(_cellShape);
 
         /// <summary>
         /// The shape-parameter field exactly as entered ("10" initially —
