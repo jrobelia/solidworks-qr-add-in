@@ -27,8 +27,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///
     ///   3. Segment ceiling: the delivered contour set must not exceed
     ///      <see cref="MaxSegmentCount"/> segments — the
-    ///      sketch-edit-responsiveness bound of ticket #35 (provisional
-    ///      pending ticket #36's live measurement). Polygonized circles
+    ///      sketch-edit-responsiveness bound of ticket #35 (tightened to
+    ///      4 400 by ticket #36's live measurement at the bound).
+    ///      Polygonized circles
     ///      and rounded corners inflate per-cell segment counts ~4–8×
     ///      over squares at the same density, so a dense shaped QR can
     ///      reach an uneditable sketch long before the floors trip.
@@ -73,16 +74,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// Most sketch segments the generated contours may deliver to the
-        /// host — the sketch-edit-responsiveness ceiling (ticket #35).
-        /// PROVISIONAL pending ticket #36's live measurement of insertion
-        /// time and sketch-edit responsiveness at the bound, which may
-        /// tighten it. The recorded evidence (docs/INSERTION-GUARD.md):
-        /// the largest live-proven insert is the ~3 900-segment dense
-        /// square payload of docs/ACCEPTANCE.md §F (≈6.1 s native) —
-        /// 8 000 leaves ~2× headroom over it while refusing the
-        /// ≥8.3k-segment requests the shaped cells inflate the same
-        /// matrices into.
+        /// host — the sketch-edit-responsiveness ceiling (ticket #35,
+        /// tightened by ticket #36's live measurement). The recorded
+        /// evidence (docs/INSERTION-GUARD.md): at the measured
+        /// 7 722-segment disjoint-dots rung (858 regions) the native
+        /// insert ran ≈50.6 s and the sketch's region solve ≈103 s —
+        /// past the responsiveness wall — so the provisional 8 000 is
+        /// tightened to 4 400: just above the largest live-proven insert
+        /// (the ~4 000-segment dense square payload of
+        /// docs/ACCEPTANCE.md §F, ≈6.1 s native), keeping every recorded
+        /// square payload legal while refusing the dense shaped requests
+        /// that deliver minute-scale region solves.
         /// </summary>
-        public const int MaxSegmentCount = 8_000;
+        public const int MaxSegmentCount = 4_400;
     }
 }

@@ -519,8 +519,9 @@ namespace SolidWorksQrAddIn.Tests
             // does not move: LIGHT cells at function positions emit squares
             // (the separator and timing bands merge into real shapes) while
             // light data cells emit disjoint dot pits.
+            const double sizeMm = 25.0;
             var result = QrSketchGenerator.Generate(
-                CarveOutRequest(QrCellShape.Circle, 0.5, sizeMm: 50.0,
+                CarveOutRequest(QrCellShape.Circle, 0.5, sizeMm: sizeMm,
                     invert: true, version: 2));
 
             Assert.True(result.Succeeded, result.Error?.Message);
@@ -530,8 +531,8 @@ namespace SolidWorksQrAddIn.Tests
             // The timing cell (6,9) is light in every QR — under invert it
             // emits a bare-cell square pit exactly one cell across, boxed in
             // by dark timing cells and data dots: a shape no dot can form.
-            double left = -25.0 / 1000.0 + 9 * pitchM;
-            double top = 25.0 / 1000.0 - 6 * pitchM;
+            double left = -sizeMm / 2000.0 + 9 * pitchM;
+            double top = sizeMm / 2000.0 - 6 * pitchM;
             Assert.Contains(sketch.Regions,
                 r => IsCellSpanningSquare(r.Boundary, left, top, 1, pitchM));
             // Dot pits still cover the data cells — and function squares
@@ -590,19 +591,19 @@ namespace SolidWorksQrAddIn.Tests
 
         [Theory]
         [InlineData(1)]
-        [InlineData(7)]
+        [InlineData(3)]
         public void The_carve_out_generates_at_every_probed_version(int version)
         {
             // End-to-end proof at bounded versions (high-version Clipper
             // work is too slow for the suite; the exhaustive position and
-            // corner-contact checks above cover the table).
+            // corner-contact checks above cover the table). The probed
+            // versions must fit the segment ceiling — tightened to 4 400
+            // by ticket #36's live edit-responsiveness measurement: under
+            // invert the whole working matrix emits disjoint dots, so a
+            // v7 run delivers ~1 580 pits (~6 300 segments at 25 mm, K=4)
+            // and legitimately refuses TooManySegments; v3 stays inside.
             foreach (var invert in new[] { false, true })
             {
-                // 25 mm keeps the inverted run under the ticket-#35 segment
-                // ceiling: the whole working matrix emits disjoint dots
-                // (~1 600 pits at v7), so the delivered total is (light
-                // cells) × K — a 60 mm cell buys K = 6 ≈ 9 654 segments,
-                // over the 8 000 budget; at 25 mm K = 4 lands ~6 400.
                 var result = QrSketchGenerator.Generate(
                     CarveOutRequest(QrCellShape.Circle, 0.5, sizeMm: 25.0,
                         invert: invert, version: version));

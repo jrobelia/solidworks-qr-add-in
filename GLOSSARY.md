@@ -78,9 +78,10 @@ moment it is resolved in discussion, not before.
   `docs/INSERTION-GUARD.md`): the feature FLOORS (grid resolution and
   the 0.05 mm smallest delivered feature, both directions of
   `BelowInsertionLimit`) and the segment CEILING
-  (`MaxSegmentCount` — `TooManySegments`), a provisional
-  sketch-edit-responsiveness bound pending ticket #36's live
-  measurement. Not a manufacturing or scan-readability assessment.
+  (`MaxSegmentCount` — `TooManySegments`), the
+  sketch-edit-responsiveness bound ticket #36 measured live and
+  tightened to 4 400. Not a manufacturing or scan-readability
+  assessment.
 
 ## SolidWorks
 

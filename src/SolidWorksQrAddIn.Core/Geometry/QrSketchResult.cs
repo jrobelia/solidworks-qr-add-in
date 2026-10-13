@@ -48,8 +48,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>The generated contours would deliver more sketch segments
         /// than the recorded <see cref="QrInsertionGuard.MaxSegmentCount"/>
-        /// budget — the provisional sketch-edit-responsiveness bound
-        /// (docs/INSERTION-GUARD.md, ticket #35).</summary>
+        /// budget — the sketch-edit-responsiveness bound measured live
+        /// (docs/INSERTION-GUARD.md, tickets #35/#36).</summary>
         TooManySegments,
     }
 
