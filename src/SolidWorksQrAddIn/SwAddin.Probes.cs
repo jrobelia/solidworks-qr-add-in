@@ -172,15 +172,16 @@ namespace SolidWorksQrAddIn
         public string SetQrCellShapeProbe(string shape)
         {
             if (!QrCellShapes.TryParse(shape, out QrCellShape cellShape))
-                return $"ERROR unknown cell shape '{shape}' — expected square or rounded.";
+                return $"ERROR unknown cell shape '{shape}' — expected square, rounded or circle.";
             return FieldProbe(s => s.SetCellShape(cellShape));
         }
 
         /// <summary>
         /// The pane's shape-parameter field, probed: the text goes to the
-        /// session verbatim (percent of the cell half-width — the rounded
-        /// corner radius) — the same growth-field discipline, inert while
-        /// the shape is Square.
+        /// session verbatim — percent of the cell half-width (the rounded
+        /// corner radius) or percent of the cell pitch (the circle dot
+        /// size) — the same growth-field discipline, inert while the shape
+        /// is Square.
         /// </summary>
         public string SetQrShapeParamProbe(string percentText) =>
             FieldProbe(s => s.SetShapeParameterText(percentText));

@@ -56,9 +56,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// The selected shape's parameter — for
         /// <see cref="QrCellShape.RoundedSquare"/> the corner radius as a
         /// fraction of the grown cell's half-width in [0, 1] (0 emits the
-        /// square primitive). Inert for shapes that declare no parameter —
-        /// Square ignores it entirely, so the pane can keep the field
-        /// disabled without clearing it.
+        /// square primitive); for <see cref="QrCellShape.Circle"/> the dot
+        /// size — the circle diameter as a fraction of cell pitch in (0, 1],
+        /// further capped so neighbouring dots keep a full-floor gap
+        /// (docs/INSERTION-GUARD.md). Inert for shapes that declare no
+        /// parameter — Square ignores it entirely, so the pane can keep the
+        /// field disabled without clearing it.
         /// </summary>
         public double CellShapeParameter { get; set; }
     }

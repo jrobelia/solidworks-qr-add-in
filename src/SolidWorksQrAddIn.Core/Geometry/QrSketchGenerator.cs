@@ -18,13 +18,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///      N×N data cells plus the fixed 4-cell light quiet zone per side;
     ///   3. pitch p = S/(N + 2r′), grown-cell pitch on a normalized integer
     ///      grid of <see cref="QrInsertionGuard.GridUnitsPerCell"/> units/cell
-    ///      (S still measures the N-cell data area — size semantics unchanged);
+    ///      (S still measures the N-cell data area — size semantics unchanged;
+    ///      circles do not grow — ticket #33's growth field does not apply,
+    ///      so the map runs at r′ = 0 and p = S/N);
     ///   4. expand every EMITTED cell by g = round(r·U) units on all four
     ///      sides — dark cells emit in normal mode (quiet-zone cells are
     ///      light and never emit), light cells emit under invert (the whole
     ///      matrix becomes the field) — as one primitive per cell in the
-    ///      request's <see cref="QrCellShape"/>: the grown rectangle, or a
-    ///      polygonized rounded rect for RoundedSquare;
+    ///      request's <see cref="QrCellShape"/>: the grown rectangle, a
+    ///      polygonized rounded rect for RoundedSquare, or a disjoint K-sided
+    ///      polygon dot for Circle (always disjoint — under invert each light
+    ///      cell becomes a separate circular pit);
     ///   5. union (Clipper2 NonZero) and clip to the working-matrix square —
     ///      a guaranteed no-op in normal mode (grown dark cells cannot reach
     ///      the 4-cell border), the real field edge under invert — into a
@@ -165,56 +169,72 @@ namespace SolidWorksQrAddIn.Core.Geometry
             if (double.IsNaN(sizeMm) || double.IsInfinity(sizeMm) || sizeMm <= 0.0)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidSize,
                     $"Size must be a finite positive number of millimetres; got '{sizeMm}'.");
-            if (double.IsNaN(growthFraction) || double.IsInfinity(growthFraction) ||
-                growthFraction <= 0.0 || growthFraction >= 0.5)
+
+            // Spec #13, ticket #33: the growth field does NOT apply to
+            // circles — the dot size is the sizing knob and the layout is
+            // the growth-0 map (pitch p = S/N; the QR square is the data
+            // extent, the keep-out the matrix edge, both unchanged in
+            // semantics). The growth value is never consulted for circles —
+            // an inert field the way the shape parameter is under Square —
+            // so its validation is skipped outright.
+            bool circle = cellShape == QrCellShape.Circle;
+            if (!circle && (double.IsNaN(growthFraction) || double.IsInfinity(growthFraction) ||
+                growthFraction <= 0.0 || growthFraction >= 0.5))
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth,
                     $"Outline growth must be a finite fraction in the open interval (0, 0.5) " +
                     $"— i.e. more than 0% and less than 50% of cell width per side; got '{growthFraction}'.");
 
             // ---------- normalized integer grid ----------
-            long g = (long)Math.Round(growthFraction * u);
-            if (g < 1)
-                return QrSketchResult.Fail(QrSketchErrorKind.GrowthRoundsToZero,
-                    $"Outline growth {growthFraction:P2} of cell width is smaller than one grid unit " +
-                    $"({1.0 / u:P2}) and rounds away — diagonal cells would keep corner-only contacts. " +
-                    "Increase the growth percentage.");
-            if (2 * g >= u)
-                return QrSketchResult.Fail(QrSketchErrorKind.GrowthClosesGaps,
-                    $"Outline growth {growthFraction:P2} rounds to {g} grid units/side — at or beyond half a " +
-                    $"cell, it would close every one-cell {(invert ? "dark" : "light")} channel. " +
-                    "Reduce the growth percentage.");
-
-            // The smallest drawable feature in EITHER polarity: emitted cells
-            // grown by g neck diagonally at 2g; a one-cell channel of the
-            // un-emitted polarity is grown down to u−2g (light gaps normally,
-            // dark-cell pockets under invert).
-            long minGridFeature = Math.Min(2 * g, u - 2 * g);
-            if (minGridFeature < QrInsertionGuard.MinGridFeatureUnits)
-                return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
-                    $"With growth {growthFraction:P2} the smallest feature spans {minGridFeature} of " +
-                    $"{u} grid units — below the {QrInsertionGuard.MinGridFeatureUnits}-unit resolution " +
-                    "floor (Clipper2 integer noise is ±1 unit). Adjust growth into a resolvable range.");
-
-            // ---------- physical guard (recorded insertion limit) ----------
+            long g = circle ? 0 : (long)Math.Round(growthFraction * u);
             double mmPerUnit = sizeMm / ((double)n * u + 2 * g);
-            double minFeatureMm = minGridFeature * mmPerUnit;
-            if (minFeatureMm < QrInsertionGuard.MinInsertableFeatureMm)
-                return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
-                    $"Smallest feature would be {minFeatureMm:F4} mm — below the recorded " +
-                    $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion guard. Increase the size " +
-                    "or adjust the growth percentage.");
+            if (!circle)
+            {
+                if (g < 1)
+                    return QrSketchResult.Fail(QrSketchErrorKind.GrowthRoundsToZero,
+                        $"Outline growth {growthFraction:P2} of cell width is smaller than one grid unit " +
+                        $"({1.0 / u:P2}) and rounds away — diagonal cells would keep corner-only contacts. " +
+                        "Increase the growth percentage.");
+                if (2 * g >= u)
+                    return QrSketchResult.Fail(QrSketchErrorKind.GrowthClosesGaps,
+                        $"Outline growth {growthFraction:P2} rounds to {g} grid units/side — at or beyond half a " +
+                        $"cell, it would close every one-cell {(invert ? "dark" : "light")} channel. " +
+                        "Reduce the growth percentage.");
+
+                // The smallest drawable feature in EITHER polarity: emitted cells
+                // grown by g neck diagonally at 2g; a one-cell channel of the
+                // un-emitted polarity is grown down to u−2g (light gaps normally,
+                // dark-cell pockets under invert).
+                long minGridFeature = Math.Min(2 * g, u - 2 * g);
+                if (minGridFeature < QrInsertionGuard.MinGridFeatureUnits)
+                    return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
+                        $"With growth {growthFraction:P2} the smallest feature spans {minGridFeature} of " +
+                        $"{u} grid units — below the {QrInsertionGuard.MinGridFeatureUnits}-unit resolution " +
+                        "floor (Clipper2 integer noise is ±1 unit). Adjust growth into a resolvable range.");
+
+                // ---------- physical guard (recorded insertion limit) ----------
+                double minFeatureMm = minGridFeature * mmPerUnit;
+                if (minFeatureMm < QrInsertionGuard.MinInsertableFeatureMm)
+                    return QrSketchResult.Fail(QrSketchErrorKind.BelowInsertionLimit,
+                        $"Smallest feature would be {minFeatureMm:F4} mm — below the recorded " +
+                        $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion guard. Increase the size " +
+                        "or adjust the growth percentage.");
+            }
 
             // ---------- cell shape ----------
-            // Spec #13 (ticket #32): the per-cell primitive. Square is today's
-            // grown rectangle, emitted unchanged; RoundedSquare cuts each
-            // corner with a polygonized quarter-arc of radius ρ = f·h where h
-            // is the GROWN cell's half-width (u/2 + g) — union, clipping,
-            // nesting, validation and conversion downstream run identically
-            // on either primitive. The three recorded bounds below are the
-            // radius cap of docs/INSERTION-GUARD.md.
+            // Spec #13 (tickets #32/#33): the per-cell primitive. Square is
+            // today's grown rectangle, emitted unchanged; RoundedSquare cuts
+            // each corner with a polygonized quarter-arc of radius ρ = f·h
+            // where h is the GROWN cell's half-width (u/2 + g); Circle emits
+            // a disjoint K-sided polygon dot of diameter = f·u centred in the
+            // cell — union, clipping, nesting, validation and conversion
+            // downstream run identically on every primitive. The recorded
+            // bounds below are the radius cap / the dot-% cap of
+            // docs/INSERTION-GUARD.md.
             bool rounded = false;
             double radiusUnits = 0.0;
             int facetsPerCorner = 0;
+            double dotRadiusUnits = 0.0;
+            int dotSides = 0;
             if (cellShape == QrCellShape.RoundedSquare)
             {
                 double p = cellShapeParameter;
@@ -304,6 +324,72 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     rounded = true;
                 }
             }
+            else if (circle)
+            {
+                // Spec #13 (ticket #33): dots only — the merged-blob regimes
+                // are deliberately excluded, so a dot is ALWAYS disjoint and
+                // the corner-contact failure class disappears entirely. The
+                // parameter is the dot size: the circle DIAMETER as a
+                // fraction of the cell pitch, ρ = f·u/2 grid units.
+                double p = cellShapeParameter;
+                if (double.IsNaN(p) || double.IsInfinity(p) || p <= 0.0)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Dot size must be a finite positive percentage of cell pitch; " +
+                        $"got '{p}'.");
+                if (p > 1.0)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Dot size {p:P1} of cell pitch is over 100% — the circles " +
+                        "would overlap their neighbours outright and dots must stay " +
+                        "disjoint. Stay within 0–100%.");
+
+                // The same insertion floor the lattice checks enforce, in
+                // grid units; plus the quantization margin — grid rounding
+                // displaces each vertex up to ~0.71 units, so two facing
+                // dots lose ≤ √2 of the nominal gap. Reserving 2 units
+                // keeps the DELIVERED gap/edge at or above the floor.
+                double floorUnits = Math.Max(QrInsertionGuard.MinGridFeatureUnits,
+                    QrInsertionGuard.MinInsertableFeatureMm / mmPerUnit);
+                const double marginUnits = 2.0;
+
+                // The one-sided cap (the 2r = p tangency of the merged
+                // regime is gone): the orthogonal neighbour gap
+                // u·(1−f) is the binding one — the diagonal gap u·(√2−f)
+                // is always larger — and it must clear the floor.
+                double r = p * u / 2.0;
+                double dotDiameterUnits = 2.0 * r;
+                double gapUnits = u - dotDiameterUnits;
+                if (gapUnits < floorUnits + marginUnits)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Dot size {p:P1} of cell pitch leaves a gap of at most " +
+                        $"{(gapUnits - marginUnits) * mmPerUnit:F4} mm between " +
+                        "neighbouring dots — below the recorded " +
+                        $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion " +
+                        $"floor. Stay at or under " +
+                        $"{(u - floorUnits - marginUnits) / u:P1}.");
+
+                // The polygon-circle fidelity rule (docs/INSERTION-GUARD.md):
+                // an inscribed K-gon's chord sagitta ρ·(1−cos(π/K)) must stay
+                // under the floor — K = ⌈π / arccos(1 − F/ρ)⌉, the coarsest
+                // polygon that qualifies (fewest segments for ticket #35's
+                // budget) — while every delivered chord clears the floor.
+                // Smallest K also gives the longest chords, so it is checked
+                // on the emitted (grid-rounded) path itself, in the same
+                // Chebyshev metric the delivered-edge guard re-measures —
+                // if it fails there is no finer polygonization to fall back
+                // on: the dot is simply too small to resolve.
+                double cosStep = 1.0 - floorUnits / r;
+                int sides = cosStep <= -1.0 ? 3
+                    : Math.Max(3, (int)Math.Ceiling(Math.PI / Math.Acos(cosStep)));
+                if (MinEdgeUnits(CircleCellPath(0, 0, r, sides)) < floorUnits)
+                    return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                        $"Dot size {p:P1} of cell pitch resolves to a dot of about " +
+                        $"{dotDiameterUnits * mmPerUnit:F4} mm — its polygon edges " +
+                        "cannot reach the recorded " +
+                        $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion " +
+                        "floor. Increase the dot size.");
+                dotRadiusUnits = r;
+                dotSides = sides;
+            }
 
             // ---------- expand emitted cells + union, clipped to the matrix ----------
             // The polarity select is the only mode switch (ADR 0002): dark
@@ -323,11 +409,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     long y1 = ((long)row + 1) * u + g;
                     var cell = rounded
                         ? RoundedCellPath(x0, y0, x1, y1, radiusUnits, facetsPerCorner)
-                        : new Path64(4)
-                        {
-                            new Point64(x0, y0), new Point64(x1, y0),
-                            new Point64(x1, y1), new Point64(x0, y1),
-                        };
+                        : circle
+                            ? CircleCellPath(
+                                (long)col * u + u / 2, (long)row * u + u / 2,
+                                dotRadiusUnits, dotSides)
+                            : new Path64(4)
+                            {
+                                new Point64(x0, y0), new Point64(x1, y0),
+                                new Point64(x1, y1), new Point64(x0, y1),
+                            };
                     subject.Add(cell);
                 }
             if (emittedCount == 0)
@@ -419,12 +509,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 growthMmPerSide: g * mmPerUnit,
                 finalSizeMm: (n * (double)u + 2 * g) * mmPerUnit,
                 minEdgeMm: minEdgeMm,
-                minLightGapMm: (u - 2 * g) * mmPerUnit,
+                // Circles: the narrowest un-emitted channel is the
+                // delivered gap between neighbouring dots — the cap keeps it
+                // at or over the floor.
+                minLightGapMm: (u - 2 * (circle ? dotRadiusUnits : g)) * mmPerUnit,
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount,
                 inverted: invert,
                 cellShape: cellShape,
-                cellShapeParameter: rounded ? cellShapeParameter : 0.0);
+                cellShapeParameter: rounded || circle ? cellShapeParameter : 0.0);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction
@@ -505,6 +598,35 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 if (path.Count == 0 || path[path.Count - 1] != pt)
                     path.Add(pt);
             }
+        }
+
+        /// <summary>
+        /// One circle cell on the integer grid: the inscribed regular
+        /// <paramref name="sides"/>-gon of radius
+        /// <paramref name="radiusUnits"/> centred on (cx, cy). Inscribed —
+        /// every vertex lies ON the nominal circle — so the polygon never
+        /// reaches past the dot's diameter and neighbouring dots stay
+        /// disjoint by construction (ticket #33). Vertices are emitted in
+        /// the square primitive's winding (positive signed area, starting at
+        /// the leftmost point); vertices that round onto their predecessor
+        /// or the start point are dropped so no zero-length edge survives.
+        /// </summary>
+        private static Path64 CircleCellPath(
+            long centreX, long centreY, double radiusUnits, int sides)
+        {
+            var path = new Path64(sides);
+            for (var i = 0; i < sides; i++)
+            {
+                double a = Math.PI + i * (2.0 * Math.PI / sides);
+                var pt = new Point64(
+                    (long)Math.Round(centreX + radiusUnits * Math.Cos(a)),
+                    (long)Math.Round(centreY + radiusUnits * Math.Sin(a)));
+                if (path.Count == 0 || path[path.Count - 1] != pt)
+                    path.Add(pt);
+            }
+            if (path.Count > 1 && path[path.Count - 1] == path[0])
+                path.RemoveAt(path.Count - 1);
+            return path;
         }
 
         /// <summary>The shortest edge of a grid path under the Chebyshev metric the guard uses.</summary>

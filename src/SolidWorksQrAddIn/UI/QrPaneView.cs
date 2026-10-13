@@ -103,6 +103,7 @@ namespace SolidWorksQrAddIn.UI
         {
             new ShapeOption(QrCellShapes.CodeFor(QrCellShape.Square), "Square"),
             new ShapeOption(QrCellShapes.CodeFor(QrCellShape.RoundedSquare), "Rounded square"),
+            new ShapeOption(QrCellShapes.CodeFor(QrCellShape.Circle), "Circle"),
         };
 
         private readonly QrSketchSession _session;
@@ -115,6 +116,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _sizeLabel;
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
+        private readonly TextBlock _growthLabel;
         private readonly ComboBox _eccBox;
         private readonly ComboBox _shapeBox;
         private readonly TextBlock _shapeParamLabel;
@@ -201,16 +203,18 @@ namespace SolidWorksQrAddIn.UI
             };
             panel.Children.Add(_sizeBox);
 
-            panel.Children.Add(new TextBlock
+            _growthLabel = new TextBlock
             {
                 Text = "Cell growth per side (% of cell width):",
                 Margin = new Thickness(0, 8, 0, 4),
-            });
+            };
+            panel.Children.Add(_growthLabel);
             _growthBox = new TextBox
             {
                 ToolTip = "Widens each dark cell on all sides by this percentage of " +
                           "the cell spacing, helping diagonally touching cells connect. " +
-                          "The QR code size stays fixed.",
+                          "The QR code size stays fixed. Does not apply to Circle " +
+                          "cells — dots size off the dot-size field instead.",
             };
             panel.Children.Add(_growthBox);
 
@@ -245,28 +249,27 @@ namespace SolidWorksQrAddIn.UI
                 DisplayMemberPath = nameof(ShapeOption.Label),
                 SelectedValuePath = nameof(ShapeOption.Code),
                 ToolTip = "The shape every emitted cell is drawn with — today's " +
-                          "square, or a square with rounded corners. Applies to " +
-                          "the next sketch created; existing sketches never change.",
+                          "square, a square with rounded corners, or disjoint " +
+                          "circle dots. Applies to the next sketch created; " +
+                          "existing sketches never change.",
             };
             panel.Children.Add(_shapeBox);
 
-            // The shape's one parameter (Rounded square's corner radius as a
-            // percentage of the cell half-width) — a text field following the
-            // growth-field conventions: verbatim text, debounced push. Under
-            // Square it is visibly not applicable — disabled, but the text is
-            // kept and re-validated the moment a shape needs it.
+            // The shape's one parameter — its meaning follows the selected
+            // shape (the session owns the label): the corner radius as a
+            // percentage of the cell half-width under Rounded square, the
+            // dot diameter as a percentage of the cell pitch under Circle —
+            // a text field following the growth-field conventions: verbatim
+            // text, debounced push. Under Square it is visibly not
+            // applicable — disabled, but the text is kept and re-validated
+            // the moment a shape needs it.
             _shapeParamLabel = new TextBlock
             {
-                Text = "Corner radius (% of cell half-width):",
+                Text = _session.ShapeParameterLabel,
                 Margin = new Thickness(0, 8, 0, 4),
             };
             panel.Children.Add(_shapeParamLabel);
-            _shapeParamBox = new TextBox
-            {
-                ToolTip = "How far the rounded corners cut into each cell, as a " +
-                          "percentage of the cell half-width (0–100). Applies to " +
-                          "Rounded square cells only — disabled for Square.",
-            };
+            _shapeParamBox = new TextBox();
             panel.Children.Add(_shapeParamBox);
 
             // The invert toggle (spec #11, ADR 0002): a checkbox is a
@@ -765,11 +768,25 @@ namespace SolidWorksQrAddIn.UI
                 ? "Text or URL (encoded exactly as entered):"
                 : _session.CurrentPreset.DisplayName + " payload (editable verbatim):";
             FlagPresetFieldError();
+            // The growth field does not apply to circles — visibly disabled
+            // under Circle, its text kept verbatim in the session (the same
+            // inert treatment the shape parameter gets under Square).
+            _growthBox.IsEnabled = _session.GrowthApplies;
+            _growthLabel.IsEnabled = _session.GrowthApplies;
             // The parameter field applies only to shapes that use it — under
             // Square it is visibly not applicable (the text itself is kept
-            // verbatim in the session).
+            // verbatim in the session). Its label and hint follow the shape.
             _shapeParamBox.IsEnabled = _session.ShapeParameterApplies;
             _shapeParamLabel.IsEnabled = _session.ShapeParameterApplies;
+            _shapeParamLabel.Text = _session.ShapeParameterLabel;
+            _shapeParamBox.ToolTip = _session.CellShape == QrCellShape.Circle
+                ? "The dot diameter as a percentage of the cell pitch (1–100). " +
+                  "Dots never touch — a size that would leave less than the " +
+                  "insertion floor between neighbours is rejected. Applies to " +
+                  "Circle cells only — disabled for Square."
+                : "How far the rounded corners cut into each cell, as a " +
+                  "percentage of the cell half-width (0–100). Applies to " +
+                  "Rounded square cells only — disabled for Square.";
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
             RebuildInfoRows();
             ShowStatus(_session.StatusText, isError: !_session.HasValidRequest);
@@ -844,8 +861,10 @@ namespace SolidWorksQrAddIn.UI
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
                        $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
+                       $"viewGrowthEnabled={_growthBox.IsEnabled} " +
                        $"viewShape={_shapeBox.SelectedValue} " +
                        $"viewShapeParam={_shapeParamBox.Text} " +
+                       $"viewShapeParamLabel={_shapeParamLabel.Text} " +
                        $"viewShapeParamEnabled={_shapeParamBox.IsEnabled}";
             }
         }

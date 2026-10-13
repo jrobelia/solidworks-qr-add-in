@@ -96,6 +96,71 @@ flanking light cells' grown straight edges cross at each pocket corner and
 dominate the diagonal cell's corner arc); isolated emitted cells are
 separate rounded islands — the "separate rounded pits" regime.
 
+## Circle cells — disjoint dots only (ticket #33)
+
+Circle emits one **dot** per emitted cell: a polygon circle of diameter
+`d = f·p` centred in the cell, where `f` is the shape parameter — the dot
+size % of cell pitch. Per spec #13's to-tickets deviation, the merged-blob
+regimes (story 7) are deliberately excluded: dots are ALWAYS disjoint, so
+the corner-contact failure class disappears entirely and the diagonal
+tangency dead zone at `2r = p√2` no longer exists.
+
+**Growth does not apply — the growth-0 layout map.** The dot size is the
+only sizing knob, so the affine map runs at `r = 0`: pitch `p = S/N`, the
+QR square is the `±S/2` data extent, and the keep-out square is the
+working-matrix edge — identical *rules* to squares/rounded cells (the same
+formulas evaluated at zero growth), coherent in both polarities. The
+growth field is inert under Circle: the pane disables it and the session
+keeps its text verbatim without parsing, exactly like the shape parameter
+under Square. (The rejected alternative — growth still sizing the pitch —
+would have left a second knob changing dot diameter in mm, contradicting
+"dot size is the sizing knob".)
+
+**The one-sided dot-% cap.** The `2r = p` tangency of the merged regime
+becomes a one-sided bound: neighbouring dots must keep a full-floor gap.
+The orthogonal gap `u·(1−f)` is the binding one — the diagonal gap
+`u·(√2−f)` is always larger — so the cap is
+
+    f ≤ 1 − (F + M)/u        (f in diameter-fraction of pitch)
+
+with `F = max(10, 0.05 mm / mmPerUnit)` grid units and `mmPerUnit =
+S/(N·u)`, plus the quantization margin `M = 2` units: grid rounding moves
+each inscribed vertex up to √2/2 units per axis, so two facing dots can
+lose ≤ ~1.4 units of the nominal gap — the margin keeps the DELIVERED gap
+at or above F. At 25 mm / N = 21 (F ≈ 421) the cap is f ≈ 95.8%; at
+50 mm / N = 21 it is f ≈ 97.9%. Values above the cap reject with
+`InvalidShapeParameter`, naming the resulting gap and the bound — before
+any host mutation; `f ≤ 0` or non-finite and `f > 1` reject on the same
+kind (the declared domain is the feasible band).
+
+**Polygon-circle fidelity — K follows cell size.** Each dot is an
+inscribed regular K-gon (vertices on the nominal circle, so the polygon
+can never reach past the dot's diameter). K is the COARSEST polygon whose
+chord sagitta stays under the floor — fewest segments for the same
+delivered fidelity:
+
+    sagitta(K) = ρ·(1 − cos(π/K)) ≤ F
+    ⟹  K = max(3, ⌈π / arccos(1 − F/ρ)⌉)
+
+The smallest admissible K also has the longest chords, so only that K is
+probed: the emitted (grid-rounded) polygon's shortest chord —
+`2ρ·sin(π/K)` nominal — must clear F in the same Chebyshev metric the
+delivered-edge guard re-measures. If it fails there is no finer
+polygonization to fall back on: a dot too small to place even a triangle's
+chords (ρ ≲ F/√3 nominally, i.e. f ≲ 1.16·F/u) rejects
+`InvalidShapeParameter` — never silently substituted for a square.
+Worst case: the largest dot (ρ → u/2) at the bare grid floor (F = 10, a
+large QR) needs K ≈ 50 — **K per cell is the segment-count driver** the
+MaxSegmentCount guard (#35) bounds. Typical cells resolve at K = 3–15
+(e.g. a 50% dot at 25 mm / N = 21 is a hexagon — chord deviation 0.04 mm,
+under the floor).
+
+Under invert the emitted polarity flips: every LIGHT cell of the whole
+working matrix — including the quiet-zone margin — emits a disjoint dot,
+which cuts as a separate circular pit in the field. No merged pocket can
+form (nothing ever touches); the keep-out square still marks the matrix
+edge the pit field covers.
+
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 
 Since ticket 4 the size and growth are engineer-entered fields — the
