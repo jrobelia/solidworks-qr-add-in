@@ -110,7 +110,7 @@ namespace SolidWorksQrAddIn.Core
 
         /// <summary>
         /// Picks the per-cell shape exactly like the pane's shape selector:
-        /// "square" or "rounded" (case-insensitive). Returns
+        /// "square", "rounded" or "circle" (case-insensitive). Returns
         /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;"
         /// for the revalidated request, and "ERROR unknown cell shape …" for
@@ -120,8 +120,9 @@ namespace SolidWorksQrAddIn.Core
 
         /// <summary>
         /// Pushes the shape-parameter text into the session exactly like the
-        /// pane's corner-radius box (percent of the cell half-width):
-        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
+        /// pane's shape-parameter box (percent of the cell half-width for
+        /// the corner radius, percent of the cell pitch for the circle dot
+        /// size): "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// Inert while the shape is Square.
         /// </summary>

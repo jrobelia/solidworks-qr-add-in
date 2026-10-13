@@ -98,7 +98,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// </summary>
         public int MatrixCellCount { get; }
 
-        /// <summary>Cell pitch p = S/(N + 2r′) where r′ is the effective growth fraction.</summary>
+        /// <summary>Cell pitch p = S/(N + 2r′) where r′ is the effective
+        /// growth fraction — S/N under Circle (growth does not apply).</summary>
         public double PitchMm { get; }
 
         /// <summary>Effective per-side growth as actually applied on the integer grid (≈ requested).</summary>
@@ -133,14 +134,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public bool Inverted { get; }
 
         /// <summary>
-        /// The per-cell primitive emitted (spec #13, ticket #32) — Square or
-        /// RoundedSquare.
+        /// The per-cell primitive emitted (spec #13, tickets #32/#33) —
+        /// Square, RoundedSquare or Circle.
         /// </summary>
         public QrCellShape CellShape { get; }
 
         /// <summary>
         /// The shape parameter actually applied — the corner-radius fraction
-        /// of the grown cell's half-width for RoundedSquare; 0 otherwise.
+        /// of the grown cell's half-width for RoundedSquare, the dot-size
+        /// fraction of cell pitch for Circle; 0 otherwise.
         /// </summary>
         public double CellShapeParameter { get; }
     }

@@ -39,7 +39,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>The cell-shape parameter was non-finite or outside its
         /// declared domain (the corner radius leaves [0, 1] of the grown
-        /// cell's half-width — edge-inverting).</summary>
+        /// cell's half-width — edge-inverting; the dot size leaves its
+        /// disjoint-dots band — the diameter cannot exceed the pitch minus a
+        /// full insertion-floor gap, nor fall below what a polygon dot can
+        /// resolve).</summary>
         InvalidShapeParameter,
     }
 
