@@ -17,7 +17,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
     ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/>,
-    ///      <see cref="SetEccLevel"/> and <see cref="SetInvert"/> store each
+    ///      <see cref="SetEccLevel"/>, <see cref="SetInvert"/>,
+    ///      <see cref="SetCellShape"/> and <see cref="SetShapeParameterText"/>
+    ///      store each
     ///      edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
@@ -78,6 +80,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>The per-side outline growth the field starts with, as a cell-width fraction (3%).</summary>
         public const double InitialGrowthFractionPerSide = 0.03;
 
+        /// <summary>
+        /// The cell-shape parameter the field starts with, as a fraction of
+        /// the cell half-width (10% — the RoundedSquare corner radius; inert
+        /// while the shape is Square).
+        /// </summary>
+        public const double InitialShapeParameterFraction = 0.10;
+
         /// <summary>Preview raster resolution (pixels per side, incl. margin).</summary>
         public const int PreviewPixelsAcross = 240;
 
@@ -115,6 +124,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
             InitialSizeMm.ToString(CultureInfo.InvariantCulture);
         private static readonly string InitialGrowthPercentText =
             (InitialGrowthFractionPerSide * 100.0).ToString(CultureInfo.InvariantCulture);
+        private static readonly string InitialShapeParameterPercentText =
+            (InitialShapeParameterFraction * 100.0).ToString(CultureInfo.InvariantCulture);
 
         private readonly Func<IQrSketchWindow> _windowFactory;
         private readonly Func<ISketchHost>? _hostProvider;
@@ -133,6 +144,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
         private bool _invert;
+        private QrCellShape _cellShape = QrCellShape.Square;
+        private string _shapeParameterText = InitialShapeParameterPercentText;
+        private double? _shapeParameterFraction;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
@@ -542,6 +556,64 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// The per-cell shape in force (spec #13, ticket #32) —
+        /// <see cref="QrCellShape.Square"/>, today's grown rectangle and the
+        /// default, or <see cref="QrCellShape.RoundedSquare"/>. Applies to
+        /// future creates only; existing sketches are never mutated.
+        /// </summary>
+        public QrCellShape CellShape => _cellShape;
+
+        /// <summary>
+        /// True while the shape-parameter field applies — RoundedSquare's
+        /// corner radius today; the pane disables the field under Square.
+        /// The text itself is always kept verbatim either way.
+        /// </summary>
+        public bool ShapeParameterApplies => _cellShape != QrCellShape.Square;
+
+        /// <summary>
+        /// The shape-parameter field exactly as entered (percent of the cell
+        /// half-width — RoundedSquare's corner radius; "10" initially).
+        /// </summary>
+        public string ShapeParameterText => _shapeParameterText;
+
+        /// <summary>
+        /// The parsed shape-parameter fraction in force, or null while the
+        /// field text holds no usable value or the parameter is inapplicable
+        /// (Square) — never a clamped or substituted number.
+        /// </summary>
+        public double? RequestedShapeParameter => _shapeParameterFraction;
+
+        /// <summary>
+        /// Selects the per-cell primitive and re-validates the whole request:
+        /// the shape is part of the emitted geometry, so the picture and the
+        /// info lines rebuild just like a growth edit. The shape-parameter
+        /// text is kept verbatim across the switch — under Square it is
+        /// inert; the moment a shape needs it the SAME text is re-validated
+        /// and a malformed value surfaces the field's own error, never a
+        /// silent substitution (growth-field discipline). Applies to future
+        /// creates only; existing sketches are never mutated.
+        /// </summary>
+        public QrSketchResult SetCellShape(QrCellShape cellShape)
+        {
+            _cellShape = cellShape;
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// Records the shape-parameter field verbatim (percent of the cell
+        /// half-width — RoundedSquare's corner radius) and re-validates the
+        /// whole request. Under Square the parameter is inert: the text is
+        /// stored but never consulted, so a malformed value cannot break the
+        /// square request — it surfaces the moment a shape that needs it is
+        /// selected.
+        /// </summary>
+        public QrSketchResult SetShapeParameterText(string shapeParameterText)
+        {
+            _shapeParameterText = shapeParameterText ?? string.Empty;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// The request the CURRENT inputs describe — the one the generator
         /// and the create command both consume, so a create can never encode
         /// different settings than the preview showed.
@@ -551,22 +623,38 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 EccLevel = _eccLevel,
                 Invert = _invert,
+                CellShape = _cellShape,
+                CellShapeParameter = _shapeParameterFraction ?? 0.0,
             };
 
         private QrSketchResult Regenerate()
         {
             // Field-level validity first so the error names the field that is
             // actually wrong; the generator still re-checks everything itself.
+            // The shape parameter is parsed only while a shape needs it —
+            // under Square the field is disabled and its text inert.
+            double shapeParameter = 0.0;
             if (!TryParseSize(_sizeText, _lengthUnit, out double sizeMm, out string sizeError))
             {
                 _sizeMm = null;
+                _shapeParameterFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidSize, sizeError);
             }
             else if (!TryParseGrowth(_growthText, out double growthFraction, out string growthError))
             {
                 _sizeMm = sizeMm;
                 _growthFraction = null;
+                _shapeParameterFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
+            }
+            else if (ShapeParameterApplies && !TryParseShapeParameter(
+                         _shapeParameterText, out shapeParameter, out string shapeParameterError))
+            {
+                _sizeMm = sizeMm;
+                _growthFraction = growthFraction;
+                _shapeParameterFraction = null;
+                _current = QrSketchResult.Fail(
+                    QrSketchErrorKind.InvalidShapeParameter, shapeParameterError);
             }
             else if (_preset.ComposeError != null)
             {
@@ -576,6 +664,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 // what is wrong.
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
+                _shapeParameterFraction = ShapeParameterApplies ? shapeParameter : (double?)null;
                 _current = QrSketchResult.Fail(
                     QrSketchErrorKind.InvalidPayload, _preset.ComposeError.Message);
             }
@@ -583,6 +672,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 _sizeMm = sizeMm;
                 _growthFraction = growthFraction;
+                _shapeParameterFraction = ShapeParameterApplies ? shapeParameter : (double?)null;
                 _current = QrSketchGenerator.Generate(CurrentRequest(sizeMm, growthFraction));
             }
 
@@ -645,6 +735,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     info.Inverted
                         ? "Inverted — light code on a dark field"
                         : "Dark code on a light field"),
+                new QrInfoLine(
+                    "Cell shape",
+                    info.CellShape == QrCellShape.RoundedSquare
+                        ? "Rounded square — corner radius " +
+                          (info.CellShapeParameter * 100.0).ToString(
+                              "G4", CultureInfo.InvariantCulture) +
+                          "% of half-width"
+                        : "Square"),
             };
             return lines;
         }
@@ -763,6 +861,40 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     return false;
                 default:
                     growthFraction = percent / 100.0;
+                    error = string.Empty;
+                    return true;
+            }
+        }
+
+        /// <summary>
+        /// The shape-parameter field — RoundedSquare's corner radius as a
+        /// percentage of the cell half-width. 0 keeps the square output; the
+        /// field ceiling is 100% — the domain bound the generator enforces
+        /// (past it the corner arcs on each edge would pass each other and
+        /// invert the edge). Called only while
+        /// <see cref="ShapeParameterApplies"/>; under Square the text is
+        /// retained verbatim but never consulted.
+        /// </summary>
+        private static bool TryParseShapeParameter(string text, out double fraction, out string error)
+        {
+            fraction = 0;
+            switch (ParseNumericField(text, "%", v => v >= 0.0 && v <= 100.0, out double percent))
+            {
+                case NumericFieldError.Empty:
+                    error = "Corner radius is empty. Enter the radius as a " +
+                            "percentage of the cell half-width (0–100).";
+                    return false;
+                case NumericFieldError.NotANumber:
+                    error = $"Corner radius must be a number — percent of the " +
+                            $"cell half-width; got '{Shorten(text)}'.";
+                    return false;
+                case NumericFieldError.OutOfRange:
+                    error = $"Corner radius must be a finite percentage from 0% to " +
+                            $"100% of the cell half-width — past 100% the corner " +
+                            $"arcs invert the edge; got '{Shorten(text)}'.";
+                    return false;
+                default:
+                    fraction = percent / 100.0;
                     error = string.Empty;
                     return true;
             }

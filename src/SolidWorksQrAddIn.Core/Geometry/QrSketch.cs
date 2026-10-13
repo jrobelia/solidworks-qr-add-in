@@ -67,7 +67,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
-            int contourCount, int segmentCount, bool inverted = false)
+            int contourCount, int segmentCount, bool inverted = false,
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
         {
             Version = version;
             CellCount = cellCount;
@@ -81,6 +82,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             ContourCount = contourCount;
             SegmentCount = segmentCount;
             Inverted = inverted;
+            CellShape = cellShape;
+            CellShapeParameter = cellShapeParameter;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -128,6 +131,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// matrix's light cells — a dark field with the code left unmarked.
         /// </summary>
         public bool Inverted { get; }
+
+        /// <summary>
+        /// The per-cell primitive emitted (spec #13, ticket #32) — Square or
+        /// RoundedSquare.
+        /// </summary>
+        public QrCellShape CellShape { get; }
+
+        /// <summary>
+        /// The shape parameter actually applied — the corner-radius fraction
+        /// of the grown cell's half-width for RoundedSquare; 0 otherwise.
+        /// </summary>
+        public double CellShapeParameter { get; }
     }
 
     /// <summary>

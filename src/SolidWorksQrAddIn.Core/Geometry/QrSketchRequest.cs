@@ -43,5 +43,23 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// matrix edge, for marking/engraving workflows. Default false.
         /// </summary>
         public bool Invert { get; set; }
+
+        /// <summary>
+        /// The per-cell primitive to emit (spec #13, ticket #32): the
+        /// grown-cell outline shape the union is built from. Default
+        /// <see cref="QrCellShape.Square"/> — the historical output; existing
+        /// requests are unchanged.
+        /// </summary>
+        public QrCellShape CellShape { get; set; } = QrCellShape.Square;
+
+        /// <summary>
+        /// The selected shape's parameter — for
+        /// <see cref="QrCellShape.RoundedSquare"/> the corner radius as a
+        /// fraction of the grown cell's half-width in [0, 1] (0 emits the
+        /// square primitive). Inert for shapes that declare no parameter —
+        /// Square ignores it entirely, so the pane can keep the field
+        /// disabled without clearing it.
+        /// </summary>
+        public double CellShapeParameter { get; set; }
     }
 }

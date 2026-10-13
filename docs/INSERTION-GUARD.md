@@ -29,6 +29,73 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
   residual corner-only contacts reject (`InvalidGeometry`) before any host
   mutation.
 
+## Rounded-square cells — the radius cap (ticket #32)
+
+RoundedSquare replaces each emitted cell's four corners with a polygonized
+quarter-arc of radius `ρ = f·h`, where `h = u/2 + g` is the GROWN cell's
+half-width and `f ∈ [0, 1]` is the shape parameter (percent of half-width on
+the pane). Union, clipping, nesting, validation, conversion and insertion
+run identically on either primitive. `f` above the domain rejects
+(`InvalidShapeParameter`): past `ρ = h` adjacent corner arcs pass each other
+and invert the edge — the "adjacent corners can invert an edge" bound the
+ticket names.
+
+Because rounding cuts material, the accepted radius must also preserve the
+three guarantees growth buys. In grid units, with the floor
+`F = max(10, 0.05 mm / mmPerUnit)`:
+
+- **Diagonal-overlap cap `ρ ≤ 2g`** (`BelowInsertionLimit`). Two diagonal
+  cells overlap in a `2g × 2g` square centred on the shared corner. Each
+  cell's corner cap — the part of that square outside the cell — is bounded
+  by the polygonized arc, so its deepest point sits on the far side of the
+  chord between the arc endpoints `(±(g−ρ), ±g)`. While `ρ ≤ 2g` both caps
+  stay on their own side of the overlap square (`x+y ≥ 0` vs `x+y ≤ 0`): the
+  union provably covers the square whole **for any polygonization**, the
+  same finite overlap squares guarantee — corner-only contacts stay
+  impossible. Past `2g` the facing caps meet, the cells pinch to a lens and
+  then part — the finite-overlap guarantee is lost, so the radius stops
+  there (the disjoint regime stays with circles/#33, where the spec put it).
+
+- **Merge-groove band `g < ρ < g+F`** (`BelowInsertionLimit`). Two
+  side-adjacent emitted cells overlap by `2g` across the shared edge. For
+  `ρ ≤ g` each corner arc stays inside that overlap band — merges are flush,
+  identical to squares. Past `g` a V-groove opens on the shared boundary
+  whose edges scale with `ρ−g` (exact on the emitted polygon for the facet
+  counts below); under the floor it is a sliver, so the band is refused —
+  spec story 9's near-tangent band applied to rounded merges.
+
+- **Primitive floor** (`BelowInsertionLimit`). Every emitted edge must
+  resolve: the straight segments `2h−2ρ` and the facet chords
+  `2ρ·sin(45°/k)`. A radius that cannot place even one chamfer facet ≥ F is
+  refused, like growth that rounds to zero.
+
+**Facet policy.** The corner arc polygonizes at `k` facets/corner:
+
+- Clean regime (`ρ ≤ g`): no arc ever lies on an interior boundary —
+  interior corners are covered by the neighbouring grown cells — so the
+  finest `k ≤ 8` whose chords clear F is emitted (grid probe: `MaxFacetsPerCorner`).
+- Groove regime (`ρ > g`): the corner arcs of side-adjacent cells cross.
+  `k ≤ 2` keeps every crossing a clean vertex — the facet touching each
+  edge is collinear with the k=1 chamfer, so the crossing angle is the same
+  pair of straight lines; finer polygonizations can strand mid-facet stubs
+  below F (grid-verified: k=1/k=2 give `ρ−g` groove edges exactly; k=4/k=8
+  produce scattered stubs). k=2 is preferred for roundness, k=1 as fallback.
+
+**Feasible domain.** Putting it together, an accepted radius lives in
+`ρ ∈ [F_resolvable, g] ∪ [g+F, 2g]`. Both bands need per-side growth ≥ the
+physical floor (`g·mmPerUnit ≥ 0.05 mm`); at the window's initial
+25 mm / 3% request the growth is 0.0356 mm/side, so **no** rounded radius
+resolves there — the pane reports which bound the entered radius hit and
+what would clear it. Rounded cells become feasible at ≳4.2% growth
+(25 mm) or ≳35 mm size (3% growth) — e.g. 50 mm / 3% accepts the
+groove-regime band `f ≈ 9.6–11.3%`, 60 mm / 10% accepts `f ≈ 3–33%`.
+
+Under invert the same emitted cells are light: merged light cells grooved
+identically; an un-emitted dark cell's pocket stays a sharp square (the
+flanking light cells' grown straight edges cross at each pocket corner and
+dominate the diagonal cell's corner arc); isolated emitted cells are
+separate rounded islands — the "separate rounded pits" regime.
+
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 
 Since ticket 4 the size and growth are engineer-entered fields — the
