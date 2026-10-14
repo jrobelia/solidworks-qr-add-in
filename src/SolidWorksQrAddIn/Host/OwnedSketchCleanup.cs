@@ -36,13 +36,18 @@ namespace SolidWorksQrAddIn.Host
         /// <summary>
         /// Select and delete exactly this session's sketch feature — nothing
         /// else. Returns null on success, or a detail naming the failed stage
-        /// (select vs delete vs an exception).
+        /// (select vs delete vs an exception). The sketch's equation entries
+        /// are swept first — SolidWorks refuses to delete a sketch whose
+        /// dims still feed the equation manager (ticket-#19 finding), and
+        /// the leftovers become the orphans that break the NEXT circle
+        /// create's equation install (ticket #42, SketchEquationHygiene).
         /// </summary>
         public static string? DeleteSketchFeature(IModelDoc2 doc, IFeature sketchFeature)
         {
             var name = sketchFeature.Name;
             try
             {
+                SketchEquationHygiene.PurgeEquationsReferencing(doc, name);
                 doc.ClearSelection2(true);
                 var ext = doc.Extension as IModelDocExtension
                     ?? throw new SketchHostException("The document exposed no extension interface.");
@@ -69,6 +74,10 @@ namespace SolidWorksQrAddIn.Host
                                   swDeleteSelectionOptions_e.swDelete_Absorbed)))
                         return $"DeleteSelection2 failed for '{name}'";
                 }
+                // The delete just orphaned whatever the pre-sweep missed —
+                // drop those before the next create's equation install
+                // refuses on them.
+                SketchEquationHygiene.PurgeOrphanedEquations(doc);
                 return null;
             }
             catch (Exception ex)
