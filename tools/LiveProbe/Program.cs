@@ -46,7 +46,7 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// editing, close/reopen, disconnect release, and the ticket-2
     /// insertion-failure + feature-use regressions.
     /// </summary>
-    public static class Program
+    public static partial class Program
     {
         private const string PayloadA = "SW-QR-MVP";
         private const string PayloadB = "HTTPS://QR-MVP.DEV/T3";
@@ -118,6 +118,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "xsettings", StringComparison.OrdinalIgnoreCase))
                 return XsettingsMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "pattern", StringComparison.OrdinalIgnoreCase))
+                return PatternSpikeMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
