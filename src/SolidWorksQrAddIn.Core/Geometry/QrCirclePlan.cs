@@ -14,8 +14,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   2. CreateLinearSketchStepAndRepeat over
     ///      <see cref="PatternCells"/> × <see cref="PatternCells"/> at
     ///      <see cref="PitchM"/> spacing — columns step +x, rows step −y
-    ///      (AngleX = 0, AngleY = −π/2 in the API's terms — row 0 sits at
-    ///      the top of the upright code);
+    ///      (AngleX = 0, AngleY = 3π/2 in the API's terms — row 0 sits at
+    ///      the top of the upright code; the −π/2 literal is REFUSED by
+    ///      the API, PAT12-verified, its positive-form equivalent is not);
     ///   3. pass <see cref="DeleteInstances"/> verbatim as the create-time
     ///      skip string — the proven 1-based "(col,row)" pairs; the seed
     ///      instance (1,1) is never listed and can never be skipped.

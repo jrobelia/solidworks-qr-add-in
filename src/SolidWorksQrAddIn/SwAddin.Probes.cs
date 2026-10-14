@@ -1386,6 +1386,121 @@ namespace SolidWorksQrAddIn
             }
         }
 
+        // ---------------- master-geometry dims + equations (ticket-#42 gates) ----------------
+
+        /// <summary>
+        /// The dimension/equation surface the circle live gates read after
+        /// a create (ticket #40). Works on the named committed sketch or —
+        /// empty name — the sketch open in edit mode. Sketch dims are not
+        /// sub-features, so they resolve by name through IParameter over
+        /// D1..D64 — the same discovery the emitter itself uses (creation
+        /// order: the QR-square master dim is D1, then the quiet-zone set,
+        /// then the pattern's spacing pair, then the seed dims). Each entry
+        /// reports the mm value and DrivenState code; the equation list is
+        /// the equation manager's verbatim text.
+        /// </summary>
+        public string PatternDimsProbe(string sketchName)
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var doc = _sw.IActiveDoc2 as IModelDoc2;
+                if (doc == null)
+                    return "ERROR no active document";
+
+                string name = sketchName ?? "";
+                if (name.Length == 0)
+                {
+                    var mgr = doc.SketchManager as ISketchManager;
+                    name = ((mgr?.ActiveSketch as ISketch) as IFeature)?.Name ?? "";
+                }
+                if (name.Length == 0)
+                    return "ERROR no sketch name and no sketch open in edit mode";
+
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"PATDIMS sketch='{name}'");
+                var parts = new System.Collections.Generic.List<string>();
+                for (var i = 1; i <= 64; i++)
+                {
+                    IDimension? dim = null;
+                    try { dim = doc.IParameter($"D{i}@{name}") as IDimension; }
+                    catch { }
+                    if (dim == null) continue;
+                    double v = double.NaN;
+                    int st = -8;
+                    try { v = dim.SystemValue; } catch { }
+                    try { st = dim.DrivenState; } catch { }
+                    parts.Add($"D{i}={v * 1000.0:F4}mm(s{st})");
+                }
+                sb.Append($" dims={parts.Count}").Append(' ')
+                  .Append(string.Join(" ", parts));
+
+                int nEq = -1;
+                var eqs = new System.Collections.Generic.List<string>();
+                try
+                {
+                    var eqm = doc.GetEquationMgr() as IEquationMgr;
+                    if (eqm != null)
+                    {
+                        nEq = eqm.GetCount();
+                        for (var i = 0; i < nEq; i++)
+                        {
+                            string? text = null;
+                            try { text = eqm.Equation[i]; } catch { }
+                            if (text != null)
+                                eqs.Add(text.Trim());
+                        }
+                    }
+                }
+                catch { }
+                sb.Append($" eqs={nEq}");
+                foreach (var e in eqs)
+                    sb.Append($" '{e}'");
+                sb.Append(session.CurrentResult?.Sketch?.CirclePlan == null
+                    ? " mode=square" : " mode=circle");
+                return sb.ToString().Trim();
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Drives one dimension by name — the live gate's resize handle on
+        /// the QR-square master dim. SetSystemValue3 in this configuration,
+        /// EditRebuild3, then the stored-value echo so the gate sees what
+        /// SolidWorks actually took (rc is the SetSystemValue3 return).
+        /// </summary>
+        public string SetPatternDimProbe(string dimensionName, double valueM)
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var doc = _sw.IActiveDoc2 as IModelDoc2;
+                if (doc == null)
+                    return "ERROR no active document";
+                var dim = doc.IParameter(dimensionName ?? "") as IDimension;
+                if (dim == null)
+                    return $"ERROR no dimension '{dimensionName}'";
+                int rc = -8;
+                try { rc = dim.SetSystemValue3(valueM, 2, null); }
+                catch (Exception ex) { return $"ERROR set '{dimensionName}': {ex.Message}"; }
+                try { doc.EditRebuild3(); } catch { }
+                double now = double.NaN;
+                try { now = dim.SystemValue; } catch { }
+                return $"PATSET '{dimensionName}'={now * 1000.0:F4}mm rc={rc}";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
         private static int CountSketchFeatures(IModelDoc2 doc)
         {
             int n = 0;
