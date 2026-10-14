@@ -151,5 +151,36 @@ namespace SolidWorksQrAddIn.Tests
             Assert.False(QrEquationText.IsOrphaned(
                 "\"D1@Sketch7\" = 0.05", name => name == "Sketch4" || name == "Sketch7"));
         }
+
+        // ---------------- full-name → equation reference ----------------
+        // The insertion path turns a created dimension's FullName into the
+        // "D{n}@{sketch}" atom the equations bind — the review's EqName
+        // guard: an unexpected shape must refuse, never silently mint a
+        // dead reference. The pure decision lives here for headless tests;
+        // SwSketchInsertion wraps a null in SketchInsertionException.
+
+        [Theory]
+        [InlineData("D6@Sketch1@Part5.Part", "Sketch1", "D6@Sketch1")]
+        [InlineData("D6@Sketch1@Part2.SLDPRT", "Sketch1", "D6@Sketch1")]
+        [InlineData("D6@Sketch1", "Sketch1", "D6@Sketch1")]
+        [InlineData("D9@Sketch 4@Doc@tail", "Sketch 4", "D9@Sketch 4")]
+        public void Full_names_reduce_to_the_two_part_reference(
+            string fullName, string sketch, string expected)
+        {
+            Assert.Equal(expected, QrEquationText.LocalReferenceFor(fullName, sketch));
+        }
+
+        [Theory]
+        [InlineData("D6", "Sketch1")]                 // no feature part at all
+        [InlineData("D6@OtherSketch@Part5", "Sketch1")] // another sketch's dim
+        [InlineData("D6@Sketch1Extra@Part5", "Sketch1")] // prefix ≠ the feature
+        [InlineData("", "Sketch1")]
+        [InlineData(null, "Sketch1")]
+        [InlineData("D6@Sketch1@Doc", "")]
+        public void Malformed_or_mismatched_full_names_are_refused(
+            string? fullName, string sketch)
+        {
+            Assert.Null(QrEquationText.LocalReferenceFor(fullName, sketch));
+        }
     }
 }

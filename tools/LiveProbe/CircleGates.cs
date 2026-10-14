@@ -25,8 +25,8 @@ namespace SolidWorksQrAddIn.LiveProbe
     ///   plumbing    — square default, circle selection, dot-% and invert
     ///                 round-trips through the session probes;
     ///   census      — real ARC entities, arcs == regions == emitted dots,
-    ///                 skip list = the light cells, construction squares +
-    ///                 the two pattern direction lines accounted for;
+    ///                 plus the exact centre set: every emitted cell
+    ///                 resolved one-to-one, every skipped cell absent;
     ///   extrude     — SKETCHREGION picks inside retained dots feed
     ///                 FeatureExtrusion3; under invert the same dots feed a
     ///                 Cut-Extrude (Dir=true, the insertion-guard precedent);
@@ -210,9 +210,13 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 var cen = ParseCensus(probe.PatternCensusProbe(skA));
                 CheckCensus("open-sketch census (A)", cen, plan, expectedLines: 10);
+                CheckCentreCensus("open-sketch centres (A)",
+                    mgrA.ActiveSketch as ISketch, plan);
                 mgrA.InsertSketch(false);
                 var cenC = ParseCensus(probe.PatternCensusProbe(skA));
                 CheckCensus("committed census (A)", cenC, plan, expectedLines: 10);
+                CheckCentreCensus("committed centres (A)",
+                    FindSketchFeature(docA, skA)?.GetSpecificFeature2() as ISketch, plan);
 
                 // Region picks: emitting cells select, skipped cells don't.
                 var selA = (ISelectionMgr)docA.ISelectionManager;
@@ -364,6 +368,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                         "inverted census: arcs==regions==light cells",
                         $"arcs={cenInv?.Arcs} regions={cenInv?.Regions} " +
                         $"skipped={cenInv?.Skipped} invertEcho={cenInv?.Invert}");
+                    CheckCentreCensus("inverted centres (B)",
+                        mgrB.ActiveSketch as ISketch, planInv);
                     mgrB.InsertSketch(false);
                     var selB = (ISelectionMgr)docB.ISelectionManager;
                     int cutPicks = PickDotRegions(docB, extB, selB, planInv, 3);
@@ -451,6 +457,66 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Cells = FieldInt(line, "cells"),
                 Invert = line.Contains("invert=True"),
             };
+        }
+
+        /// <summary>
+        /// The exact dot-field census the count-only checks can't give:
+        /// every pattern-arc centre through <c>GetSketchSegments()</c>
+        /// (<c>GetArcs()</c> misses the instances, PAT0), matched
+        /// one-to-one against the plan — every emitted cell resolved,
+        /// every skipped cell absent, no strays or duplicates. The PAT0
+        /// sibling-COM quirk (one arc can fail the <c>ISketchArc</c> cast)
+        /// resolves through the sketch-point census: an instance's centre
+        /// is always a sketch point, a skipped instance leaves none, and
+        /// the only other points (direction-line endpoints, square
+        /// corners) never land on a skipped cell — the endpoints sit on
+        /// the seed's always-emitted neighbours, the corners half a cell
+        /// outside the grid.
+        /// </summary>
+        private static void CheckCentreCensus(string tag, ISketch? sk, QrCirclePlan plan)
+        {
+            var arcCentres = new List<SketchPoint2>();
+            int arcSegs = 0, siblingArcs = 0;
+            if (sk?.GetSketchSegments() is object[] segs)
+                foreach (var so in segs)
+                {
+                    if (so is not ISketchSegment s) continue;
+                    int t = -1;
+                    try { t = s.GetType(); } catch { }
+                    if (t != (int)swSketchSegments_e.swSketchARC) continue;
+                    bool cons = false;
+                    try { cons = s.ConstructionGeometry; } catch { }
+                    if (cons) continue;
+                    arcSegs++;
+                    ISketchPoint? cp = null;
+                    try { cp = (so as ISketchArc)?.GetCenterPoint2() as ISketchPoint; }
+                    catch { }
+                    if (cp != null) arcCentres.Add(new SketchPoint2(cp.X, cp.Y));
+                    else siblingArcs++;
+                }
+            var sketchPoints = new List<SketchPoint2>();
+            if (sk?.GetSketchPoints() is object[] pts)
+                foreach (var po in pts)
+                    if (po is ISketchPoint p)
+                        sketchPoints.Add(new SketchPoint2(p.X, p.Y));
+
+            // Quarter-pitch tolerance: float noise passes, a centre in the
+            // neighbouring cell (one pitch away) can never.
+            var v = QrCentreCensus.Evaluate(plan, arcCentres, sketchPoints,
+                arcSegs, siblingArcs, plan.PitchM * 0.25);
+
+            Check(v.ArcSegments == plan.EmittedCount,
+                $"one pattern arc per emitted cell ({tag})",
+                $"arcs={v.ArcSegments} emitted={plan.EmittedCount} siblingCasts={v.SiblingArcs}");
+            Check(v.Missing == 0 && v.PointOnly == v.SiblingArcs,
+                $"every emitted cell resolves a unique centre ({tag})",
+                $"matched={v.Matched} pointOnly={v.PointOnly} " +
+                $"missing={v.Missing} sibling={v.SiblingArcs}");
+            Check(v.Stray == 0,
+                $"no stray or duplicated dot centres ({tag})", $"stray={v.Stray}");
+            Check(v.ForbiddenPresent == 0,
+                $"every skipped cell is absent ({tag})",
+                $"present={v.ForbiddenPresent} skipped={plan.SkippedCount}");
         }
 
         /// <summary>The census assertions every committed circle sketch must meet.</summary>

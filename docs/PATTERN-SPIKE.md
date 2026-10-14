@@ -85,7 +85,7 @@ PAT11(fallback) drawn=13 segs=13 arcs=12 lines=0 regions=13 regionPicks=1 boss='
 // 3) seed circle at (box corner + pitch/2), CreateCircleByRadius
 // 4) ISketchManager.CreateLinearSketchStepAndRepeat(
 //        NumX:N, NumY:N, SpacingX:pitch, SpacingY:pitch,
-//        AngleX:0, AngleY:π/2,
+//        AngleX:0, AngleY:3π/2,        // −π/2 is REFUSED (PAT12); 3π/2 is the same −y direction
 //        DeleteInstances:"(c1,r1) (c2,r2) …",     // 1-based (col,row), space-separated
 //        XSpacingDim:true, YSpacingDim:true,       // → driving dims D2,D3
 //        AngleDim:false, NumOfInstancesDimX/Y:false)

@@ -411,8 +411,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     $"most {pitchMm * (1.0 - dotFraction):F4} mm between neighbouring " +
                     $"dots — at or under the recorded " +
                     $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion floor. " +
-                    $"Stay under {capFraction * 100.0:G4}% for this size and payload " +
-                    "(a larger QR size or a denser payload lowers the cap).");
+                    $"Stay under {capFraction * 100.0:G4}% for this size and payload — " +
+                    "lower the dot size; a larger QR size or a sparser payload " +
+                    "(shorter content or lighter error correction) raises the cap.");
             double dotDiameterMm = pitchMm * dotFraction;
             if (dotDiameterMm < QrInsertionGuard.MinInsertableFeatureMm)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,

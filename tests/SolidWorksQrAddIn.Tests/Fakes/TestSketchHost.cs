@@ -706,6 +706,12 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         {
             if (_aborted || _committed)
                 throw new SketchInsertionException("The insertion session is already finished.");
+            // The contract's mutual exclusion — a staged circle plan owns
+            // the sketch; the fake enforces it like the native adapter.
+            if (_stagedCirclePlan != null)
+                throw new SketchInsertionException(
+                    "A circle-dot plan is already staged on this session — " +
+                    "contour edges and the circle pattern are mutually exclusive.");
             var next = _buffered.Count + 1;
             if (_host.ThrowUnhandledOnLineNumber == next)
                 throw new InvalidOperationException(
@@ -743,6 +749,10 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         {
             if (_aborted || _committed)
                 throw new SketchInsertionException("The insertion session is already finished.");
+            if (_buffered.Count > 0)
+                throw new SketchInsertionException(
+                    $"Contour edges are already staged on this session ({_buffered.Count}) — " +
+                    "a circle-dot plan and contour edges are mutually exclusive.");
             _stagedCirclePlan = plan;
         }
 

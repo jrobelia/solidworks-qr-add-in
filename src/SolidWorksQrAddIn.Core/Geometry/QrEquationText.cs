@@ -67,6 +67,32 @@ namespace SolidWorksQrAddIn.Core.Geometry
             return false;
         }
 
+        /// <summary>
+        /// The equation-reference form of a dimension's full name —
+        /// <c>"D{n}@{sketch}@{document}"</c> or the already-two-part
+        /// <c>"D{n}@{sketch}"</c> both reduce to <c>"D{n}@{sketch}"</c>
+        /// (PAT4's reference shape). The sketch's own name anchors the
+        /// cut, so a document tail carrying '@' cannot shift it. Returns
+        /// null for any other shape — a bare <c>"D{n}"</c>, a reference
+        /// from another sketch, a name without the feature part — because
+        /// silently truncating would mint a dead equation reference; the
+        /// caller owns the refusal.
+        /// </summary>
+        public static string? LocalReferenceFor(string? fullName, string sketchName)
+        {
+            if (string.IsNullOrEmpty(sketchName)) return null;
+            string name = fullName ?? "";
+            int at = name.IndexOf('@');
+            if (at <= 0)
+                return null;   // no feature part (or an empty dim name)
+            string tail = name.Substring(at + 1);
+            if (tail == sketchName)
+                return name;   // already the two-part reference
+            if (tail.StartsWith(sketchName + "@", StringComparison.Ordinal))
+                return name.Substring(0, at + 1 + sketchName.Length);
+            return null;
+        }
+
         /// <summary>A feature part that is actually a document name — never a feature.</summary>
         private static bool LooksLikeDocumentName(string name) =>
             name.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase) ||

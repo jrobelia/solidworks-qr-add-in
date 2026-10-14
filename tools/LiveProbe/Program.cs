@@ -1525,7 +1525,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 sb.Append($"dim='{dim.FullName}' v0={dim.SystemValue * 1000:F2} ");
                 int r = -99;
-                try { r = dim.SetSystemValue3(0.03, 2, null); }
+                try { r = dim.SetSystemValue3(0.03, 2 /* swSetValue_InAllConfigurations */, null); }
                 catch (Exception ex) { sb.Append($"setEX:{ex.GetType().Name} "); }
                 sb.Append($"set={r} v={(dim.SystemValue * 1000):F2} ");
                 try { doc.EditRebuild3(); } catch { }

@@ -1087,7 +1087,13 @@ namespace SolidWorksQrAddIn
             {
                 sb.Append($"dim='{dim.FullName}' v0={dim.SystemValue * 1000:F2} ");
                 int r = -99;
-                try { r = dim.SetSystemValue3(0.03, 2, null); }
+                try
+                {
+                    // BLOCK-SPIKE.md Q2 records the bare literal: 2 IS
+                    // swSetValue_InAllConfigurations (swSetValueInConfiguration_e).
+                    r = dim.SetSystemValue3(0.03,
+                        (int)swSetValueInConfiguration_e.swSetValue_InAllConfigurations, null);
+                }
                 catch (Exception ex) { sb.Append($"setEX:{ex.GetType().Name} "); }
                 sb.Append($"set={r} v={(dim.SystemValue * 1000):F2} ");
                 try { doc.EditRebuild3(); } catch { }
@@ -1422,17 +1428,15 @@ namespace SolidWorksQrAddIn
                 var sb = new System.Text.StringBuilder();
                 sb.Append($"PATDIMS sketch='{name}'");
                 var parts = new System.Collections.Generic.List<string>();
-                for (var i = 1; i <= 64; i++)
+                // The shared D1..D64 IParameter scan — the same discovery
+                // the circle emitter runs (creation order).
+                foreach (var d in SketchDimensions.OfSketch(doc, name))
                 {
-                    IDimension? dim = null;
-                    try { dim = doc.IParameter($"D{i}@{name}") as IDimension; }
-                    catch { }
-                    if (dim == null) continue;
                     double v = double.NaN;
                     int st = -8;
-                    try { v = dim.SystemValue; } catch { }
-                    try { st = dim.DrivenState; } catch { }
-                    parts.Add($"D{i}={v * 1000.0:F4}mm(s{st})");
+                    try { v = d.Dim.SystemValue; } catch { }
+                    try { st = d.Dim.DrivenState; } catch { }
+                    parts.Add($"{SketchDimensions.DimNumber(d.Name)}={v * 1000.0:F4}mm(s{st})");
                 }
                 sb.Append($" dims={parts.Count}").Append(' ')
                   .Append(string.Join(" ", parts));
@@ -1488,7 +1492,14 @@ namespace SolidWorksQrAddIn
                 if (dim == null)
                     return $"ERROR no dimension '{dimensionName}'";
                 int rc = -8;
-                try { rc = dim.SetSystemValue3(valueM, 2, null); }
+                // This-configuration scope — docs/CIRCLE-DIMENSIONS.md's
+                // documented semantic (swSetValueInConfiguration_e: 1 is
+                // InThisConfiguration; the bare 2 was InAllConfigurations).
+                try
+                {
+                    rc = dim.SetSystemValue3(valueM,
+                        (int)swSetValueInConfiguration_e.swSetValue_InThisConfiguration, null);
+                }
                 catch (Exception ex) { return $"ERROR set '{dimensionName}': {ex.Message}"; }
                 try { doc.EditRebuild3(); } catch { }
                 double now = double.NaN;
