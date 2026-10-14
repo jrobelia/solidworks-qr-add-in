@@ -203,7 +203,18 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 ```
+
+The `circledims` mode (ticket #40) is the circle-mode master-geometry
+live gate: a real circle-mode create through the session, then
+`PatternDimsProbe` (dim names/values/driven states + the equation list)
+and `SetPatternDimProbe` (a `SetSystemValue3` rescale of the QR-square
+master dim), verified against the expected `box/N` law — see
+`docs/CIRCLE-DIMENSIONS.md` for the dim/equation map it asserts. It is a
+second `LiveProbe.exe pattern 12` away from the raw-API replication
+(PAT12 in `docs/PATTERN-SPIKE.md`). Run after `sync-dev-deploy.ps1` so
+the deployed add-in carries the build under test.
 
 The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
 extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,

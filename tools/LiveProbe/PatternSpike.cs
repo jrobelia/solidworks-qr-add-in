@@ -72,6 +72,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     (9,  "undo",       PatExp9_Undo),
                     (10, "invert",     PatExp10_Invert),
                     (11, "fallback",   PatExp11_Fallback),
+                    (12, "prodOrder",  PatExp12_ProductionOrder),
                 };
                 foreach (var t in tests)
                 {
@@ -1359,6 +1360,189 @@ namespace SolidWorksQrAddIn.LiveProbe
             catch (Exception ex) { sb.Append($"extEX:{ex.GetType().Name} "); }
             sb.Append($"regionPicks={picks} boss={(boss == null ? "null" : "'" + boss.Name + "'")} ");
             if (boss != null) sb.Append($"delBoss={DeleteFeatureByName(c, boss)}");
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>PAT12 — the production order, inside sketch edit. PAT4
+        /// installed its equations AFTER InsertSketch(false); the ticket-#40
+        /// emitter does everything in the open edit — dims, equations,
+        /// EvaluateAll/EditRebuild3, then a master-dim rescale — also in
+        /// edit. This replicates that ordering and reports whether the
+        /// driven dims hold the box/N law and the geometry follows.</summary>
+        private static string PatExp12_ProductionOrder(ISldWorks sw, IModelDoc2 doc)
+        {
+            var c = Pat.Of(sw, doc);
+            var sb = new StringBuilder();
+            const int n = 3, q = 4; const double pitch = 0.002, f = 0.5;
+            double size = n * pitch, qo = q * pitch, keep = size + 2 * qo;
+            double r = pitch * f / 2.0;
+
+            if (!c.OpenSketch()) return "openSketch=fail";
+            // QR square 0..size, keep-out square −qo..size+qo (construction)
+            foreach (var (x1, y1, x2, y2) in new[]
+                     { (0.0, 0.0, size, 0.0), (size, 0.0, size, size),
+                       (size, size, 0.0, size), (0.0, size, 0.0, 0.0),
+                       (-qo, -qo, size + qo, -qo), (size + qo, -qo, size + qo, size + qo),
+                       (size + qo, size + qo, -qo, size + qo), (-qo, size + qo, -qo, -qo) })
+            {
+                var s = c.Mgr.CreateLine(x1, y1, 0, x2, y2, 0) as ISketchSegment;
+                if (s != null) s.ConstructionGeometry = true;
+            }
+            // dims BEFORE the seed/pattern — the emitter's order
+            c.Doc.ClearSelection2(true);
+            c.SelSegAt(size / 2, 0);
+            IDimension? boxDim = null;
+            try { boxDim = (doc.IAddHorizontalDimension2(size / 2, -qo, 0) as IDisplayDimension)
+                ?.GetDimension() as IDimension; }
+            catch (Exception ex) { sb.Append($"boxEX:{ex.GetType().Name} "); }
+            c.Doc.ClearSelection2(true);
+            c.SelSegAt(0, size / 2); c.SelSegAt(-qo, size / 2, append: true);
+            IDimension? qox = null;
+            try { qox = (doc.IAddHorizontalDimension2(-qo / 2, -qo, 0) as IDisplayDimension)
+                ?.GetDimension() as IDimension; }
+            catch (Exception ex) { sb.Append($"qoxEX:{ex.GetType().Name} "); }
+            c.Doc.ClearSelection2(true);
+            c.SelSegAt(size / 2, 0); c.SelSegAt(size / 2, -qo, append: true);
+            IDimension? qoy = null;
+            try { qoy = (doc.IAddVerticalDimension2(size + qo + 0.003, -qo / 2, 0) as IDisplayDimension)
+                ?.GetDimension() as IDimension; }
+            catch (Exception ex) { sb.Append($"qoyEX:{ex.GetType().Name} "); }
+            c.Doc.ClearSelection2(true);
+            c.SelSegAt(size / 2, -qo);
+            IDimension? qsz = null;
+            try { qsz = (doc.IAddHorizontalDimension2(size / 2, -qo - 0.003, 0) as IDisplayDimension)
+                ?.GetDimension() as IDimension; }
+            catch (Exception ex) { sb.Append($"qszEX:{ex.GetType().Name} "); }
+            sb.Append($"box='{EqName(boxDim?.FullName ?? "?")}' qox='{EqName(qox?.FullName ?? "?")}' " +
+                $"qoy='{EqName(qoy?.FullName ?? "?")}' qsz='{EqName(qsz?.FullName ?? "?")}' ");
+            var beforePattern = new HashSet<string>(
+                FindDims(doc).Select(d => d.name));
+
+            // seed + pattern — still in edit, the production arrangement:
+            // seed at the square's TOP-LEFT cell, rows descending (−π/2)
+            var seed = c.Mgr.CreateCircleByRadius(pitch / 2, size - pitch / 2, 0, r)
+                as ISketchSegment;
+            c.Doc.ClearSelection2(true);
+            bool seedSel0 = false;
+            try { seedSel0 = seed != null && seed.Select4(false, null); } catch { }
+            bool ok = false;
+            try
+            {
+                ok = c.Mgr.CreateLinearSketchStepAndRepeat(n, n, pitch, pitch,
+                    0.0, -Math.PI / 2.0, "(2,1) (1,2)", true, true, false, false, false);
+            }
+            catch (Exception ex) { sb.Append($"patEX:{ex.GetType().Name} "); }
+            sb.Append($"create={ok}(sel={seedSel0}) ");
+            if (!ok)
+            {
+                // isolate: is it the negative angle? retry same seed at
+                // 3π/2 — the positive-form equivalent of −π/2
+                c.Doc.ClearSelection2(true);
+                try { seedSel0 = seed != null && seed.Select4(false, null); } catch { }
+                try
+                {
+                    ok = c.Mgr.CreateLinearSketchStepAndRepeat(n, n, pitch, pitch,
+                        0.0, 3.0 * Math.PI / 2.0, "(2,1) (1,2)", true, true, false, false, false);
+                }
+                catch (Exception ex) { sb.Append($"pat3piEX:{ex.GetType().Name} "); }
+                sb.Append($"retry3pi/2={ok}(sel={seedSel0}) ");
+            }
+            if (!ok)
+            {
+                // isolate: same sketch, fresh seed, the spike's proven
+                // +π/2 — if THAT works the descending direction is refused
+                var seed2 = c.Mgr.CreateCircleByRadius(pitch / 2, pitch / 2, 0, r)
+                    as ISketchSegment;
+                c.Doc.ClearSelection2(true);
+                try { seedSel0 = seed2 != null && seed2.Select4(false, null); } catch { }
+                try
+                {
+                    ok = c.Mgr.CreateLinearSketchStepAndRepeat(n, n, pitch, pitch,
+                        0.0, Math.PI / 2.0, "(2,1) (1,2)", true, true, false, false, false);
+                }
+                catch (Exception ex) { sb.Append($"pat2EX:{ex.GetType().Name} "); }
+                sb.Append($"retry+pi/2={ok}(sel={seedSel0}) ");
+                if (ok) seed = seed2;
+            }
+            var skName = c.Mgr.ActiveSketch is ISketch sk0
+                ? ((IFeature)sk0).Name ?? "Sketch?" : "Sketch?";
+            sb.Append($"sk='{skName}' ");
+            var spacing = new List<string>();
+            foreach (var d in FindDims(doc))
+                if (!beforePattern.Contains(d.name) &&
+                    Math.Abs(d.val - pitch) < pitch * 0.001)
+                    spacing.Add(d.name);
+            sb.Append($"spacing[{string.Join(" ", spacing)}] ");
+            string sx = spacing.Count > 0 ? EqName(spacing[0]) : "";
+            string sy = spacing.Count > 1 ? EqName(spacing[1]) : "";
+
+            // seed diameter + corner→centre dims — still in edit
+            c.Doc.ClearSelection2(true);
+            bool seedSel = false;
+            try { seedSel = seed != null && seed.Select4(false, null); } catch { }
+            IDimension? dia = null;
+            if (seedSel)
+                try { dia = (doc.IAddDiameterDimension2(pitch + r + 0.002, size + 0.002, 0)
+                    as IDisplayDimension)?.GetDimension() as IDimension; }
+                catch (Exception ex) { sb.Append($"diaEX:{ex.GetType().Name} "); }
+            c.Doc.ClearSelection2(true);
+            bool pA = SelSketchPointAt(c, 0, size, append: false);      // QR top-left corner
+            bool pB = SelSketchPointAt(c, pitch / 2, size - pitch / 2, append: true); // seed centre
+            IDimension? ox = null, oy = null;
+            try { ox = (doc.IAddHorizontalDimension2(0, size + 0.003, 0)
+                as IDisplayDimension)?.GetDimension() as IDimension; } catch { }
+            c.Doc.ClearSelection2(true);
+            SelSketchPointAt(c, 0, size, append: false);
+            SelSketchPointAt(c, pitch / 2, size - pitch / 2, append: true);
+            try { oy = (doc.IAddVerticalDimension2(-0.003, size - pitch / 4, 0)
+                as IDisplayDimension)?.GetDimension() as IDimension; } catch { }
+            sb.Append($"dia='{EqName(dia?.FullName ?? "?")}' pts={pA}&{pB} " +
+                $"ox='{EqName(ox?.FullName ?? "?")}'({ox?.SystemValue * 1000:F2}mm) " +
+                $"oy='{EqName(oy?.FullName ?? "?")}'({oy?.SystemValue * 1000:F2}mm) ");
+
+            // equations INSIDE the open edit — the production order's risk
+            string boxEq = boxDim != null ? EqName(boxDim.FullName!) : "";
+            var eqm = doc.GetEquationMgr() as IEquationMgr;
+            int refused = 0;
+            foreach (var (lhs, rhs) in new[]
+            {
+                (sx, $"\"{boxEq}\"/{n}"),
+                (sy, $"\"{boxEq}\"/{n}"),
+                (dia != null ? EqName(dia.FullName!) : "", $"\"{sx}\"*{f}"),
+                (ox != null ? EqName(ox.FullName!) : "",
+                    (ox != null && ox.SystemValue < 0 ? "-" : "") + $"\"{sx}\"/2"),
+                (oy != null ? EqName(oy.FullName!) : "",
+                    (oy != null && oy.SystemValue < 0 ? "-" : "") + $"\"{sy}\"/2"),
+                (qox != null ? EqName(qox.FullName!) : "",
+                    (qox != null && qox.SystemValue < 0 ? "-" : "") + $"\"{sx}\"*{q}"),
+                (qoy != null ? EqName(qoy.FullName!) : "",
+                    (qoy != null && qoy.SystemValue < 0 ? "-" : "") + $"\"{sy}\"*{q}"),
+                (qsz != null ? EqName(qsz.FullName!) : "", $"\"{sx}\"*{n + 2 * q}"),
+            })
+            {
+                if (lhs.Length == 0 || eqm == null) continue;
+                try { if (eqm.Add(-1, $"\"{lhs}\" = {rhs}") < 0) refused++; }
+                catch { refused++; }
+            }
+            try { eqm?.EvaluateAll(); } catch { }
+            try { doc.EditRebuild3(); } catch { }
+            sb.Append($"eqInEdit rc={refused} dims1[{string.Join(" ", FindDims(doc)
+                .Select(d => $"{d.name}={d.val * 1000:F2}"))}] ");
+
+            // master-dim rescale INSIDE the edit — the dimensioned end-state's
+            // whole point; then exit and re-verify on the committed sketch
+            int setRc = -9;
+            try { setRc = boxDim?.SetSystemValue3(size * 2, 2, null) ?? -8; } catch { }
+            try { doc.EditRebuild3(); } catch { }
+            sb.Append($"setBoxInEdit={setRc} dims2[{string.Join(" ", FindDims(doc)
+                .Select(d => $"{d.name}={d.val * 1000:F2}"))}] ");
+            c.Mgr.InsertSketch(false);
+            try { doc.EditRebuild3(); } catch { }
+            var sk = FindSketchFeature(doc, skName)?.GetSpecificFeature2() as ISketch;
+            var arcs = ArcCenters(sk);
+            // expectation: 9 cells − 2 skipped = 7 arcs, radius doubled to 1 mm
+            sb.Append($"afterExit arcs={arcs.Count} " +
+                $"r0={(arcs.Count > 0 ? $"{arcs[0].r * 1000:F3}mm" : "?")}");
             return sb.ToString().Trim();
         }
 

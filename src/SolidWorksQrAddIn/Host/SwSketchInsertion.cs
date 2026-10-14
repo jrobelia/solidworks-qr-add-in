@@ -289,31 +289,46 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// The circle-mode commit stage (spec #13, ticket #39) — the recipe
-        /// docs/PATTERN-SPIKE.md proved live, run inside the open sketch
-        /// edit:
+        /// The circle-mode commit stage (spec #13, tickets #39/#40) — the
+        /// recipe docs/PATTERN-SPIKE.md proved live, run inside the open
+        /// sketch edit:
         ///   1. interactive-mode insertion — the pattern route was proven
         ///      with AddToDB OFF (the contour path's bulk mode exists for
         ///      its dense line sets); the session flag snapshot restores
         ///      everything on exit;
         ///   2. the staged construction squares land as PLAIN construction
         ///      sketch entities — circle mode has no block definition to
-        ///      carry them (they are the master geometry the #40 master
-        ///      dimension hangs on);
-        ///   3. one seed circle via CreateCircleByRadius at the plan's seed
+        ///      carry them — keeping the drawn edges per role: the #40
+        ///      dimensions hang on them;
+        ///   3. the master-geometry dimensions (ticket #40, PAT4/PAT7): one
+        ///      DRIVING dim on the QR square's bottom edge (the user-facing
+        ///      resize handle, "D_box"), then the keep-out square's offset
+        ///      and size dims;
+        ///   4. one seed circle via CreateCircleByRadius at the plan's seed
         ///      centre — a guaranteed-emitting cell; pattern instance (1,1)
         ///      can never be skipped, so the seed is safe there;
-        ///   4. the seed selected BY OBJECT (Select4, coordinate picks are
+        ///   5. the seed selected BY OBJECT (Select4, coordinate picks are
         ///      ambiguous next to the direction lines), then
         ///      ISketchManager.CreateLinearSketchStepAndRepeat spans the
         ///      grid at cell pitch — columns +x, rows −y (AngleX 0, AngleY
-        ///      −π/2 — the plan's upright-code frame). The plan's
+        ///      3π/2 — the −π/2 literal is refused, PAT12 — the plan's
+        ///      upright-code frame). The plan's
         ///      DeleteInstances string is passed verbatim: 1-based
         ///      "(col,row)" pairs, the only skip format that works on this
         ///      build. X/Y spacing dims stay ON — they are the driving
-        ///      dims ticket #40 equation-drives. Instance-count dims and
+        ///      dims the equations below target. Instance-count dims and
         ///      the angle dim stay off;
-        ///   5. a region census is the honest check: construction geometry
+        ///   6. the remaining driven dims (PAT4/PAT5): a diameter dim on the
+        ///      seed arc, and horizontal + vertical dims from the pattern-
+        ///      anchor corner (the square corner the seed cell sits inside)
+        ///      to the seed's centre SKETCHPOINT — points select via
+        ///      GetSketchPoints + Select4, never coordinate picks;
+        ///   7. the equation table (QrCircleEquations) installs through
+        ///      IEquationMgr.Add + EvaluateAll + EditRebuild3 — spacing =
+        ///      box/N, diameter = spacing·f, seed offsets = spacing/2,
+        ///      quiet-zone dims = spacing·4 / spacing·M — all inside the
+        ///      open sketch edit;
+        ///   8. a region census is the honest check: construction geometry
         ///      never feeds a profile (consexp, ADR 0003 evidence), so the
         ///      sketch must hold exactly one closed region per emitted
         ///      dot. A mismatch means the skip string was ignored — wrong
@@ -325,6 +340,10 @@ namespace SolidWorksQrAddIn.Host
         private void RealizeAsCirclePattern()
         {
             var plan = _stagedCirclePlan!;
+            var sketch = _sketchFeature as ISketch
+                ?? throw new SketchInsertionException(
+                    "The sketch feature did not expose its sketch interface.");
+            string sketchName = _sketchFeature.Name ?? "Sketch";
 
             // 1. The spike's flag arrangement for the pattern route —
             //    interactive-mode draws, inference off (AddToDB is the
@@ -334,12 +353,18 @@ namespace SolidWorksQrAddIn.Host
 
             // 2. The construction squares as plain sketch entities — drawn
             //    before the seed so the pattern step's selection state is
-            //    only ever the seed circle.
+            //    only ever the seed circle. The drawn edges are kept per
+            //    role: the master-geometry dimensions reference them.
+            var qrEdges = new List<ISketchSegment>();
+            var keepEdges = new List<ISketchSegment>();
+            double qrMin = 0, keepMin = 0;
             var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
                 string label = square.Role == QrSquareRole.QrSquare
                     ? "QR square" : "keep-out square";
+                var segs = square.Role == QrSquareRole.QrSquare ? qrEdges : keepEdges;
+                double lo = Math.Min(square.Vertices[0].X, square.Vertices[0].Y);
                 foreach (var e in square.Edges)
                 {
                     squareIndex++;
@@ -353,10 +378,47 @@ namespace SolidWorksQrAddIn.Host
                             $"The construction-geometry flag could not be applied to the " +
                             $"{label} (edge {squareIndex}): {ex.Message}", ex);
                     }
+                    segs.Add(segment);
                 }
+                if (square.Role == QrSquareRole.QrSquare) qrMin = lo; else keepMin = lo;
             }
+            if (qrEdges.Count < 4)
+                throw new SketchInsertionException(
+                    "The staged layout carried no QR square — the master dimension " +
+                    "has no edge to sit on.");
 
-            // 3. The seed circle at the plan's seed centre — a cell that
+            // 3. The driving dimension the user edits (PAT4's "D_box") on the
+            //    QR square's bottom edge, then the quiet-zone dims: both
+            //    edge-to-edge offsets and the keep-out width (PAT7 — the
+            //    equal-relation route is a no-op; dims + equations are it).
+            //    Dimension names are discovered, never assumed — the sketch
+            //    numbers them D1.. in creation order, and the equation table
+            //    binds to the discovered "D{n}@{sketch}" names.
+            var dims = new QrCircleDimScheme();
+            double p = plan.PitchM;
+            var boxDim = DimEdge(qrEdges[0], vertical: false, 0.0, qrMin - p,
+                "QR-square master dimension");
+            dims.Box = EqName(boxDim);
+            if (keepEdges.Count >= 4)
+            {
+                var qox = DimBetweenEdges(qrEdges[3], keepEdges[3],
+                    vertical: false, qrMin - 2 * p, qrMin - p,
+                    "quiet-zone left-offset dimension");
+                dims.QuietOffsetX = EqName(qox);
+                dims.QuietOffsetXSign = SignOf(qox);
+                var qoy = DimBetweenEdges(qrEdges[0], keepEdges[0],
+                    vertical: true, keepMin - p, (qrMin + keepMin) / 2.0,
+                    "quiet-zone bottom-offset dimension");
+                dims.QuietOffsetY = EqName(qoy);
+                dims.QuietOffsetYSign = SignOf(qoy);
+                dims.QuietSize = EqName(DimEdge(keepEdges[0],
+                    vertical: false, 0.0, keepMin - p, "keep-out square size dimension"));
+            }
+            var dimsBeforePattern = new HashSet<string>();
+            foreach (var d in ScanSketchDimNames(sketchName))
+                dimsBeforePattern.Add(d.Name);
+
+            // 4. The seed circle at the plan's seed centre — a cell that
             //    always emits, since instance (1,1) cannot be skipped.
             double radius = plan.DotDiameterM / 2.0;
             ISketchSegment seed;
@@ -374,7 +436,7 @@ namespace SolidWorksQrAddIn.Host
                     $"CreateCircleByRadius failed for the seed circle: {ex.Message}", ex);
             }
 
-            // 4. Pattern the seed across the grid. Object-select the seed —
+            // 5. Pattern the seed across the grid. Object-select the seed —
             //    the spike's coordinate-pick fallback (a point ON the
             //    circle) stays as the last resort.
             try { _doc.ClearSelection2(true); } catch { }
@@ -401,7 +463,7 @@ namespace SolidWorksQrAddIn.Host
                 created = _mgr.CreateLinearSketchStepAndRepeat(
                     plan.PatternCells, plan.PatternCells,
                     plan.PitchM, plan.PitchM,
-                    0.0, -Math.PI / 2.0,
+                    0.0, 3.0 * Math.PI / 2.0,   // −y rows; −π/2 itself is REFUSED (PAT12)
                     plan.DeleteInstances,
                     true, true,          // X/Y spacing dims — driving dims for #40
                     false, false, false);
@@ -416,16 +478,87 @@ namespace SolidWorksQrAddIn.Host
                     "CreateLinearSketchStepAndRepeat returned false — " +
                     "the circle-dot pattern was not created.");
 
-            // 5. The honest check: one closed region per emitted dot —
+            // 5b. Find the two spacing dims the pattern just created: the
+            //     new "D{n}@{sketch}" names whose value is the pitch (count
+            //     dims, when a build also emits them, hold the instance
+            //     count instead). Creation order puts X first (PAT4's
+            //     D2=X, D3=Y); both equations are identical either way.
+            var spacing = new List<string>();
+            foreach (var d in ScanSketchDimNames(sketchName))
+            {
+                if (dimsBeforePattern.Contains(d.Name)) continue;
+                double v;
+                try { v = d.Dim.SystemValue; } catch { continue; }
+                if (Math.Abs(v - p) < p * 0.001)
+                    spacing.Add(d.Name);
+            }
+            if (spacing.Count < 2)
+                throw new SketchInsertionException(
+                    $"The pattern produced {spacing.Count} pitch-valued spacing " +
+                    "dimensions, not two — the master-equation wiring has nothing " +
+                    "to drive.");
+            dims.SpacingX = spacing[0];
+            dims.SpacingY = spacing[1];
+
+            // 6. The seed's diameter dim (PAT5) and the box-corner →
+            //    seed-centre position dims (PAT4): the anchor corner is the
+            //    square corner the seed cell sits inside — the QR square's
+            //    top-left normally, the keep-out's under invert. Points
+            //    select by object enumeration, never coordinate picks.
+            var seedDia = DimArcDiameter(seed, plan, "seed-dot diameter dimension");
+            dims.Diameter = EqName(seedDia);
+            double cornerX = plan.SeedCentreM.X - p / 2.0;
+            double cornerY = plan.SeedCentreM.Y + p / 2.0;
+            var sox = DimBetweenPoints(sketch,
+                cornerX, cornerY, plan.SeedCentreM.X, plan.SeedCentreM.Y,
+                vertical: false, cornerX + p, cornerY + p,
+                "seed horizontal-offset dimension");
+            dims.SeedOffsetX = EqName(sox);
+            dims.SeedOffsetXSign = SignOf(sox);
+            var soy = DimBetweenPoints(sketch,
+                cornerX, cornerY, plan.SeedCentreM.X, plan.SeedCentreM.Y,
+                vertical: true, cornerX - p, cornerY - p,
+                "seed vertical-offset dimension");
+            dims.SeedOffsetY = EqName(soy);
+            dims.SeedOffsetYSign = SignOf(soy);
+
+            // 7. The equation table — the proven sequence: IEquationMgr.Add
+            //    per entry, then EvaluateAll + EditRebuild3. Every driven
+            //    dim funnels through the one master (the box dim): spacing
+            //    = box/N, diameter = spacing·f, offsets = spacing/2, quiet
+            //    = spacing·4 / spacing·M (docs/CIRCLE-DIMENSIONS.md). The
+            //    equations reproduce the drawn values, so driving them
+            //    changes nothing visibly — until the master moves.
+            var eqm = _doc.GetEquationMgr() as IEquationMgr;
+            if (eqm == null)
+                throw new SketchInsertionException(
+                    "The document exposed no equation manager — the pattern " +
+                    "could not be wired to the master dimension.");
+            foreach (var eq in QrCircleEquations.For(plan, dims))
+            {
+                int rc;
+                try { rc = eqm.Add(-1, eq.Text); }
+                catch (Exception ex)
+                {
+                    throw new SketchInsertionException(
+                        $"Installing the equation '{eq.Text}' failed: {ex.Message}", ex);
+                }
+                if (rc < 0)
+                    throw new SketchInsertionException(
+                        $"SolidWorks refused the equation '{eq.Text}' (IEquationMgr.Add " +
+                        $"returned {rc}).");
+            }
+            try { eqm.EvaluateAll(); } catch { }
+            try { _doc.EditRebuild3(); } catch { }
+
+            // 8. The honest check: one closed region per emitted dot —
             //    construction squares and the pattern's direction lines
             //    never form regions. ISketchArc casts miss the sibling-COM
             //    instances PAT0 reported; the region count is exact.
             int regions = -1;
             try
             {
-                var sketch = _sketchFeature as ISketch;
-                if (sketch != null)
-                    regions = sketch.GetSketchRegionCount();
+                regions = sketch.GetSketchRegionCount();
             }
             catch { /* an unreadable census is not proof of wrong geometry */ }
             if (regions >= 0 && regions != plan.EmittedCount)
@@ -433,6 +566,211 @@ namespace SolidWorksQrAddIn.Host
                     $"The circle pattern produced {regions} closed regions, " +
                     $"not the plan's {plan.EmittedCount} dots — skipped " +
                     "instances did not take.");
+        }
+
+        /// <summary>
+        /// Every "D{n}@{sketchName}" parameter the document resolves —
+        /// sketch dims number sequentially in creation order (spike-proven:
+        /// IParameter by name, since sketch dims are not sub-features and no
+        /// enumerator exists). Scans D1..D64 — far past the ~11 this emitter
+        /// creates.
+        /// </summary>
+        private List<(string Name, IDimension Dim)> ScanSketchDimNames(string sketchName)
+        {
+            var dims = new List<(string, IDimension)>();
+            for (var i = 1; i <= 64; i++)
+            {
+                string name = $"D{i}@{sketchName}";
+                IDimension? dim = null;
+                try { dim = _doc.IParameter(name) as IDimension; } catch { }
+                if (dim != null)
+                    dims.Add((name, dim));
+            }
+            return dims;
+        }
+
+        /// <summary>"D6@Sketch1@Part5.Part" → "D6@Sketch1" (the equation-reference form, PAT4).</summary>
+        private static string EqName(IDimension dim)
+        {
+            string full = dim.FullName ?? "";
+            int at = full.LastIndexOf('@');
+            return at > 0 ? full.Substring(0, at) : full;
+        }
+
+        /// <summary>
+        /// The sign a created distance dim measured, +1/−1 — SolidWorks can
+        /// sign point/edge distance dims by direction; the equation mirrors
+        /// it so the driven value keeps the geometry on the drawn side.
+        /// An unreadable value assumes positive — the drawn geometry is
+        /// correct either way and a wrong sign surfaces as a flipped side at
+        /// the next master-dim edit (PAT12's live check).
+        /// </summary>
+        private static int SignOf(IDimension dim)
+        {
+            try { return dim.SystemValue < 0.0 ? -1 : 1; }
+            catch { return 1; }
+        }
+
+        /// <summary>
+        /// A driving dimension on one sketch edge: select it by object, add
+        /// the dim at the given text position, return the IDimension.
+        /// </summary>
+        private IDimension DimEdge(
+            ISketchSegment edge, bool vertical, double textX, double textY, string what)
+        {
+            _doc.ClearSelection2(true);
+            bool sel = false;
+            try { sel = edge.Select4(false, null); } catch { }
+            if (!sel)
+                throw new SketchInsertionException(
+                    $"The {what}'s edge could not be selected.");
+            return AddDim(vertical, textX, textY, what);
+        }
+
+        /// <summary>
+        /// A driving distance dimension between two sketch edges — PAT7's
+        /// quiet-zone offset pattern (Select4 both, then the dim call).
+        /// </summary>
+        private IDimension DimBetweenEdges(
+            ISketchSegment a, ISketchSegment b, bool vertical,
+            double textX, double textY, string what)
+        {
+            _doc.ClearSelection2(true);
+            bool selA = false, selB = false;
+            try { selA = a.Select4(false, null); } catch { }
+            try { selB = b.Select4(true, null); } catch { }
+            if (!selA || !selB)
+                throw new SketchInsertionException(
+                    $"The {what}'s edges could not be selected.");
+            return AddDim(vertical, textX, textY, what);
+        }
+
+        /// <summary>
+        /// A driving distance dimension between two sketch POINTS — PAT4's
+        /// box-corner → seed-centre offsets. Points select via
+        /// GetSketchPoints + Select4 (coordinate picks are ambiguous next to
+        /// arcs and direction lines — the spike's gotcha).
+        /// </summary>
+        private IDimension DimBetweenPoints(
+            ISketch sketch, double ax, double ay, double bx, double by,
+            bool vertical, double textX, double textY, string what)
+        {
+            _doc.ClearSelection2(true);
+            bool selA = SelSketchPointAt(sketch, ax, ay, append: false);
+            bool selB = SelSketchPointAt(sketch, bx, by, append: true);
+            if (!selA || !selB)
+                throw new SketchInsertionException(
+                    $"The {what}'s endpoints could not be selected " +
+                    $"(corner: {selA}, seed centre: {selB}).");
+            return AddDim(vertical, textX, textY, what);
+        }
+
+        /// <summary>
+        /// A driving diameter dimension on the seed circle — PAT5. The kept
+        /// seed handle is selected first; if the pattern invalidated it the
+        /// arc is re-found by centre (the only unambiguous match).
+        /// </summary>
+        private IDimension DimArcDiameter(ISketchSegment seed, QrCirclePlan plan, string what)
+        {
+            _doc.ClearSelection2(true);
+            bool sel = false;
+            try { sel = seed.Select4(false, null); } catch { }
+            if (!sel)
+                sel = SelectCircleArcAt(plan.SeedCentreM.X, plan.SeedCentreM.Y);
+            if (!sel)
+                throw new SketchInsertionException(
+                    $"The seed circle could not be selected for its {what}.");
+            IDimension? dim = null;
+            try
+            {
+                var dd = _doc.IAddDiameterDimension2(
+                    plan.SeedCentreM.X + plan.PitchM,
+                    plan.SeedCentreM.Y + plan.PitchM, 0)
+                    as IDisplayDimension;
+                dim = DimOf(dd);
+            }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"The {what} could not be created: {ex.Message}", ex);
+            }
+            if (dim == null)
+                throw new SketchInsertionException(
+                    $"SolidWorks created no {what}.");
+            return dim;
+        }
+
+        /// <summary>Selects the sketch arc whose centre sits at (cx, cy).</summary>
+        private bool SelectCircleArcAt(double cx, double cy)
+        {
+            var sketch = _sketchFeature as ISketch;
+            object[]? segs = null;
+            try { segs = sketch?.GetSketchSegments() as object[]; } catch { }
+            if (segs == null) return false;
+            foreach (var so in segs)
+            {
+                if (so is not ISketchArc arc || so is not ISketchSegment seg) continue;
+                var centre = arc.GetCenterPoint2() as ISketchPoint;
+                if (centre == null) continue;
+                double dx = centre.X - cx, dy = centre.Y - cy;
+                if (dx * dx + dy * dy > 1e-12) continue;
+                try { if (seg.Select4(false, null)) return true; } catch { }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The shared "select two points" helper from the spike: the sketch
+        /// point NEAREST (x,y), object-selected — SelectByID2 coordinates
+        /// are ambiguous next to arcs, endpoints and direction lines.
+        /// </summary>
+        private static bool SelSketchPointAt(ISketch sketch, double x, double y, bool append)
+        {
+            object[]? pts = null;
+            try { pts = sketch.GetSketchPoints() as object[]; } catch { }
+            if (pts == null) return false;
+            ISketchPoint? best = null;
+            double bd = double.MaxValue;
+            foreach (var po in pts)
+            {
+                if (po is not ISketchPoint pt) continue;
+                double dx = pt.X - x, dy = pt.Y - y, d = dx * dx + dy * dy;
+                if (d < bd) { bd = d; best = pt; }
+            }
+            if (best == null || bd > 1e-12) return false;   // >~1 µm = miss
+            try { return best.Select4(append, null); }
+            catch { return false; }
+        }
+
+        /// <summary>The actual IAdd*Dimension2 call — horizontal or vertical.</summary>
+        private IDimension AddDim(bool vertical, double textX, double textY, string what)
+        {
+            IDimension? dim = null;
+            try
+            {
+                var dd = vertical
+                    ? _doc.IAddVerticalDimension2(textX, textY, 0) as IDisplayDimension
+                    : _doc.IAddHorizontalDimension2(textX, textY, 0) as IDisplayDimension;
+                dim = DimOf(dd);
+            }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"The {what} could not be created: {ex.Message}", ex);
+            }
+            if (dim == null)
+                throw new SketchInsertionException(
+                    $"SolidWorks created no {what}.");
+            return dim;
+        }
+
+        /// <summary>DisplayDimension → IDimension (PAT4's GetDimension; GetDimension2 fallback).</summary>
+        private static IDimension? DimOf(IDisplayDimension? dd)
+        {
+            if (dd == null) return null;
+            object? raw = null;
+            try { raw = dd.GetDimension(); } catch { }
+            return (raw as IDimension) ?? (dd.GetDimension2(0) as IDimension);
         }
 
         /// <summary>

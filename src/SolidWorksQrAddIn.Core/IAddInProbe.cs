@@ -218,5 +218,30 @@ namespace SolidWorksQrAddIn.Core
         /// "plan=none".
         /// </summary>
         string PatternCensusProbe(string sketchName);
+
+        /// <summary>
+        /// Dimension + equation surface for the ticket-#42 circle live
+        /// gates (spec #13, ticket #40): resolves every "D{n}@&lt;sketch&gt;"
+        /// parameter — mm value and driven-state code each — in creation
+        /// order (the QR-square master dim is the FIRST dim the emitter
+        /// creates, so the smallest D-number), then lists the document's
+        /// equations verbatim. Pass the sketch name a create returned; an
+        /// empty or null name inspects the sketch open in edit mode.
+        /// Returns "PATDIMS sketch='&lt;name&gt;' dims=&lt;n&gt;
+        /// D1=&lt;mm&gt;mm(s&lt;state&gt;) ... eqs=&lt;n&gt; '&lt;eq&gt;' ...
+        /// mode=&lt;circle|square&gt;" or "ERROR ...".
+        /// </summary>
+        string PatternDimsProbe(string sketchName);
+
+        /// <summary>
+        /// Drives one driving dimension by name — the "D{n}@{sketch}"
+        /// equation-reference form or a full name; resolved through
+        /// IParameter — via SetSystemValue3(valueM, this-config) +
+        /// EditRebuild3, then echoes the value SolidWorks actually stored.
+        /// The live gate resizes the master dim and re-censuses the
+        /// pattern. Returns "PATSET '&lt;name&gt;'=&lt;mm&gt;mm rc=&lt;n&gt;"
+        /// or "ERROR ...".
+        /// </summary>
+        string SetPatternDimProbe(string dimensionName, double valueM);
     }
 }

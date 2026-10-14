@@ -67,6 +67,12 @@ moment it is resolved in discussion, not before.
   describes: one seed circle plus a two-directional sketch linear
   pattern whose non-emitting cells are skipped at create time
   (docs/PATTERN-SPIKE.md). No contours, no block.
+- **Master geometry** — the circle-mode parametric wiring (spec #13,
+  ticket #40): the QR square carries one driving dimension ("D_box")
+  and the pattern's spacing dims, the seed diameter, and the quiet-zone
+  dims are equation-wired to it, so editing the square's dim rescales
+  the whole dot pattern (docs/CIRCLE-DIMENSIONS.md). Circle mode only —
+  ADR 0003's "no sketch dims" remains the square/block-mode rule.
 
 ## SolidWorks
 

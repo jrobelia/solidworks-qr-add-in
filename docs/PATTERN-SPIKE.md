@@ -253,6 +253,28 @@ Per-cell `CreateCircle` (no pattern): 13 dots, region pick, boss-extrude
 — all work; this remains the escape hatch if a future build breaks the
 pattern route (it loses the single-seed/parametric knobs entirely).
 
+### PAT12 — production order: PASS (+ one API surprise)
+
+Added with ticket #40 (`LiveProbe.exe pattern 12`). Replicates the
+emitter's exact order — square dims, seed + pattern, diameter + offset
+dims, `IEquationMgr.Add` + `EvaluateAll` + `EditRebuild3`, then a
+`SetSystemValue3` master rescale — **all inside the open sketch edit**
+(PAT4 added its equations only after `InsertSketch(false)`). Result:
+all 8 equations installed in-edit (`rc=0`), box 6→12 mm rescaled every
+driven dim in-edit (quiet offsets 8→16, keep-out 22→44, dia 1→2,
+offsets 1→2), and the committed sketch held exactly 7 arcs at r=1 mm —
+the doubled radius, skips intact. Production order verified end to end.
+
+**The surprise that matters:** the call's `AngleY = −π/2` (a negative
+literal) is **refused** — `CreateLinearSketchStepAndRepeat` returns
+false — while the identical direction written as `3π/2` succeeds and
+patterns downward from the same top-left seed. Production uses `3π/2`.
+Minor caveat: in-edit `IParameter` reads of the spacing dims reported
+stale pre-rescale values while downstream equation-driven dims read
+correctly — post-commit reads are accurate (the probes read committed
+sketches anyway). The production map lives in
+`docs/CIRCLE-DIMENSIONS.md`.
+
 ## Production implications
 
 1. **Viable.** The QR can be a single seed circle + legacy sketch linear
