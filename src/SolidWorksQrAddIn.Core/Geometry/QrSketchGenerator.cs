@@ -467,6 +467,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var plan = new QrCirclePlan(emit, n, patternCells, originRow, originCol,
                 pitchM, dotDiameterMm / 1000.0, invert);
 
+            // ---------- instance ceiling (spec-13 ticket #41) ----------
+            // Under real circles the edit-responsiveness driver is the
+            // delivered DOT count — every kept instance is one ARC entity
+            // and one closed sketch region — so the segment ceiling's
+            // sibling bound counts the plan's post-invert EmittedCount
+            // (never N²), still inside generation, before any host
+            // mutation.
+            if (plan.EmittedCount > QrInsertionGuard.MaxCircleInstances)
+                return QrSketchResult.Fail(QrSketchErrorKind.TooManyInstances,
+                    InstanceCeilingMessage(plan.EmittedCount));
+
             var info = new QrSketchInfo(
                 version: version,
                 cellCount: n,
@@ -511,6 +522,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
             "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
             "error-correction level, or use Circle cells — native pattern " +
             "dots deliver no segments.";
+
+        /// <summary>
+        /// The actionable instance-ceiling refusal — the emitted-dot count,
+        /// the budget and the levers (smaller payload, lighter ECC, or the
+        /// Square shape whose merged contours carry the densest payloads).
+        /// </summary>
+        private static string InstanceCeilingMessage(int instanceCount) =>
+            $"The generated QR would draw {instanceCount} circle-dot instances — over " +
+            $"the recorded {QrInsertionGuard.MaxCircleInstances}-instance insertion " +
+            "guard (the sketch-edit-responsiveness bound of " +
+            "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
+            "error-correction level, or use Square cells — merged contours " +
+            "carry the densest payloads.";
 
         private static SketchPoint2[] SquareVertices(double half) =>
             // Centred on the origin like the contours; CCW from bottom-left.

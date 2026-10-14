@@ -49,6 +49,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// budget — the sketch-edit-responsiveness bound measured live on
         /// the spec-13 shape branch (docs/INSERTION-GUARD.md).</summary>
         TooManySegments,
+
+        /// <summary>The circle plan would deliver more pattern instances —
+        /// one real circle dot per emitted cell — than the recorded
+        /// <see cref="QrInsertionGuard.MaxCircleInstances"/> budget: the
+        /// instance-count sibling of <see cref="TooManySegments"/>, sized
+        /// from live circle-create timing evidence (spec #13 ticket #41,
+        /// docs/INSERTION-GUARD.md).</summary>
+        TooManyInstances,
     }
 
     /// <summary>An actionable generation failure — what is wrong and what to change.</summary>
