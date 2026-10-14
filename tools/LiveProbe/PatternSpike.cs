@@ -156,11 +156,20 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         /// <summary>Select the sketch POINT nearest (x,y) by object — avoids
         /// SelectByID2 ambiguity between centre points, endpoints and arcs.</summary>
-        private static bool SelSketchPointAt(Pat c, double x, double y, bool append)
+        private static bool SelSketchPointAt(Pat c, double x, double y, bool append) =>
+            SelSketchPointAt(c.Mgr.ActiveSketch as ISketch, x, y, append);
+
+        /// <summary>
+        /// The same nearest-point object select on an explicitly supplied
+        /// sketch — used where the target sketch does not resolve through
+        /// <c>ISketchManager.ActiveSketch</c> (the add-in's open circle
+        /// create, circlediag D2: the named feature's GetSpecificFeature2
+        /// exposes it instead).
+        /// </summary>
+        private static bool SelSketchPointAt(ISketch? sk, double x, double y, bool append)
         {
             try
             {
-                var sk = c.Mgr.ActiveSketch as ISketch;
                 if (sk?.GetSketchPoints() is not object[] pts) return false;
                 ISketchPoint? best = null; double bd = double.MaxValue;
                 foreach (var po in pts)

@@ -205,6 +205,7 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
 ```
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
@@ -225,6 +226,13 @@ count at both polarities) before that refusal so a blocked run still
 shows which rungs the live half would measure. Run it after
 `sync-dev-deploy.ps1` so the deployed add-in carries the build under
 test; results are recorded in `docs/CIRCLE-GATES.md`.
+
+The `circlediag` mode is the diagnostic sibling of `circles` — it prints
+raw live evidence (session-verdict shapes, in-edit vs committed sketch
+enumeration routes, region-pick variants, second-document plate
+extrusion, face-sketch region classification, block-host segment census)
+with no pass/fail, for isolating gate failures. Same occupied-seat
+refusal discipline as `circles`.
 
 The `circledims` mode (ticket #40) is the circle-mode master-geometry
 live gate: a real circle-mode create through the session, then

@@ -149,14 +149,31 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void A_sketch_point_on_a_skipped_cell_fails_the_census()
+        public void A_sketch_point_on_a_skipped_cell_is_not_dot_evidence()
         {
-            // A stray point (construction corner, a leftover) at a skipped
-            // cell's centre is still evidence the skip did not take.
+            // Measured live (circlediag, SW 2023 SP5): a skipped pattern
+            // instance leaves its slot point behind — every skipped cell
+            // holds a point while carrying no arc. Only an arc CENTRE on a
+            // skipped cell proves the skip string was ignored.
             var plan = Plan();
             var points = new List<SketchPoint2> { plan.CellCentreM(3, 3) };
 
             var v = Eval(plan, EmittedCentres(plan), points);
+
+            Assert.True(v.Exact);
+            Assert.Equal(0, v.ForbiddenPresent);
+        }
+
+        [Fact]
+        public void An_arc_centre_on_a_skipped_cell_fails_the_census()
+        {
+            // The actual skip failure: the pattern emitted a real arc at a
+            // cell the plan marks light.
+            var plan = Plan();
+            var centres = EmittedCentres(plan);
+            centres.Add(plan.CellCentreM(3, 3));
+
+            var v = Eval(plan, centres);
 
             Assert.False(v.Exact);
             Assert.Equal(1, v.ForbiddenPresent);

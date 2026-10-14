@@ -50,7 +50,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>Arc centres that claimed no emitted cell (strays/dupes).</summary>
         public int Stray { get; }
 
-        /// <summary>Skipped cells that nevertheless carry a centre/point.</summary>
+        /// <summary>
+        /// Skipped cells that nevertheless carry an arc centre — a real
+        /// dot where the plan says none. Sketch POINTS are deliberately
+        /// not evidence here: measured live (circlediag, SW 2023 SP5) a
+        /// skipped pattern instance leaves its slot point behind, so
+        /// every skipped cell holds a point while carrying no dot.
+        /// </summary>
         public int ForbiddenPresent { get; }
 
         /// <summary><see cref="QrCirclePlan.EmittedCount"/>.</summary>
@@ -127,8 +133,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
             int forbiddenPresent = 0;
             foreach (var f in forbidden)
-                if (NearSet(arcCentres, f, toleranceM) ||
-                    NearSet(sketchPoints, f, toleranceM))
+                if (NearSet(arcCentres, f, toleranceM))
                     forbiddenPresent++;
 
             return new QrCentreCensusVerdict(
