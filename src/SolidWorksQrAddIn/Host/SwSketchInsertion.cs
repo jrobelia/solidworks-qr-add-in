@@ -529,6 +529,12 @@ namespace SolidWorksQrAddIn.Host
             //    = spacing·4 / spacing·M (docs/CIRCLE-DIMENSIONS.md). The
             //    equations reproduce the drawn values, so driving them
             //    changes nothing visibly — until the master moves.
+            // A deleted earlier QR sketch leaves orphaned "D@{sketch}"
+            // equations in the manager, and Add refuses (-1) while any
+            // exist — the deleted-sketch defect ticket #42 reproduces.
+            // Purge them before installing our table; anything that survives
+            // references a live feature and stays.
+            SketchEquationHygiene.PurgeOrphanedEquations(_doc);
             var eqm = _doc.GetEquationMgr() as IEquationMgr;
             if (eqm == null)
                 throw new SketchInsertionException(

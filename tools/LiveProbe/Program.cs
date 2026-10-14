@@ -127,6 +127,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "circleladder", StringComparison.OrdinalIgnoreCase))
                 return CircleLadderMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "circles", StringComparison.OrdinalIgnoreCase))
+                return CircleGatesMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]

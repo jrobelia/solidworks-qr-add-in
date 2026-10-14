@@ -204,7 +204,27 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 ```
+
+The `circles` mode (ticket #42) is the spec-13 circle-pattern production
+gate: session plumbing and state round-trips, the emitted-dot census
+(arcs == regions == emitted, skip list = the light cells), per-dot region
+selection feeding a boss extrude and — under inverted polarity — a cut,
+the master-dim drive (spacing, diameter, seed offsets and quiet-zone box
+tracking `box/N`), the dimensionless end-state transition of
+`docs/CIRCLE-DIMENSIONS.md` (master dim deleted, corners bound to part
+vertices, the two spacing equations retargeted), the named-undo toggle,
+the deleted-sketch equation-orphan repro plus the create-start purge, the
+near-bound rung against `QrInsertionGuard.MaxCircleInstances` with timing,
+and the over-bound refusal before any host mutation — closed by the
+square-mode regression so the block pipeline stays proven. Like
+`xsettings` it **refuses to run while any `SLDWORKS.exe` process exists**,
+and it prints the module-side rung table (every QR version's emitted-dot
+count at both polarities) before that refusal so a blocked run still
+shows which rungs the live half would measure. Run it after
+`sync-dev-deploy.ps1` so the deployed add-in carries the build under
+test; results are recorded in `docs/CIRCLE-GATES.md`.
 
 The `circledims` mode (ticket #40) is the circle-mode master-geometry
 live gate: a real circle-mode create through the session, then
