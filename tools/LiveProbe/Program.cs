@@ -130,6 +130,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "circles", StringComparison.OrdinalIgnoreCase))
                 return CircleGatesMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "circlediag", StringComparison.OrdinalIgnoreCase))
+                return CircleDiagMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -3731,7 +3734,20 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             doc.ClearSelection2(true);
             string plateSketchName = FindSketchFeatureNames(doc).Last();
-            if (!ext.SelectByID2(plateSketchName, "SKETCH", 0, 0, 0, false, 0, null,
+            // Select the profile REGION object — measured live (circlediag
+            // D4, SW 2023 SP5): on a second/third document the sketch-FEATURE
+            // selection is ignored by FeatureExtrusion3 (returns null with a
+            // selected, active, closed sketch); the ISketchRegion object
+            // select feeds it every time. Feature select stays as fallback.
+            int regionsPicked = 0;
+            var plateSk = FindSketchFeature(doc, plateSketchName)
+                ?.GetSpecificFeature2() as ISketch;
+            if (plateSk?.GetSketchRegions() is object[] regs)
+                foreach (var ro in regs)
+                    if (ro is ISketchRegion rg)
+                        try { if (rg.Select(true, 0)) regionsPicked++; } catch { }
+            if (regionsPicked == 0 &&
+                !ext.SelectByID2(plateSketchName, "SKETCH", 0, 0, 0, false, 0, null,
                     (int)swSelectOption_e.swSelectOptionDefault))
                 return null;
             return fm.FeatureExtrusion3(

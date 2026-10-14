@@ -319,10 +319,14 @@ namespace SolidWorksQrAddIn.Host
         ///      box/N, diameter = spacing·f, seed offsets = spacing/2,
         ///      quiet-zone dims = spacing·4 / spacing·M — all inside the
         ///      open sketch edit;
-        ///   8. a region census is the honest check: construction geometry
-        ///      never feeds a profile (consexp, ADR 0003 evidence), so the
-        ///      sketch must hold exactly one closed region per emitted
-        ///      dot. A mismatch means the skip string was ignored — wrong
+        ///   8. an arc census is the honest check: exactly one non-
+        ///      construction ARC per emitted dot, each centre claiming one
+        ///      emitted cell, no skipped cell carrying an arc — the same
+        ///      QrCentreCensus the live gate runs. A region count was the
+        ///      first pick, but a face support mixes its boundary loop and
+        ///      edge-split dots into GetSketchRegionCount, so regions read
+        ///      high on faces; arc entities are support-agnostic. A
+        ///      mismatch means the skip string was ignored — wrong
         ///      geometry — and the abort path owns the partial sketch.
         /// Never EditDelete instances (freezes the dim drive) and never
         /// EditLinearSketchStepAndRepeat after skipping (resurrects every
@@ -532,21 +536,60 @@ namespace SolidWorksQrAddIn.Host
             try { eqm.EvaluateAll(); } catch { }
             try { _doc.EditRebuild3(); } catch { }
 
-            // 8. The honest check: one closed region per emitted dot —
-            //    construction squares and the pattern's direction lines
-            //    never form regions. ISketchArc casts miss the sibling-COM
-            //    instances PAT0 reported; the region count is exact.
-            int regions = -1;
-            try
+            // 8. The honest check: one ARC entity per emitted dot, each
+            //    centre claiming exactly one emitted cell, every skipped
+            //    cell arc-free — the same census the live gate runs
+            //    (QrCentreCensus). The earlier version counted REGIONS, but
+            //    a face support folds its own boundary loop and any dots
+            //    the edge splits into GetSketchRegionCount — a face create
+            //    reads high (241 for 228 dots measured, ticket #42) and was
+            //    wrongly aborted. Arc entities are support-agnostic; the
+            //    PAT0 sibling-COM cast gap resolves through the sketch-point
+            //    census inside Evaluate. An unreadable enumeration is not
+            //    proof of wrong geometry — the check simply doesn't run.
+            object[]? segs = null;
+            try { segs = sketch.GetSketchSegments() as object[]; } catch { }
+            if (segs != null)
             {
-                regions = sketch.GetSketchRegionCount();
+                var arcCentres = new List<SketchPoint2>();
+                int arcSegs = 0, siblingArcs = 0;
+                foreach (var so in segs)
+                {
+                    if (so is not ISketchSegment s) continue;
+                    int t = -1;
+                    try { t = s.GetType(); } catch { }
+                    if (t != (int)swSketchSegments_e.swSketchARC) continue;
+                    bool cons = false;
+                    try { cons = s.ConstructionGeometry; } catch { }
+                    if (cons) continue;
+                    arcSegs++;
+                    ISketchPoint? cp = null;
+                    try { cp = (so as ISketchArc)?.GetCenterPoint2() as ISketchPoint; }
+                    catch { }
+                    if (cp != null) arcCentres.Add(new SketchPoint2(cp.X, cp.Y));
+                    else siblingArcs++;
+                }
+                var sketchPoints = new List<SketchPoint2>();
+                try
+                {
+                    if (sketch.GetSketchPoints() is object[] pts)
+                        foreach (var po in pts)
+                            if (po is ISketchPoint skp)
+                                sketchPoints.Add(new SketchPoint2(skp.X, skp.Y));
+                }
+                catch { }
+                var v = QrCentreCensus.Evaluate(plan, arcCentres, sketchPoints,
+                    arcSegs, siblingArcs, plan.PitchM * 0.25);
+                if (!v.Exact)
+                    throw new SketchInsertionException(
+                        $"The circle pattern census failed: arcs={v.ArcSegments} " +
+                        $"matched={v.Matched} pointOnly={v.PointOnly} " +
+                        $"missing={v.Missing} stray={v.Stray} " +
+                        $"forbiddenPresent={v.ForbiddenPresent} " +
+                        $"(want {plan.EmittedCount} dots, {plan.SkippedCount} " +
+                        "skipped) — skipped instances did not take or dot " +
+                        "geometry landed off-plan.");
             }
-            catch { /* an unreadable census is not proof of wrong geometry */ }
-            if (regions >= 0 && regions != plan.EmittedCount)
-                throw new SketchInsertionException(
-                    $"The circle pattern produced {regions} closed regions, " +
-                    $"not the plan's {plan.EmittedCount} dots — skipped " +
-                    "instances did not take.");
         }
 
         /// <summary>

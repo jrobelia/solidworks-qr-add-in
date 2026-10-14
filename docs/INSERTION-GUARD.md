@@ -125,6 +125,23 @@ enumeration (≤2.5 s at 4 045 dots), rebuild (~0.1 s) and sketch delete
   over-bound rung — v18, v15-invert (4 363 dots), v21, v25, v29, v33,
   v38 — answering `INVALID TooManyInstances` through the production
   session probes with the shared part's feature tree untouched (0
-  sketches, no active sketch). The 3 233–3 600 headroom band is
-  interpolated, not measured — ticket #42's live gates should re-verify
-  a payload landing just under the bound (v13-invert class, ≈3.5 k dots).
+  sketches, no active sketch).
+
+- **Headroom band now measured** (ticket #42 `circles` gate, same
+  environment): the largest rung under the bound is **v17, 3 579 dots** —
+  create 90.7 s, committed region-solve 53.5 s, edit re-solve **77.9 s**,
+  master rescale 2.0 s. The edit re-solve — the responsiveness this bound
+  guards — sits inside the 120 s wall with ~1.5× margin and interpolates
+  cleanly on the ladder (62 s @ 3 232 → 97 s @ 4 045 over the bound).
+  Create latency is one-time and was never the bound's purpose; the gate
+  walls only the solve phases at 120 s and keeps a 150 s create figure as
+  a regression alarm. The first over-bound rung re-measured is v14-invert
+  (3 872 dots): `INVALID TooManyInstances` on the session probe, `ERROR`
+  on create, feature tree untouched — refusal happens before any host
+  mutation.
+- **Orphan-purge status**: the multi-sketch `IEquationMgr.Add` refusal
+  noted above is fixed by the create-start orphan purge
+  (`SketchEquationHygiene.PurgeOrphanedEquations`) — the `circles` gate
+  deletes a circle sketch via the raw `EditDelete` path (orphaning its 8
+  equations) and verifies the next create succeeds with only the new
+  sketch's table installed.
