@@ -279,6 +279,11 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains("95.8", message);          // the per-request cap, in %
             Assert.Contains("0.05", message);          // the floor it protects
             Assert.Contains("dot", message, StringComparison.OrdinalIgnoreCase);
+            // cap = 1 − 0.05mm/pitch: a LARGER size or a SPARSER payload
+            // raises it — the advice must point at the real levers.
+            Assert.Contains("raises the cap", message);
+            Assert.Contains("larger", message);
+            Assert.DoesNotContain("lowers", message);
         }
 
         [Fact]

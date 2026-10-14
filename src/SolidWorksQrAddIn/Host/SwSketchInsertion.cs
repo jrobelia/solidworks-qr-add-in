@@ -96,6 +96,13 @@ namespace SolidWorksQrAddIn.Host
         {
             if (_committed || _aborted)
                 throw new SketchInsertionException("The insertion session is already finished.");
+            // The contract's mutual exclusion (ISketchInsertion): a staged
+            // circle plan owns the sketch — contour edges staged under it
+            // would be silently dropped at commit, so refuse instead.
+            if (_stagedCirclePlan != null)
+                throw new SketchInsertionException(
+                    "A circle-dot plan is already staged on this session — " +
+                    "contour edges and the circle pattern are mutually exclusive.");
             _buffered.Add(new SketchEdge(new SketchPoint2(x1, y1), new SketchPoint2(x2, y2)));
         }
 
@@ -128,6 +135,12 @@ namespace SolidWorksQrAddIn.Host
         {
             if (_committed || _aborted)
                 throw new SketchInsertionException("The insertion session is already finished.");
+            // Mutual exclusion, enforced the other way round: KeepOpen would
+            // silently prefer the plan and drop every buffered contour edge.
+            if (_buffered.Count > 0)
+                throw new SketchInsertionException(
+                    $"Contour edges are already staged on this session ({_buffered.Count}) — " +
+                    "a circle-dot plan and contour edges are mutually exclusive.");
             _stagedCirclePlan = plan;
         }
 
@@ -203,29 +216,7 @@ namespace SolidWorksQrAddIn.Host
             //    then construction-flagged, so they land in the block's
             //    selection fold below and become definition content that
             //    tracks the instance's transforms.
-            var squareIndex = 0;
-            foreach (var square in _stagedSquares)
-            {
-                string label = square.Role == QrSquareRole.QrSquare ? "QR square" : "keep-out square";
-                foreach (var e in square.Edges)
-                {
-                    squareIndex++;
-                    var segment = DrawSketchEdge(
-                        e.Start.X, e.Start.Y, e.End.X, e.End.Y,
-                        label, $"edge {squareIndex}");
-                    // A swallowed flag failure would land the square as SOLID
-                    // definition geometry — profile content that feeds
-                    // extrudes. Propagate honestly: the abort path owns it.
-                    try { segment.ConstructionGeometry = true; }
-                    catch (Exception ex)
-                    {
-                        throw new SketchInsertionException(
-                            $"The construction-geometry flag could not be applied to the " +
-                            $"{label} (edge {squareIndex}): {ex.Message}", ex);
-                    }
-                    drawn.Add(segment);
-                }
-            }
+            DrawConstructionSquares((role, segment) => drawn.Add(segment));
 
             if (_ext == null || _math == null)
                 throw new SketchInsertionException(
@@ -357,29 +348,12 @@ namespace SolidWorksQrAddIn.Host
             //    role: the master-geometry dimensions reference them.
             var qrEdges = new List<ISketchSegment>();
             var keepEdges = new List<ISketchSegment>();
+            DrawConstructionSquares((role, segment) =>
+                (role == QrSquareRole.QrSquare ? qrEdges : keepEdges).Add(segment));
             double qrMin = 0, keepMin = 0;
-            var squareIndex = 0;
             foreach (var square in _stagedSquares)
             {
-                string label = square.Role == QrSquareRole.QrSquare
-                    ? "QR square" : "keep-out square";
-                var segs = square.Role == QrSquareRole.QrSquare ? qrEdges : keepEdges;
                 double lo = Math.Min(square.Vertices[0].X, square.Vertices[0].Y);
-                foreach (var e in square.Edges)
-                {
-                    squareIndex++;
-                    var segment = DrawSketchEdge(
-                        e.Start.X, e.Start.Y, e.End.X, e.End.Y,
-                        label, $"edge {squareIndex}");
-                    try { segment.ConstructionGeometry = true; }
-                    catch (Exception ex)
-                    {
-                        throw new SketchInsertionException(
-                            $"The construction-geometry flag could not be applied to the " +
-                            $"{label} (edge {squareIndex}): {ex.Message}", ex);
-                    }
-                    segs.Add(segment);
-                }
                 if (square.Role == QrSquareRole.QrSquare) qrMin = lo; else keepMin = lo;
             }
             if (qrEdges.Count < 4)
@@ -398,21 +372,22 @@ namespace SolidWorksQrAddIn.Host
             double p = plan.PitchM;
             var boxDim = DimEdge(qrEdges[0], vertical: false, 0.0, qrMin - p,
                 "QR-square master dimension");
-            dims.Box = EqName(boxDim);
+            dims.Box = EqName(boxDim, sketchName, "QR-square master dimension");
             if (keepEdges.Count >= 4)
             {
                 var qox = DimBetweenEdges(qrEdges[3], keepEdges[3],
                     vertical: false, qrMin - 2 * p, qrMin - p,
                     "quiet-zone left-offset dimension");
-                dims.QuietOffsetX = EqName(qox);
+                dims.QuietOffsetX = EqName(qox, sketchName, "quiet-zone left-offset dimension");
                 dims.QuietOffsetXSign = SignOf(qox);
                 var qoy = DimBetweenEdges(qrEdges[0], keepEdges[0],
                     vertical: true, keepMin - p, (qrMin + keepMin) / 2.0,
                     "quiet-zone bottom-offset dimension");
-                dims.QuietOffsetY = EqName(qoy);
+                dims.QuietOffsetY = EqName(qoy, sketchName, "quiet-zone bottom-offset dimension");
                 dims.QuietOffsetYSign = SignOf(qoy);
-                dims.QuietSize = EqName(DimEdge(keepEdges[0],
-                    vertical: false, 0.0, keepMin - p, "keep-out square size dimension"));
+                var quietSize = DimEdge(keepEdges[0],
+                    vertical: false, 0.0, keepMin - p, "keep-out square size dimension");
+                dims.QuietSize = EqName(quietSize, sketchName, "keep-out square size dimension");
             }
             var dimsBeforePattern = new HashSet<string>();
             foreach (var d in ScanSketchDimNames(sketchName))
@@ -506,20 +481,20 @@ namespace SolidWorksQrAddIn.Host
             //    top-left normally, the keep-out's under invert. Points
             //    select by object enumeration, never coordinate picks.
             var seedDia = DimArcDiameter(seed, plan, "seed-dot diameter dimension");
-            dims.Diameter = EqName(seedDia);
+            dims.Diameter = EqName(seedDia, sketchName, "seed-dot diameter dimension");
             double cornerX = plan.SeedCentreM.X - p / 2.0;
             double cornerY = plan.SeedCentreM.Y + p / 2.0;
             var sox = DimBetweenPoints(sketch,
                 cornerX, cornerY, plan.SeedCentreM.X, plan.SeedCentreM.Y,
                 vertical: false, cornerX + p, cornerY + p,
                 "seed horizontal-offset dimension");
-            dims.SeedOffsetX = EqName(sox);
+            dims.SeedOffsetX = EqName(sox, sketchName, "seed horizontal-offset dimension");
             dims.SeedOffsetXSign = SignOf(sox);
             var soy = DimBetweenPoints(sketch,
                 cornerX, cornerY, plan.SeedCentreM.X, plan.SeedCentreM.Y,
                 vertical: true, cornerX - p, cornerY - p,
                 "seed vertical-offset dimension");
-            dims.SeedOffsetY = EqName(soy);
+            dims.SeedOffsetY = EqName(soy, sketchName, "seed vertical-offset dimension");
             dims.SeedOffsetYSign = SignOf(soy);
 
             // 7. The equation table — the proven sequence: IEquationMgr.Add
@@ -576,31 +551,31 @@ namespace SolidWorksQrAddIn.Host
 
         /// <summary>
         /// Every "D{n}@{sketchName}" parameter the document resolves —
-        /// sketch dims number sequentially in creation order (spike-proven:
-        /// IParameter by name, since sketch dims are not sub-features and no
-        /// enumerator exists). Scans D1..D64 — far past the ~11 this emitter
-        /// creates.
+        /// the shared D1..D64 IParameter scan of <see cref="SketchDimensions"/>
+        /// (the probes file reads the same surface).
         /// </summary>
-        private List<(string Name, IDimension Dim)> ScanSketchDimNames(string sketchName)
-        {
-            var dims = new List<(string, IDimension)>();
-            for (var i = 1; i <= 64; i++)
-            {
-                string name = $"D{i}@{sketchName}";
-                IDimension? dim = null;
-                try { dim = _doc.IParameter(name) as IDimension; } catch { }
-                if (dim != null)
-                    dims.Add((name, dim));
-            }
-            return dims;
-        }
+        private List<(string Name, IDimension Dim)> ScanSketchDimNames(string sketchName) =>
+            SketchDimensions.OfSketch(_doc, sketchName);
 
-        /// <summary>"D6@Sketch1@Part5.Part" → "D6@Sketch1" (the equation-reference form, PAT4).</summary>
-        private static string EqName(IDimension dim)
+        /// <summary>
+        /// "D6@Sketch1@Part5.Part" → "D6@Sketch1" — the equation-reference
+        /// form (PAT4): dimension name, then "@{sketch}", then a document
+        /// tail. The name-shape decision is <see cref="QrEquationText"/>.
+        /// LocalReferenceFor (pure, headless-tested); a FullName that does
+        /// not carry the expected "…@{sketch}" part could only mint a
+        /// silently dead equation reference, so the create refuses instead.
+        /// </summary>
+        private static string EqName(IDimension dim, string sketchName, string what)
         {
-            string full = dim.FullName ?? "";
-            int at = full.LastIndexOf('@');
-            return at > 0 ? full.Substring(0, at) : full;
+            string full = "";
+            try { full = dim.FullName ?? ""; } catch { }
+            var reference = QrEquationText.LocalReferenceFor(full, sketchName);
+            if (reference == null)
+                throw new SketchInsertionException(
+                    $"The {what}'s FullName '{full}' is not the expected " +
+                    $"'D{{n}}@{sketchName}@<document>' form — its equation " +
+                    "reference cannot be derived.");
+            return reference;
         }
 
         /// <summary>
@@ -777,6 +752,41 @@ namespace SolidWorksQrAddIn.Host
             object? raw = null;
             try { raw = dd.GetDimension(); } catch { }
             return (raw as IDimension) ?? (dd.GetDimension2(0) as IDimension);
+        }
+
+        /// <summary>
+        /// Draws every staged construction-square edge and flags it
+        /// construction — the loop both realize paths share: the block path
+        /// folds the segments into the definition, the circle path buckets
+        /// them by role for the master-dim wiring; <paramref name="sink"/>
+        /// collects each drawn segment with its square's role. A swallowed
+        /// flag failure would land the square as SOLID geometry — profile
+        /// content that feeds extrudes — so it propagates honestly and the
+        /// abort path owns the partial sketch.
+        /// </summary>
+        private void DrawConstructionSquares(Action<QrSquareRole, ISketchSegment> sink)
+        {
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                string label = square.Role == QrSquareRole.QrSquare
+                    ? "QR square" : "keep-out square";
+                foreach (var e in square.Edges)
+                {
+                    squareIndex++;
+                    var segment = DrawSketchEdge(
+                        e.Start.X, e.Start.Y, e.End.X, e.End.Y,
+                        label, $"edge {squareIndex}");
+                    try { segment.ConstructionGeometry = true; }
+                    catch (Exception ex)
+                    {
+                        throw new SketchInsertionException(
+                            $"The construction-geometry flag could not be applied to the " +
+                            $"{label} (edge {squareIndex}): {ex.Message}", ex);
+                    }
+                    sink(square.Role, segment);
+                }
+            }
         }
 
         /// <summary>

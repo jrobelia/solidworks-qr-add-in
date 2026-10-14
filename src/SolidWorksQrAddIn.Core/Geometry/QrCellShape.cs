@@ -1,3 +1,5 @@
+using System;
+
 namespace SolidWorksQrAddIn.Core.Geometry
 {
     /// <summary>
@@ -64,9 +66,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
         }
 
-        /// <summary>The canonical code a selector/probe round-trips for <paramref name="shape"/>.</summary>
-        public static string CodeFor(QrCellShape shape) =>
-            shape == QrCellShape.Circle ? CircleCode : SquareCode;
+        /// <summary>
+        /// The canonical code a selector/probe round-trips for
+        /// <paramref name="shape"/> — strict, symmetric with
+        /// <see cref="TryParse"/>: an enum value with no code has no
+        /// canonical spelling, and silently spelling it "square" would
+        /// write the wrong shape into the session/probe surface.
+        /// </summary>
+        public static string CodeFor(QrCellShape shape)
+        {
+            switch (shape)
+            {
+                case QrCellShape.Square: return SquareCode;
+                case QrCellShape.Circle: return CircleCode;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(shape), shape,
+                        "The cell shape has no canonical code.");
+            }
+        }
 
         // ----- the small per-shape descriptor -----
         // The facts the session's field plumbing switches on, kept beside

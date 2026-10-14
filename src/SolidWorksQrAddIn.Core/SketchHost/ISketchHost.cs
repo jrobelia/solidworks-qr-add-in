@@ -167,7 +167,11 @@ namespace SolidWorksQrAddIn.Core.Hosting
 
         /// <summary>
         /// Stages one contour edge; coordinates are sketch-space metres at the
-        /// final size. Throws <see cref="SketchInsertionException"/> on failure.
+        /// final size. Mutually exclusive with <see cref="AddCirclePlan"/> —
+        /// calling it while a circle plan is staged throws
+        /// <see cref="SketchInsertionException"/> (a sketch carries either the
+        /// contour/block payload or the circle pattern, never both). Throws
+        /// <see cref="SketchInsertionException"/> on failure.
         /// </summary>
         void AddLine(double x1, double y1, double x2, double y2);
 
@@ -197,7 +201,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// instances are omitted at create time (docs/PATTERN-SPIKE.md).
         /// Mutually exclusive with staged <see cref="AddLine"/> contours —
         /// a sketch carries either the contour/block payload or the circle
-        /// pattern, never both. Throws <see cref="SketchInsertionException"/>
+        /// pattern, never both; calling it after contour edges were staged
+        /// throws <see cref="SketchInsertionException"/> rather than silently
+        /// dropping them at commit. Throws <see cref="SketchInsertionException"/>
         /// on failure — including on a host that has no circle-pattern
         /// emitter yet.
         /// </summary>

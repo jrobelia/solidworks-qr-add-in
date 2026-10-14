@@ -294,9 +294,6 @@ namespace SolidWorksQrAddIn.LiveProbe
         {
             var list = new List<(string, double)>();
             var seen = new HashSet<string>();
-            var parents = new List<string>(FindSketchFeatureNames(doc));
-            foreach (var sk in FindSketchFeatureNames(doc))
-                for (int i = 1; i <= 6; i++) parents.Add($"D{i}@LPattern1.{sk}".Split('@')[1]);
             // probe D1..Dmax on each sketch name and common pattern spellings
             var candidates = new List<string>();
             foreach (var sk in FindSketchFeatureNames(doc))
@@ -553,7 +550,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             // survivors must move AND holes stay missing (no EditLinear yet).
             var d1 = doc.IParameter("D1@Sketch1") as IDimension;
             int setRc = -9;
-            try { setRc = d1?.SetSystemValue3(pitch * 2, 2, null) ?? -8; } catch { }
+            try { setRc = d1?.SetSystemValue3(pitch * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; } catch { }
             arcs = ArcCenters(c.Mgr.ActiveSketch as ISketch);
             sb.Append($"setD1(2x)={setRc} missing2x[{MissingCells(arcs, n, pitch * 2)}] " +
                 $"centres[{string.Join(";", arcs.OrderBy(a => a.y).ThenBy(a => a.x)
@@ -621,7 +618,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     ? ((IFeature)skN).Name ?? "Sketch?" : "Sketch?";
                 var d1B = doc.IParameter($"D1@{skName}") as IDimension;
                 int rcB = -9;
-                try { rcB = d1B?.SetSystemValue3(pitch * 2, 2, null) ?? -8; } catch { }
+                try { rcB = d1B?.SetSystemValue3(pitch * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; } catch { }
                 var arcsB2 = ArcCenters(c.Mgr.ActiveSketch as ISketch);
                 sb.Append($"B2[skips+setD1(2x)={rcB} arcs={arcsB2.Count} " +
                     $"missing2x[{MissingCells(arcsB2, n, pitch * 2)}] " +
@@ -840,7 +837,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // ---- rescale the box: 6 → 12 mm — everything must double ---------
             int setRc = -9;
-            try { setRc = boxDim?.SetSystemValue3(size * 2, 2, null) ?? -8; } catch { }
+            try { setRc = boxDim?.SetSystemValue3(size * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; } catch { }
             doc.EditRebuild3();
             sb.Append($"setBox={setRc} ");
             sb.Append("dims2[" + string.Join(" ", FindDims(doc)
@@ -862,7 +859,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (d4 != null)
             {
                 int rcC = -9;
-                try { rcC = d4.SetSystemValue3(n + 1, 2, null); } catch { }
+                try { rcC = d4.SetSystemValue3(n + 1, 2 /* swSetValue_InAllConfigurations */, null); } catch { }
                 doc.EditRebuild3();
                 arcs = ArcCenters(sk);
                 sb.Append($"setD4(4)={rcC} arcs={arcs.Count}");
@@ -903,7 +900,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             // change spacing directly → diameter must follow ×0.5
             var spDim = spacing.Count > 0 ? doc.IParameter(spacing[0]) as IDimension : null;
             int rc = -9;
-            try { rc = spDim?.SetSystemValue3(pitch * 2, 2, null) ?? -8; }
+            try { rc = spDim?.SetSystemValue3(pitch * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; }
             catch (Exception ex) { sb.Append($"setSpEX:{ex.GetType().Name} "); }
             doc.EditRebuild3();
             var sk = FindSketchFeature(doc, FindSketchFeatureNames(doc).Last())
@@ -1040,7 +1037,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             doc.EditRebuild3();
             // --- grow the plate 60 → 90 mm: pattern must follow
             int rc = -9;
-            try { rc = plateDim?.SetSystemValue3(0.090, 2, null) ?? -8; }
+            try { rc = plateDim?.SetSystemValue3(0.090, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; }
             catch (Exception ex) { sb.Append($"setEX:{ex.GetType().Name} "); }
             doc.EditRebuild3();
             double plateAfter = -9;
@@ -1139,7 +1136,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 sb.Append($"eqQ={AddEquation(doc, EqName(qDim.FullName), $"\"{EqName(boxDim.FullName)}\"*{1.0 + 8.0 / n}")} ");
             doc.EditRebuild3();
             int rc = -9;
-            try { rc = boxDim?.SetSystemValue3(size * 2, 2, null) ?? -8; }
+            try { rc = boxDim?.SetSystemValue3(size * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; }
             catch (Exception ex) { sb.Append($"setEX:{ex.GetType().Name} "); }
             doc.EditRebuild3();
             sb.Append($"setBox={rc} dims2[" + string.Join(" ",
@@ -1532,7 +1529,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             // master-dim rescale INSIDE the edit — the dimensioned end-state's
             // whole point; then exit and re-verify on the committed sketch
             int setRc = -9;
-            try { setRc = boxDim?.SetSystemValue3(size * 2, 2, null) ?? -8; } catch { }
+            try { setRc = boxDim?.SetSystemValue3(size * 2, 2 /* swSetValue_InAllConfigurations */, null) ?? -8; } catch { }
             try { doc.EditRebuild3(); } catch { }
             sb.Append($"setBoxInEdit={setRc} dims2[{string.Join(" ", FindDims(doc)
                 .Select(d => $"{d.name}={d.val * 1000:F2}"))}] ");

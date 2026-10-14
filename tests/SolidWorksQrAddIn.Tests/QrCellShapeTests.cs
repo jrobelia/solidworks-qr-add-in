@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Interaction;
@@ -68,6 +69,16 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(code, QrCellShapes.CodeFor(shape));
             Assert.True(QrCellShapes.TryParse(code, out var parsed));
             Assert.Equal(shape, parsed);
+        }
+
+        [Fact]
+        public void An_enum_value_with_no_code_is_refused_not_spelled_square()
+        {
+            // Symmetric with TryParse's strictness: an out-of-range enum
+            // has no canonical code — refusing beats silently spelling it
+            // "square" (which would write the wrong shape downstream).
+            var bogus = (QrCellShape)99;
+            Assert.Throws<ArgumentOutOfRangeException>(() => QrCellShapes.CodeFor(bogus));
         }
 
         // ---------------- field applicability ----------------

@@ -342,6 +342,30 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(0, host.BeginCount);
         }
 
+        [Fact]
+        public void A_circle_plan_and_staged_contour_edges_are_mutually_exclusive()
+        {
+            // The ISketchInsertion contract: one sketch carries either the
+            // contour/block payload or the circle pattern — KeepOpen must
+            // never silently prefer one and drop the other's staging.
+            var host = HostWithSelectedPlane();
+            var plan = QrSketchGenerator.Generate(CircleRequest()).Sketch!.CirclePlan!;
+
+            var edgesFirst = host.BeginSketchInsertion();
+            edgesFirst.AddLine(0.0, 0.0, 0.001, 0.0);
+            Assert.Throws<SketchInsertionException>(
+                () => edgesFirst.AddCirclePlan(plan));
+            edgesFirst.Abort();
+
+            var planFirst = host.BeginSketchInsertion();
+            planFirst.AddCirclePlan(plan);
+            Assert.Throws<SketchInsertionException>(
+                () => planFirst.AddLine(0.0, 0.0, 0.001, 0.0));
+            planFirst.Abort();
+
+            Assert.Empty(host.Document!.Sketches);   // both sessions aborted clean
+        }
+
         // ---------------- undo registration for the pattern path ----------------
         // The circle creation collapses into the same single named undo step
         // as the block path (ticket #39): the registration carries the PLAN —
