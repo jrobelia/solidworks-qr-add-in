@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorksQrAddIn.Core.Interaction;
 using SolidWorksQrAddIn.Core.Preview;
 using SolidWorksQrAddIn.Tests.Fakes;
@@ -339,6 +340,46 @@ namespace SolidWorksQrAddIn.Tests
             // undo step, no state mutation of any kind.
             Assert.Empty(host.Document!.Sketches);
             Assert.Equal(0, host.BeginCount);
+        }
+
+        // ---------------- undo registration for the pattern path ----------------
+        // The circle creation collapses into the same single named undo step
+        // as the block path (ticket #39): the registration carries the PLAN —
+        // a redo re-stages it through AddCirclePlan — never contour edges.
+
+        [Fact]
+        public void Circle_undo_registration_carries_the_plan_and_squares_but_no_contours()
+        {
+            var host = HostWithSelectedPlane();
+            var result = new CreateQrSketchCommand().Execute(host, CircleRequest());
+
+            Assert.True(result.Succeeded, result.Message);
+            var reg = host.UndoRegistrations.Last();
+            Assert.Equal(SketchHostContract.CreationUndoName, reg.UndoName);
+            Assert.NotNull(reg.CirclePlan);
+            Assert.Empty(reg.Edges);                          // no contour payload
+            Assert.Equal(2, reg.ConstructionSquares!.Count);  // squares stage for redo
+        }
+
+        [Fact]
+        public void Circle_undo_removes_the_dot_sketch_and_redo_restores_it()
+        {
+            var host = HostWithSelectedPlane();
+            var doc = host.Document!;
+            var result = new CreateQrSketchCommand().Execute(host, CircleRequest());
+            Assert.True(result.Succeeded, result.Message);
+            var sketch = doc.Sketches.Single();
+            int dots = sketch.Circles.Count, squareSegs = sketch.Segments.Count;
+
+            doc.ActiveSketch = null;                    // engineer exits the sketch
+            Assert.True(doc.UndoLastStep());
+            Assert.Empty(doc.Sketches);
+
+            Assert.True(doc.RedoLastStep());
+            var restored = doc.Sketches.Single();
+            Assert.Equal(dots, restored.Circles.Count);
+            Assert.Equal(squareSegs, restored.Segments.Count);
+            Assert.NotNull(restored.CirclePlan);
         }
 
         // ---------------- Square byte-identity regression ----------------

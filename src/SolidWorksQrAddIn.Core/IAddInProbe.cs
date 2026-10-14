@@ -201,5 +201,22 @@ namespace SolidWorksQrAddIn.Core
         /// shown picture equals the module's rendering of the same payload.
         /// </summary>
         string PreviewSignatureProbe();
+
+        /// <summary>
+        /// Pattern/entity census for the ticket-#42 circle live gates
+        /// (spec #13): reads a sketch's segment census — entity type tallies
+        /// (arc/line/other via the segment type code, robust against the
+        /// sibling-COM-type instances docs/PATTERN-SPIKE.md PAT0 reports),
+        /// construction-flag count, closed-region count — plus the feature
+        /// type string, and echoes the circle plan the session's current
+        /// result carries (emitted/skipped instance counts, pattern cells,
+        /// pitch, dot diameter, invert) so the harness can compare the
+        /// emitted-vs-skipped expectation with what the sketch actually
+        /// holds. Pass the sketch name a create returned; an empty or null
+        /// name censuses the sketch open in edit mode. Returns
+        /// "PATCENSUS ..." or "ERROR ..." — a square-payload session echoes
+        /// "plan=none".
+        /// </summary>
+        string PatternCensusProbe(string sketchName);
     }
 }

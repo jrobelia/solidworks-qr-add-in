@@ -1307,6 +1307,85 @@ namespace SolidWorksQrAddIn
             return sb.ToString().Trim();
         }
 
+        // ---------------- circle-pattern census (ticket-#42 live gates) ----------------
+
+        /// <summary>
+        /// The pattern/entity census the circle live gates read. Works on
+        /// the named committed sketch or — empty name — the sketch open in
+        /// edit mode (a fresh create stays open). The segment census counts
+        /// by the type code PAT0 proved reliable: sketch-pattern instance
+        /// arcs skip ISketch.GetArcs() entirely and one arc/line each can
+        /// enumerate as a sibling COM type that fails the is-checks, so the
+        /// tally uses ISketchSegment.GetType() — plus "other" for whatever
+        /// casts to no segment at all.
+        /// </summary>
+        public string PatternCensusProbe(string sketchName)
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var doc = _sw.IActiveDoc2 as IModelDoc2;
+                if (doc == null)
+                    return "ERROR no active document";
+
+                ISketch? sketch = null;
+                string name = sketchName ?? "";
+                string featType = "";
+                if (name.Length == 0)
+                {
+                    var mgr = doc.SketchManager as ISketchManager;
+                    sketch = mgr?.ActiveSketch as ISketch;
+                    var feat = sketch as IFeature;
+                    name = feat?.Name ?? "";
+                    featType = feat?.GetTypeName2() ?? "";
+                }
+                else
+                {
+                    var feat = FindSketch(doc, name);
+                    featType = feat?.GetTypeName2() ?? "";
+                    sketch = feat?.GetSpecificFeature2() as ISketch;
+                }
+                if (sketch == null)
+                    return $"ERROR no sketch '{sketchName}' to census";
+
+                int segs = 0, arcs = 0, lines = 0, other = 0, cons = 0, regions = -1;
+                if (sketch.GetSketchSegments() is object[] segsArr)
+                {
+                    segs = segsArr.Length;
+                    foreach (var so in segsArr)
+                    {
+                        if (so is not ISketchSegment s) { other++; continue; }
+                        int t = -1;
+                        try { t = s.GetType(); } catch { }
+                        if (t == (int)swSketchSegments_e.swSketchARC) arcs++;
+                        else if (t == (int)swSketchSegments_e.swSketchLINE) lines++;
+                        else other++;
+                        bool isCons = false;
+                        try { isCons = s.ConstructionGeometry; } catch { }
+                        if (isCons) cons++;
+                    }
+                }
+                try { regions = sketch.GetSketchRegionCount(); } catch { }
+
+                var plan = session.CurrentResult?.Sketch?.CirclePlan;
+                string echo = plan == null
+                    ? "plan=none"
+                    : $"emitted={plan.EmittedCount} skipped={plan.SkippedCount} " +
+                      $"cells={plan.PatternCells} pitchMm={plan.PitchM * 1000.0:F4} " +
+                      $"diaMm={plan.DotDiameterM * 1000.0:F4} " +
+                      $"invert={plan.Inverted}";
+                return $"PATCENSUS sketch='{name}' feat='{featType}' " +
+                       $"segs={segs} arcs={arcs} lines={lines} other={other} " +
+                       $"cons={cons} regions={regions} {echo}";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
         private static int CountSketchFeatures(IModelDoc2 doc)
         {
             int n = 0;

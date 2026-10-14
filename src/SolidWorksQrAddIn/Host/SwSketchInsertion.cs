@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using SolidWorksQrAddIn.Core.Geometry;
 using SolidWorksQrAddIn.Core.Hosting;
 using SolidWorks.Interop.sldworks;
+using SolidWorks.Interop.swconst;
 
 namespace SolidWorksQrAddIn.Host
 {
@@ -119,10 +120,9 @@ namespace SolidWorksQrAddIn.Host
         /// <summary>
         /// Stages a circle-dot emission plan (spec #13, ticket #38) — the
         /// post-invert emission mask, pitch, dot diameter and pattern grid.
-        /// The SolidWorks-side emitter — one seed circle plus a
-        /// two-directional sketch linear pattern with per-instance skip —
-        /// is ticket #39, documented in docs/PATTERN-SPIKE.md; until it
-        /// lands, <see cref="KeepOpen"/> fails the commit honestly.
+        /// <see cref="KeepOpen"/> realizes it through the ticket-#39 native
+        /// emitter: one seed circle plus a two-directional sketch linear
+        /// pattern with per-instance skip (docs/PATTERN-SPIKE.md).
         /// </summary>
         public void AddCirclePlan(QrCirclePlan plan)
         {
@@ -194,7 +194,7 @@ namespace SolidWorksQrAddIn.Host
             for (var i = 0; i < _buffered.Count; i++)
             {
                 var e = _buffered[i];
-                drawn.Add(DrawDefEdge(
+                drawn.Add(DrawSketchEdge(
                     e.Start.X, e.Start.Y, e.End.X, e.End.Y,
                     "block definition", $"line {i + 1} of {_buffered.Count}"));
             }
@@ -210,7 +210,7 @@ namespace SolidWorksQrAddIn.Host
                 foreach (var e in square.Edges)
                 {
                     squareIndex++;
-                    var segment = DrawDefEdge(
+                    var segment = DrawSketchEdge(
                         e.Start.X, e.Start.Y, e.End.X, e.End.Y,
                         label, $"edge {squareIndex}");
                     // A swallowed flag failure would land the square as SOLID
@@ -289,31 +289,158 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
-        /// The circle-mode commit stage (spec #13, ticket #39): one seed
-        /// circle at cell (0,0) plus a two-directional sketch linear pattern
-        /// whose light-cell instances are skipped, with the construction
-        /// squares drawn beside it as plain sketch entities (no block).
-        /// Ticket #38 only defines and delivers the plan — the native
-        /// emitter lands with #39 (docs/PATTERN-SPIKE.md). Until then the
-        /// commit refuses honestly instead of producing wrong geometry.
+        /// The circle-mode commit stage (spec #13, ticket #39) — the recipe
+        /// docs/PATTERN-SPIKE.md proved live, run inside the open sketch
+        /// edit:
+        ///   1. interactive-mode insertion — the pattern route was proven
+        ///      with AddToDB OFF (the contour path's bulk mode exists for
+        ///      its dense line sets); the session flag snapshot restores
+        ///      everything on exit;
+        ///   2. the staged construction squares land as PLAIN construction
+        ///      sketch entities — circle mode has no block definition to
+        ///      carry them (they are the master geometry the #40 master
+        ///      dimension hangs on);
+        ///   3. one seed circle via CreateCircleByRadius at the plan's seed
+        ///      centre — a guaranteed-emitting cell; pattern instance (1,1)
+        ///      can never be skipped, so the seed is safe there;
+        ///   4. the seed selected BY OBJECT (Select4, coordinate picks are
+        ///      ambiguous next to the direction lines), then
+        ///      ISketchManager.CreateLinearSketchStepAndRepeat spans the
+        ///      grid at cell pitch — columns +x, rows −y (AngleX 0, AngleY
+        ///      −π/2 — the plan's upright-code frame). The plan's
+        ///      DeleteInstances string is passed verbatim: 1-based
+        ///      "(col,row)" pairs, the only skip format that works on this
+        ///      build. X/Y spacing dims stay ON — they are the driving
+        ///      dims ticket #40 equation-drives. Instance-count dims and
+        ///      the angle dim stay off;
+        ///   5. a region census is the honest check: construction geometry
+        ///      never feeds a profile (consexp, ADR 0003 evidence), so the
+        ///      sketch must hold exactly one closed region per emitted
+        ///      dot. A mismatch means the skip string was ignored — wrong
+        ///      geometry — and the abort path owns the partial sketch.
+        /// Never EditDelete instances (freezes the dim drive) and never
+        /// EditLinearSketchStepAndRepeat after skipping (resurrects every
+        /// instance) — the create-time string is the only route.
         /// </summary>
         private void RealizeAsCirclePattern()
         {
             var plan = _stagedCirclePlan!;
-            throw new SketchInsertionException(
-                $"Circle-dot emission is not implemented on this host yet — the " +
-                $"SolidWorks sketch-pattern emitter lands with ticket #39 " +
-                $"(the plan itself is valid: {plan.EmittedCount} dots at " +
-                $"{plan.PitchM * 1000.0:0.###} mm pitch). Select the Square " +
-                "cell shape to create this QR now.");
+
+            // 1. The spike's flag arrangement for the pattern route —
+            //    interactive-mode draws, inference off (AddToDB is the
+            //    contour path's bulk-insert workaround, not this route's).
+            try { _mgr.AddToDB = false; } catch { }
+            try { _mgr.AutoInference = false; } catch { }
+
+            // 2. The construction squares as plain sketch entities — drawn
+            //    before the seed so the pattern step's selection state is
+            //    only ever the seed circle.
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                string label = square.Role == QrSquareRole.QrSquare
+                    ? "QR square" : "keep-out square";
+                foreach (var e in square.Edges)
+                {
+                    squareIndex++;
+                    var segment = DrawSketchEdge(
+                        e.Start.X, e.Start.Y, e.End.X, e.End.Y,
+                        label, $"edge {squareIndex}");
+                    try { segment.ConstructionGeometry = true; }
+                    catch (Exception ex)
+                    {
+                        throw new SketchInsertionException(
+                            $"The construction-geometry flag could not be applied to the " +
+                            $"{label} (edge {squareIndex}): {ex.Message}", ex);
+                    }
+                }
+            }
+
+            // 3. The seed circle at the plan's seed centre — a cell that
+            //    always emits, since instance (1,1) cannot be skipped.
+            double radius = plan.DotDiameterM / 2.0;
+            ISketchSegment seed;
+            try
+            {
+                seed = _mgr.CreateCircleByRadius(
+                    plan.SeedCentreM.X, plan.SeedCentreM.Y, 0.0, radius) as ISketchSegment
+                    ?? throw new SketchInsertionException(
+                        "CreateCircleByRadius returned no segment for the seed circle.");
+            }
+            catch (SketchInsertionException) { throw; }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"CreateCircleByRadius failed for the seed circle: {ex.Message}", ex);
+            }
+
+            // 4. Pattern the seed across the grid. Object-select the seed —
+            //    the spike's coordinate-pick fallback (a point ON the
+            //    circle) stays as the last resort.
+            try { _doc.ClearSelection2(true); } catch { }
+            bool seedSelected = false;
+            try { seedSelected = seed.Select4(false, null); } catch { }
+            if (!seedSelected && _ext != null)
+            {
+                try
+                {
+                    seedSelected = _ext.SelectByID2(
+                        "", "SKETCHSEGMENT",
+                        plan.SeedCentreM.X + radius, plan.SeedCentreM.Y, 0.0,
+                        false, 0, null, (int)swSelectOption_e.swSelectOptionDefault);
+                }
+                catch { }
+            }
+            if (!seedSelected)
+                throw new SketchInsertionException(
+                    "The seed circle could not be selected for patterning.");
+
+            bool created;
+            try
+            {
+                created = _mgr.CreateLinearSketchStepAndRepeat(
+                    plan.PatternCells, plan.PatternCells,
+                    plan.PitchM, plan.PitchM,
+                    0.0, -Math.PI / 2.0,
+                    plan.DeleteInstances,
+                    true, true,          // X/Y spacing dims — driving dims for #40
+                    false, false, false);
+            }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"CreateLinearSketchStepAndRepeat failed: {ex.Message}", ex);
+            }
+            if (!created)
+                throw new SketchInsertionException(
+                    "CreateLinearSketchStepAndRepeat returned false — " +
+                    "the circle-dot pattern was not created.");
+
+            // 5. The honest check: one closed region per emitted dot —
+            //    construction squares and the pattern's direction lines
+            //    never form regions. ISketchArc casts miss the sibling-COM
+            //    instances PAT0 reported; the region count is exact.
+            int regions = -1;
+            try
+            {
+                var sketch = _sketchFeature as ISketch;
+                if (sketch != null)
+                    regions = sketch.GetSketchRegionCount();
+            }
+            catch { /* an unreadable census is not proof of wrong geometry */ }
+            if (regions >= 0 && regions != plan.EmittedCount)
+                throw new SketchInsertionException(
+                    $"The circle pattern produced {regions} closed regions, " +
+                    $"not the plan's {plan.EmittedCount} dots — skipped " +
+                    "instances did not take.");
         }
 
         /// <summary>
-        /// One CreateLine + error wrap for the definition draw — shared by
-        /// the contour loop and the square loop so both normalize the same
-        /// way (÷ the instance scale) and fail the same way.
+        /// One CreateLine + error wrap for the staged-edge draw — shared by
+        /// the contour loop and both square loops so every staged edge
+        /// lands the same way and fails the same way.
         /// </summary>
-        private ISketchSegment DrawDefEdge(
+        private ISketchSegment DrawSketchEdge(
             double x1, double y1, double x2, double y2, string what, string which)
         {
             try
