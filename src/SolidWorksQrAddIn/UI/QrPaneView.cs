@@ -86,6 +86,27 @@ namespace SolidWorksQrAddIn.UI
             new EccOption("H", "H — high, ~30% damage recovery"),
         };
 
+        /// <summary>
+        /// One cell-shape dropdown entry — the canonical code the session
+        /// parser and probes speak (<see cref="QrCellShapes"/>) plus the
+        /// label shown in the list.
+        /// </summary>
+        private sealed class ShapeOption
+        {
+            public string Code { get; }
+            public string Label { get; }
+            public ShapeOption(string code, string label) { Code = code; Label = label; }
+            public override string ToString() => Label;
+        }
+
+        private static readonly ShapeOption[] ShapeOptions =
+        {
+            new ShapeOption(QrCellShapes.SquareCode,
+                "Square — grown cell outlines (block)"),
+            new ShapeOption(QrCellShapes.CircleCode,
+                "Circle — real circle dots (linear pattern)"),
+        };
+
         private readonly QrSketchSession _session;
         private readonly Func<ISketchHost> _hostProvider;
         private readonly ComboBox _presetCombo;
@@ -96,6 +117,9 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _sizeLabel;
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
+        private readonly ComboBox _shapeCombo;
+        private readonly TextBlock _shapeParamLabel;
+        private readonly TextBox _shapeParamBox;
         private readonly ComboBox _eccBox;
         private readonly CheckBox _invertBox;
         private readonly Image _picture;
@@ -106,6 +130,7 @@ namespace SolidWorksQrAddIn.UI
         private bool _contentDirty;
         private bool _sizeDirty;
         private bool _growthDirty;
+        private bool _shapeParamDirty;
         private bool _suppressFieldEvents;
         // Preset-field inputs keyed by the descriptors' contract Key, and the
         // keys with a pending debounced text edit. Discrete controls
@@ -187,9 +212,53 @@ namespace SolidWorksQrAddIn.UI
             {
                 ToolTip = "Widens each dark cell on all sides by this percentage of " +
                           "the cell spacing, helping diagonally touching cells connect. " +
-                          "The QR code size stays fixed.",
+                          "The QR code size stays fixed. Disabled under Circle — " +
+                          "dot cells are already disjoint; the dot size below is " +
+                          "their only sizing knob.",
             };
             panel.Children.Add(_growthBox);
+
+            // The cell-shape selector (spec #13, ticket #38): a discrete
+            // two-option dropdown — a committed pick pushes into the
+            // session immediately like the ECC selector. The dot-size field
+            // below and the growth field above trade which one is enabled:
+            // growth is inert under Circle, dot size is inert under Square —
+            // both keep their entered text verbatim either way.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Cell shape:",
+                Margin = new Thickness(0, 8, 0, 4),
+            });
+            _shapeCombo = new ComboBox
+            {
+                ItemsSource = ShapeOptions,
+                DisplayMemberPath = nameof(ShapeOption.Label),
+                SelectedValuePath = nameof(ShapeOption.Code),
+                ToolTip = "The primitive each emitted QR cell becomes. " +
+                          "Square — today's grown outline contours, created as " +
+                          "one block. Circle — one true circle dot per cell, " +
+                          "sized by the dot-size field (a native sketch pattern " +
+                          "on hosts that emit it).",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MinWidth = 220,
+            };
+            panel.Children.Add(_shapeCombo);
+
+            _shapeParamLabel = new TextBlock
+            {
+                Text = _session.ShapeParameterLabel,
+                Margin = new Thickness(0, 8, 0, 4),
+            };
+            panel.Children.Add(_shapeParamLabel);
+            _shapeParamBox = new TextBox
+            {
+                ToolTip = "The dot diameter as a percentage of the cell pitch — " +
+                          "Circle cells only; the field is inert (disabled) " +
+                          "under Square. Dots must stay disjoint: the value is " +
+                          "capped per request so the dot-to-dot gap never falls " +
+                          "below the insertion floor.",
+            };
+            panel.Children.Add(_shapeParamBox);
 
             panel.Children.Add(new TextBlock
             {
@@ -316,6 +385,19 @@ namespace SolidWorksQrAddIn.UI
             _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
             _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
             _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
+            _shapeParamBox.TextChanged += (_, __) => MarkEdited(ref _shapeParamDirty);
+            // The cell-shape dropdown is discrete — a committed pick pushes
+            // into the session immediately, exactly like the ECC selector;
+            // an unrecognised code is refused by the shared parser, never
+            // coerced.
+            _shapeCombo.SelectionChanged += (_, __) =>
+            {
+                if (_suppressFieldEvents || _shapeCombo.SelectedValue == null)
+                    return;
+                if (QrCellShapes.TryParse(_shapeCombo.SelectedValue as string,
+                        out QrCellShape cellShape))
+                    _session.SetCellShape(cellShape);
+            };
             // A dropdown pick is discrete — there is nothing to debounce, so
             // the level lands in the session immediately.
             _eccBox.SelectionChanged += (_, __) =>
@@ -346,6 +428,8 @@ namespace SolidWorksQrAddIn.UI
                 _contentBox.Text = _session.Content;
                 _sizeBox.Text = _session.SizeText;
                 _growthBox.Text = _session.GrowthText;
+                _shapeCombo.SelectedValue = QrCellShapes.CodeFor(_session.CellShape);
+                _shapeParamBox.Text = _session.ShapeParameterText;
                 _eccBox.SelectedValue = _session.EccLevel.ToString();
                 _invertBox.IsChecked = _session.Invert;
             }
@@ -386,6 +470,15 @@ namespace SolidWorksQrAddIn.UI
                     _sizeBox.Text = _session.SizeText;
                 if (!_growthDirty && _growthBox.Text != _session.GrowthText)
                     _growthBox.Text = _session.GrowthText;
+                // A selector pick carries no in-progress state — always
+                // re-pull. The shape-parameter text is a debounced field:
+                // an in-progress edit keeps the engineer's text like the
+                // other text boxes.
+                var shapeCode = QrCellShapes.CodeFor(_session.CellShape);
+                if (!Equals(_shapeCombo.SelectedValue, shapeCode))
+                    _shapeCombo.SelectedValue = shapeCode;
+                if (!_shapeParamDirty && _shapeParamBox.Text != _session.ShapeParameterText)
+                    _shapeParamBox.Text = _session.ShapeParameterText;
                 if (!Equals(_eccBox.SelectedValue, _session.EccLevel.ToString()))
                     _eccBox.SelectedValue = _session.EccLevel.ToString();
                 // A toggle carries no in-progress state — always re-pull.
@@ -621,6 +714,11 @@ namespace SolidWorksQrAddIn.UI
                 _growthDirty = false;
                 _session.SetGrowthText(_growthBox.Text);
             }
+            if (_shapeParamDirty)
+            {
+                _shapeParamDirty = false;
+                _session.SetShapeParameterText(_shapeParamBox.Text);
+            }
             // Preset-field edits flush BEFORE the content box: a direct
             // content edit under a preset is the Raw-reverting manual edit —
             // it must land last so the typed text, not a recomposition, wins.
@@ -680,6 +778,14 @@ namespace SolidWorksQrAddIn.UI
             _contentLabel.Text = _session.ContentPresetId == PayloadComposer.DefaultPresetId
                 ? "Text or URL (encoded exactly as entered):"
                 : _session.CurrentPreset.DisplayName + " payload (editable verbatim):";
+            // Inert-field disablement (spec #13, ticket #38): under Circle
+            // the growth box greys out (its text is kept verbatim, never
+            // consulted); under Square the dot-size box is the inert one.
+            // Disabled inputs still SHOW the session's text — an inert
+            // field's entered value is never hidden or cleared.
+            _growthBox.IsEnabled = _session.GrowthApplies;
+            _shapeParamLabel.Text = _session.ShapeParameterLabel;
+            _shapeParamBox.IsEnabled = _session.ShapeParameterApplies;
             FlagPresetFieldError();
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
             RebuildInfoRows();
@@ -754,7 +860,10 @@ namespace SolidWorksQrAddIn.UI
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
-                       $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true}";
+                       $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
+                       $"viewShape={_shapeCombo.SelectedValue} viewParam={_shapeParamBox.Text} " +
+                       $"viewGrowthEnabled={_growthBox.IsEnabled} " +
+                       $"viewParamEnabled={_shapeParamBox.IsEnabled}";
             }
         }
 

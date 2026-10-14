@@ -51,6 +51,49 @@ namespace SolidWorksQrAddIn.Core.Preview
 
             double minX = -extentM / 2.0;
             double topY = +extentM / 2.0;
+
+            // Circle mode (spec #13, ticket #38): no contours exist — the
+            // plan's emitted cells rasterize as true disks, analytically:
+            // a pixel is dark iff its centre sits inside the dot. Same
+            // footprint as the contour render, so the quiet-zone margin is
+            // identical either way.
+            if (sketch.CirclePlan != null)
+            {
+                var circlePlan = sketch.CirclePlan;
+                double radiusM = circlePlan.DotDiameterM / 2.0;
+                double radius2 = radiusM * radiusM;
+                for (var r = 0; r < circlePlan.CellsPerSide; r++)
+                    for (var c = 0; c < circlePlan.CellsPerSide; c++)
+                    {
+                        if (!circlePlan.Emits(r, c))
+                            continue;
+                        var centre = circlePlan.CellCentreM(r, c);
+                        int c0 = (int)Math.Max(0,
+                            Math.Ceiling((centre.X - radiusM - minX) / mPerPixel - 0.5));
+                        int c1 = (int)Math.Min(w - 1,
+                            Math.Ceiling((centre.X + radiusM - minX) / mPerPixel - 0.5) - 1);
+                        int r0 = (int)Math.Max(0,
+                            Math.Ceiling((topY - (centre.Y + radiusM)) / mPerPixel - 0.5));
+                        int r1 = (int)Math.Min(h - 1,
+                            Math.Ceiling((topY - (centre.Y - radiusM)) / mPerPixel - 0.5) - 1);
+                        for (var pr = r0; pr <= r1; pr++)
+                        {
+                            double py = topY - (pr + 0.5) * mPerPixel;
+                            double dy2 = (py - centre.Y) * (py - centre.Y);
+                            int rowStart = pr * w;
+                            for (var pc = c0; pc <= c1; pc++)
+                            {
+                                double px = minX + (pc + 0.5) * mPerPixel;
+                                double dx = px - centre.X;
+                                if (dx * dx + dy2 <= radius2)
+                                    pixels[rowStart + pc] = 0;
+                            }
+                        }
+                    }
+                return new QrPicture(w, h, pixels, mPerPixel * 1000.0,
+                    MarginCells * sketch.Info.PitchMm);
+            }
+
             var crossings = new List<double>(64);
 
             for (var row = 0; row < h; row++)

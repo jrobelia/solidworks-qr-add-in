@@ -38,5 +38,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>Declared numeric tolerance on the final grown outline size, in mm.</summary>
         public const double SizeToleranceMm = 1e-6;
+
+        /// <summary>
+        /// Most sketch segments the generated contours may deliver to the
+        /// host — the sketch-edit-responsiveness ceiling (spec-13 tickets
+        /// #35/#36, ported by ticket #38). The recorded evidence: at the
+        /// measured 7 722-segment disjoint-dots rung (858 regions) the
+        /// native insert ran ≈50.6 s and the sketch's region solve ≈103 s —
+        /// past the responsiveness wall — so the provisional 8 000 was
+        /// tightened to 4 400: just above the largest live-proven insert
+        /// (the ~4 000-segment dense square payload of docs/ACCEPTANCE.md
+        /// §F, ≈6.1 s native), keeping every recorded square payload legal
+        /// while refusing requests that would deliver minute-scale region
+        /// solves. Applies to the contour pipeline only — Circle emits a
+        /// circle plan of native pattern instances, not segments.
+        /// </summary>
+        public const int MaxSegmentCount = 4_400;
     }
 }

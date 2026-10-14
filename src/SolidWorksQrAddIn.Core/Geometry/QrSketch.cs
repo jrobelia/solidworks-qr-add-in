@@ -67,7 +67,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int version, int cellCount, int matrixCellCount, double pitchMm,
             double growthFractionPerSide, double growthMmPerSide,
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
-            int contourCount, int segmentCount, bool inverted = false)
+            int contourCount, int segmentCount, bool inverted = false,
+            QrCellShape cellShape = QrCellShape.Square,
+            double cellShapeParameter = 0.0, int instanceCount = 0)
         {
             Version = version;
             CellCount = cellCount;
@@ -81,6 +83,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
             ContourCount = contourCount;
             SegmentCount = segmentCount;
             Inverted = inverted;
+            CellShape = cellShape;
+            CellShapeParameter = cellShapeParameter;
+            InstanceCount = instanceCount;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -128,6 +133,25 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// matrix's light cells — a dark field with the code left unmarked.
         /// </summary>
         public bool Inverted { get; }
+
+        /// <summary>
+        /// The per-cell primitive this sketch carries (spec #13, ticket #38).
+        /// </summary>
+        public QrCellShape CellShape { get; }
+
+        /// <summary>
+        /// The shape's parameter as applied — under Circle the dot diameter
+        /// as a fraction of cell pitch; 0 under Square (the field is inert).
+        /// </summary>
+        public double CellShapeParameter { get; }
+
+        /// <summary>
+        /// The emitted primitive instances — under Circle the delivered dot
+        /// count (the sketch pattern's kept instances); 0 under Square,
+        /// where emitted cells merge into contours and "instances" is not
+        /// meaningful (contour/segment counts describe the square output).
+        /// </summary>
+        public int InstanceCount { get; }
     }
 
     /// <summary>
@@ -139,12 +163,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public QrSketch(
             IReadOnlyList<QrRegion> regions, IReadOnlyList<QrContour> contours,
             IReadOnlyList<QrConstructionSquare> constructionSquares,
-            QrSketchInfo info)
+            QrSketchInfo info, QrCirclePlan? circlePlan = null)
         {
             Regions = regions;
             Contours = contours;
             ConstructionSquares = constructionSquares;
             Info = info;
+            CirclePlan = circlePlan;
         }
 
         /// <summary>
@@ -168,6 +193,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
         public IReadOnlyList<QrConstructionSquare> ConstructionSquares { get; }
 
         public QrSketchInfo Info { get; }
+
+        /// <summary>
+        /// The circle-dot emission plan (spec #13, ticket #38) — present iff
+        /// <see cref="QrSketchInfo.CellShape"/> is
+        /// <see cref="QrCellShape.Circle"/>. Under Circle the contour lists
+        /// are empty: the plan is the whole payload — emission mask, pitch,
+        /// dot diameter, pattern grid placement and the create-time skip
+        /// string for the host's native linear-pattern emitter (ticket #39).
+        /// </summary>
+        public QrCirclePlan? CirclePlan { get; }
 
         /// <summary>All contour edges in insertion order.</summary>
         public IEnumerable<SketchEdge> Edges

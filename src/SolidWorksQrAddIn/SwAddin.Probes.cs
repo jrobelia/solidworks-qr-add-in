@@ -120,6 +120,8 @@ namespace SolidWorksQrAddIn
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
                   $"preset={_session.ContentPresetId} " +
                   $"ecc={_session.EccLevel} invert={_session.Invert} " +
+                  $"shape={QrCellShapes.CodeFor(_session.CellShape)} " +
+                  $"param={_session.ShapeParameterText} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
                   (_pane?.InfoSnapshot ?? "view=none");
 
@@ -161,6 +163,27 @@ namespace SolidWorksQrAddIn
         public string SetQrInvertProbe(bool invert) =>
             FieldProbe(s => s.SetInvert(invert));
 
+        /// <summary>
+        /// The pane's cell-shape selector, probed: parse the picked shape
+        /// through <see cref="QrCellShapes"/> and apply it through the
+        /// session setter like every other field probe. An unrecognised
+        /// shape never reaches the session.
+        /// </summary>
+        public string SetQrCellShapeProbe(string shape)
+        {
+            if (!QrCellShapes.TryParse(shape, out QrCellShape cellShape))
+                return $"ERROR unknown cell shape '{shape}' — expected " +
+                       $"{QrCellShapes.SquareCode} or {QrCellShapes.CircleCode}.";
+            return FieldProbe(s => s.SetCellShape(cellShape));
+        }
+
+        /// <summary>
+        /// The pane's shape-parameter field, probed — Circle's dot size as a
+        /// percentage of cell pitch, verbatim like every text field.
+        /// </summary>
+        public string SetQrShapeParamProbe(string paramText) =>
+            FieldProbe(s => s.SetShapeParameterText(paramText));
+
         public string SetQrContentTypeProbe(string presetId) =>
             FieldProbe(s => s.SetContentType(presetId));
 
@@ -172,8 +195,14 @@ namespace SolidWorksQrAddIn
             if (!result.Succeeded)
                 return $"INVALID {result.Error!.Kind} {result.Error.Message}";
             var info = result.Sketch!.Info;
-            return $"VALID cells={info.CellCount} contours={info.ContourCount} " +
-                   $"segs={info.SegmentCount} size={info.FinalSizeMm:F3}";
+            // Under Circle the delivered fact is the pattern's instance
+            // count — contour/segment counts are meaningless for circle
+            // entities and are not reported.
+            return info.CellShape == QrCellShape.Circle
+                ? $"VALID cells={info.CellCount} dots={info.InstanceCount} " +
+                  $"size={info.FinalSizeMm:F3}"
+                : $"VALID cells={info.CellCount} contours={info.ContourCount} " +
+                  $"segs={info.SegmentCount} size={info.FinalSizeMm:F3}";
         }
 
         public string CreateQrFromWindowProbe()

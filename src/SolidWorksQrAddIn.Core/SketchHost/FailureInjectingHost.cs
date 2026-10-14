@@ -81,6 +81,9 @@ namespace SolidWorksQrAddIn.Core.Hosting
             public void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares) =>
                 _inner.AddConstructionSquares(squares);
 
+            public void AddCirclePlan(QrCirclePlan plan) =>
+                _inner.AddCirclePlan(plan);
+
             public void KeepOpen() => _inner.KeepOpen();
 
             public CleanupOutcome Abort()

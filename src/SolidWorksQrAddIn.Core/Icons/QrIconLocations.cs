@@ -32,7 +32,7 @@ namespace SolidWorksQrAddIn.Core.Icons
         /// </summary>
         public static IEnumerable<string> ExtractionDirectories(string addinDir)
         {
-            string perUser = PerUserIconsDirectory();
+            string? perUser = PerUserIconsDirectory();
             if (perUser != null)
                 yield return perUser;
             yield return Path.Combine(addinDir ?? ".", IconsFolderName);

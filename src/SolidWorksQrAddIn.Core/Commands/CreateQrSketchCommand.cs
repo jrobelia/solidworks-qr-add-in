@@ -132,12 +132,25 @@ namespace SolidWorksQrAddIn.Core.Commands
 
             try
             {
-                foreach (var edge in sketch.Edges)
-                    insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
-                // The construction squares stage like the edges and commit
-                // with them — the session draws them inside the block
-                // definition, where they ride the instance's transforms.
-                insertion.AddConstructionSquares(sketch.ConstructionSquares);
+                if (sketch.CirclePlan != null)
+                {
+                    // Circle mode (spec #13, ticket #38): the host-independent
+                    // plan stages whole — a host without a circle-pattern
+                    // emitter (that lands with ticket #39) fails the stage
+                    // with its own honest message; nothing contour-shaped is
+                    // ever staged for a circle plan.
+                    insertion.AddCirclePlan(sketch.CirclePlan);
+                    insertion.AddConstructionSquares(sketch.ConstructionSquares);
+                }
+                else
+                {
+                    foreach (var edge in sketch.Edges)
+                        insertion.AddLine(edge.Start.X, edge.Start.Y, edge.End.X, edge.End.Y);
+                    // The construction squares stage like the edges and commit
+                    // with them — the session draws them inside the block
+                    // definition, where they ride the instance's transforms.
+                    insertion.AddConstructionSquares(sketch.ConstructionSquares);
+                }
                 insertion.KeepOpen();
                 // A committed creation earns its named undo step — custom
                 // undo objects (AddToDB bypasses native recording, so this
@@ -175,7 +188,9 @@ namespace SolidWorksQrAddIn.Core.Commands
                     $"The sketch was created but closing the operation failed: {ex.Message}");
             }
 
-            return CommandResult.Success(SafeSketchName(insertion), SafeLineCount(insertion));
+            return sketch.CirclePlan != null
+                ? CommandResult.SuccessCirclePattern(SafeSketchName(insertion))
+                : CommandResult.Success(SafeSketchName(insertion), SafeLineCount(insertion));
         }
 
         /// <summary>
@@ -193,7 +208,8 @@ namespace SolidWorksQrAddIn.Core.Commands
                     SketchHostContract.CreationUndoName,
                     SafeSketchName(insertion),
                     sketch.Edges.ToList(),
-                    sketch.ConstructionSquares));
+                    sketch.ConstructionSquares,
+                    sketch.CirclePlan));
             }
             catch { /* the undo step is a nicety; the created sketch stands */ }
         }

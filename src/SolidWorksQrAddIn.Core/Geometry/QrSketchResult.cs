@@ -36,6 +36,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// composed into a payload — a required field is missing or a field
         /// holds a value its preset cannot encode.</summary>
         InvalidPayload,
+
+        /// <summary>The cell-shape parameter was non-finite or outside its
+        /// declared domain — the Circle dot diameter must stay in the open
+        /// interval (0, cap) of the cell pitch, the per-request cap keeping
+        /// the delivered orthogonal dot-to-dot gap at or above the recorded
+        /// insertion floor (docs/INSERTION-GUARD.md).</summary>
+        InvalidShapeParameter,
+
+        /// <summary>The generated contours would deliver more sketch segments
+        /// than the recorded <see cref="QrInsertionGuard.MaxSegmentCount"/>
+        /// budget — the sketch-edit-responsiveness bound measured live on
+        /// the spec-13 shape branch (docs/INSERTION-GUARD.md).</summary>
+        TooManySegments,
     }
 
     /// <summary>An actionable generation failure — what is wrong and what to change.</summary>
