@@ -54,5 +54,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// circle plan of native pattern instances, not segments.
         /// </summary>
         public const int MaxSegmentCount = 4_400;
+
+        /// <summary>
+        /// Most pattern instances — delivered circle dots — a Circle
+        /// request may hand to the host's sketch linear pattern (spec #13,
+        /// ticket #41). Under real circles there are no contour segments:
+        /// each kept instance is one ARC entity and one closed sketch
+        /// region, so the edit-responsiveness driver that
+        /// <see cref="MaxSegmentCount"/> proxies under Square becomes the
+        /// emitted-dot count itself — this bound counts the plan's
+        /// post-invert EMITTED dots, not the N² grid. Sized by the live
+        /// production-path ladder (docs/INSERTION-GUARD.md): the largest
+        /// rung inside the responsiveness budget emitted 3 232 dots
+        /// (v12-invert, ≈71 s create / ≈62 s sketch re-solve) and the next
+        /// rung, 4 045 dots (v18), ran ≈122 s to create and ≈97 s to
+        /// re-solve — past the wall — so 3 600 sits ~1.1× over the
+        /// largest proven insert, the same methodology that set
+        /// <see cref="MaxSegmentCount"/>.
+        /// </summary>
+        public const int MaxCircleInstances = 3_600;
     }
 }
