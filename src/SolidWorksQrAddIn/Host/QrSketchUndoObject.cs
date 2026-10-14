@@ -82,6 +82,7 @@ namespace SolidWorksQrAddIn.Host
         private object? _support;         // IFeature (datum plane) or IEntity (face)
         private IReadOnlyList<SketchEdge>? _edges;   // staged contour edges, sketch-space metres
         private IReadOnlyList<QrConstructionSquare>? _constructionSquares;
+        private QrCirclePlan? _circlePlan;           // staged circle-dot plan (spec #13)
         private IMathUtility? _math;      // block insertion points for the redo
         private bool _undone;
         private bool _released;
@@ -96,6 +97,7 @@ namespace SolidWorksQrAddIn.Host
             _undoName = registration.UndoName;
             _math = math;
             _constructionSquares = registration.ConstructionSquares;
+            _circlePlan = registration.CirclePlan;
             try { _sketchFeatureId = sketch.GetID(); }
             catch { _sketchFeatureId = 0; }
             _support = support;
@@ -131,6 +133,7 @@ namespace SolidWorksQrAddIn.Host
                 _support = null;
                 _edges = null;
                 _constructionSquares = null;
+                _circlePlan = null;
                 _math = null;
                 QrSketchUndoRegistry.Drop(this);
             }
@@ -214,7 +217,8 @@ namespace SolidWorksQrAddIn.Host
             var doc = _doc!;
             var support = _support;
             var edges = _edges;
-            if (support == null || edges == null)
+            var circlePlan = _circlePlan;
+            if (support == null || (edges == null && circlePlan == null))
             {
                 Diag.Log("QR redo: no support/geometry captured — nothing to reinsert");
                 return;
@@ -254,8 +258,18 @@ namespace SolidWorksQrAddIn.Host
 
             try
             {
-                foreach (var e in edges)
-                    insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+                if (circlePlan != null)
+                {
+                    // Circle mode re-stages the emission plan — the redo
+                    // rebuilds seed + pattern + squares through the same
+                    // commit route the original creation took (ticket #39).
+                    insertion.AddCirclePlan(circlePlan);
+                }
+                else
+                {
+                    foreach (var e in edges!)
+                        insertion.AddLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y);
+                }
                 // Re-stage the construction squares too — the redo rebuilds
                 // the whole definition: contours and squares alike.
                 if (_constructionSquares != null)

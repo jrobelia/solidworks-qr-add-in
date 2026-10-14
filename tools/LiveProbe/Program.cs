@@ -7027,6 +7027,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string UndoRedoQrProbe() => Invoke("UndoRedoQrProbe");
             public string BlockSpikeProbe(int test) => Invoke("BlockSpikeProbe", test);
             public string PreviewSignatureProbe() => Invoke("PreviewSignatureProbe");
+            public string PatternCensusProbe(string sketchName) => Invoke("PatternCensusProbe", sketchName);
         }
     }
 }

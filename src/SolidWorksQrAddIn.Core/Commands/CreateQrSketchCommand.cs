@@ -134,11 +134,10 @@ namespace SolidWorksQrAddIn.Core.Commands
             {
                 if (sketch.CirclePlan != null)
                 {
-                    // Circle mode (spec #13, ticket #38): the host-independent
-                    // plan stages whole — a host without a circle-pattern
-                    // emitter (that lands with ticket #39) fails the stage
-                    // with its own honest message; nothing contour-shaped is
-                    // ever staged for a circle plan.
+                    // Circle mode (spec #13, tickets #38/#39): the host-
+                    // independent plan stages whole — the host's sketch-
+                    // pattern emitter consumes it at commit; nothing
+                    // contour-shaped is ever staged for a circle plan.
                     insertion.AddCirclePlan(sketch.CirclePlan);
                     insertion.AddConstructionSquares(sketch.ConstructionSquares);
                 }

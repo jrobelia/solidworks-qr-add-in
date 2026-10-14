@@ -51,5 +51,22 @@ namespace SolidWorksQrAddIn.Tests
             Assert.NotNull(attr);
             Assert.True(attr!.Value);
         }
+
+        /// <summary>
+        /// Pins the COM surface ticket #42 drives (spec #13, ticket #39):
+        /// the pattern/entity census probe must stay a (string) → string
+        /// dispatch member — every probe answers with a string so a call
+        /// can never throw back across the COM boundary into SolidWorks.
+        /// </summary>
+        [Fact]
+        public void Probe_interface_declares_the_pattern_census_probe()
+        {
+            var method = typeof(IAddInProbe).GetMethod("PatternCensusProbe");
+            Assert.NotNull(method);
+            Assert.Equal(typeof(string), method!.ReturnType);
+            var parameters = method.GetParameters();
+            Assert.Single(parameters);
+            Assert.Equal(typeof(string), parameters[0].ParameterType);
+        }
     }
 }
