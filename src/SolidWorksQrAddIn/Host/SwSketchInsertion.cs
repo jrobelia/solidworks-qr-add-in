@@ -32,6 +32,7 @@ namespace SolidWorksQrAddIn.Host
         private readonly List<SketchEdge> _buffered = new List<SketchEdge>();
         private readonly List<QrConstructionSquare> _stagedSquares =
             new List<QrConstructionSquare>();
+        private QrCirclePlan? _stagedCirclePlan;
         private bool _committed;
         private bool _aborted;
         private bool _flagsRestored;
@@ -115,9 +116,26 @@ namespace SolidWorksQrAddIn.Host
                 _stagedSquares.AddRange(squares);
         }
 
+        /// <summary>
+        /// Stages a circle-dot emission plan (spec #13, ticket #38) — the
+        /// post-invert emission mask, pitch, dot diameter and pattern grid.
+        /// The SolidWorks-side emitter — one seed circle plus a
+        /// two-directional sketch linear pattern with per-instance skip —
+        /// is ticket #39, documented in docs/PATTERN-SPIKE.md; until it
+        /// lands, <see cref="KeepOpen"/> fails the commit honestly.
+        /// </summary>
+        public void AddCirclePlan(QrCirclePlan plan)
+        {
+            if (_committed || _aborted)
+                throw new SketchInsertionException("The insertion session is already finished.");
+            _stagedCirclePlan = plan;
+        }
+
         public void KeepOpen()
         {
-            if (_buffered.Count > 0)
+            if (_stagedCirclePlan != null)
+                RealizeAsCirclePattern();
+            else if (_buffered.Count > 0)
                 RealizeAsBlockInstance();
             _committed = true;
             // The whole creation was meant to become one named undo step.
@@ -268,6 +286,26 @@ namespace SolidWorksQrAddIn.Host
                 throw new SketchInsertionException(
                     $"The block instance could not be read back: {ex.Message}", ex);
             }
+        }
+
+        /// <summary>
+        /// The circle-mode commit stage (spec #13, ticket #39): one seed
+        /// circle at cell (0,0) plus a two-directional sketch linear pattern
+        /// whose light-cell instances are skipped, with the construction
+        /// squares drawn beside it as plain sketch entities (no block).
+        /// Ticket #38 only defines and delivers the plan — the native
+        /// emitter lands with #39 (docs/PATTERN-SPIKE.md). Until then the
+        /// commit refuses honestly instead of producing wrong geometry.
+        /// </summary>
+        private void RealizeAsCirclePattern()
+        {
+            var plan = _stagedCirclePlan!;
+            throw new SketchInsertionException(
+                $"Circle-dot emission is not implemented on this host yet — the " +
+                $"SolidWorks sketch-pattern emitter lands with ticket #39 " +
+                $"(the plan itself is valid: {plan.EmittedCount} dots at " +
+                $"{plan.PitchM * 1000.0:0.###} mm pitch). Select the Square " +
+                "cell shape to create this QR now.");
         }
 
         /// <summary>

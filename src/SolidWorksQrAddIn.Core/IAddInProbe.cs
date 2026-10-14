@@ -61,9 +61,13 @@ namespace SolidWorksQrAddIn.Core
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
         /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
-        /// invert=&lt;bool&gt; unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
+        /// invert=&lt;bool&gt; shape=&lt;code&gt; param=&lt;text&gt;
+        /// unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
         /// size/growth are the field texts exactly as shown (initially 25
-        /// and 3); preset is the content-type id (initially "raw").
+        /// and 3); preset is the content-type id (initially "raw");
+        /// shape is the cell-shape code (initially "square") and param the
+        /// shape-parameter field text exactly as shown (initially "90" —
+        /// Circle's dot size).
         /// </summary>
         string WindowStateProbe();
 
@@ -104,6 +108,28 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrInvertProbe(bool invert);
+
+        /// <summary>
+        /// Picks the per-cell shape exactly like the pane's shape selector:
+        /// "square" or "circle" (case-insensitive). Returns
+        /// "VALID cells=&lt;n&gt; ..." — under Circle
+        /// "dots=&lt;n&gt;" replaces the contour/segment counts, which are
+        /// not meaningful for circle entities — or
+        /// "INVALID &lt;kind&gt; &lt;message&gt;" for the revalidated request,
+        /// and "ERROR unknown cell shape …" for anything outside the two
+        /// codes.
+        /// </summary>
+        string SetQrCellShapeProbe(string shape);
+
+        /// <summary>
+        /// Pushes shape-parameter text into the session exactly like the
+        /// pane's dot-size box — Circle's dot diameter as a percentage of
+        /// cell pitch. Returns "VALID cells=&lt;n&gt; dots=&lt;n&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// The text is stored verbatim under Square too — inert there, but
+        /// never silently dropped.
+        /// </summary>
+        string SetQrShapeParamProbe(string paramText);
 
         /// <summary>
         /// Picks the content-type preset exactly like the pane's dropdown:

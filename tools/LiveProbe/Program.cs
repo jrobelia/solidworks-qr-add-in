@@ -5724,9 +5724,9 @@ namespace SolidWorksQrAddIn.LiveProbe
                 try { c.Inst.DimensionDisplay = true; } catch { }
                 Console.WriteLine($"# EXPD1 inst Scale={c.Inst?.Scale} DimDisp={c.Inst?.DimensionDisplay}");
                 DumpDims("S25+show");
-                try { c.Inst.Scale = 40.0; } catch { }
+                try { c.Inst!.Scale = 40.0; } catch { }
                 DumpDims("S40");
-                try { c.Inst.Scale = 1.0; } catch { }
+                try { c.Inst!.Scale = 1.0; } catch { }
             });
 
             // ---------- E2: the def-geometry-driven gap dim + the Scale2 lever ----------
@@ -7018,6 +7018,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string SetQrEccProbe(string level) => Invoke("SetQrEccProbe", level);
             public string SetQrInvertProbe(bool invert) => Invoke("SetQrInvertProbe", invert);
+            public string SetQrCellShapeProbe(string shape) => Invoke("SetQrCellShapeProbe", shape);
+            public string SetQrShapeParamProbe(string paramText) => Invoke("SetQrShapeParamProbe", paramText);
             public string SetQrContentTypeProbe(string presetId) => Invoke("SetQrContentTypeProbe", presetId);
             public string SetQrPresetFieldProbe(string key, string value) => Invoke("SetQrPresetFieldProbe", key, value);
             public string CreateQrFromWindowProbe() => Invoke("CreateQrFromWindowProbe");

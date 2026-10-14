@@ -105,7 +105,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
-                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert);
+                request.SizeMm, request.GrowthFractionPerSide, version, request.Invert,
+                request.CellShape, request.CellShapeParameter);
         }
 
         /// <summary>
@@ -115,10 +116,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// the encoded path funnels through it with a full encoded matrix —
         /// both are padded into the same (N+8)×(N+8) working matrix.
         /// <paramref name="invert"/> selects the emitted polarity exactly as in
-        /// <see cref="Generate"/>.
+        /// <see cref="Generate"/>; <paramref name="cellShape"/> and
+        /// <paramref name="cellShapeParameter"/> pick the per-cell primitive
+        /// exactly like <see cref="QrSketchRequest.CellShape"/>.
         /// </summary>
         public static QrSketchResult GenerateFromCells(
-            bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false)
+            bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false,
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
         {
             if (darkCells == null)
                 throw new ArgumentNullException(nameof(darkCells));
@@ -133,7 +137,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             for (var row = 0; row < n; row++)
                 for (var col = 0; col < n; col++)
                     matrix[row + q, col + q] = darkCells[row, col];
-            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert);
+            return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert,
+                cellShape, cellShapeParameter);
         }
 
         /// <summary>
@@ -141,12 +146,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// the full (N+8)×(N+8) grid where <paramref name="dataCells"/> is the
         /// N×N payload extent inside it (the margin cells are always light).
         /// <paramref name="invert"/> flips which cells emit: dark cells
-        /// normally, light cells under invert — the only mode switch; growth,
-        /// union, clipping, validation and conversion run identically.
+        /// normally, light cells under invert. <paramref name="cellShape"/>
+        /// picks the primitive: Square runs the grown-cell union/clip/
+        /// validate/convert contour pipeline below; Circle branches away
+        /// before any contour machinery into <see cref="BuildCirclePlan"/>.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
-            bool invert)
+            bool invert, QrCellShape cellShape, double cellShapeParameter)
         {
             int m = matrix.GetLength(0);
             int n = dataCells;
@@ -156,6 +163,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
             if (double.IsNaN(sizeMm) || double.IsInfinity(sizeMm) || sizeMm <= 0.0)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidSize,
                     $"Size must be a finite positive number of millimetres; got '{sizeMm}'.");
+
+            // Spec #13, ticket #38: Circle emits a circle plan — one real
+            // circle dot per emitted cell for the host's native linear
+            // pattern — never contours. The growth field is inert under
+            // Circle (dots are already disjoint; the dot size is the whole
+            // sizing knob) and is never consulted on this path.
+            if (cellShape == QrCellShape.Circle)
+                return BuildCirclePlan(matrix, n, sizeMm, version, invert,
+                    cellShapeParameter);
+
             if (double.IsNaN(growthFraction) || double.IsInfinity(growthFraction) ||
                 growthFraction <= 0.0 || growthFraction >= 0.5)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth,
@@ -258,6 +275,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 Flatten(region, flatPaths, flatIsHole);
             }
 
+            // ---------- segment ceiling (spec-13 ticket #35, ported #38) ----------
+            // The delivered segment total is known as soon as the contours
+            // are flat — count it BEFORE the quadratic self-intersection
+            // sweep: a request we are about to refuse should not pay the
+            // O(n²) validation cost on tens of thousands of segments.
+            int segmentCount = 0;
+            foreach (var path in flatPaths)
+                segmentCount += path.Count;
+            if (segmentCount > QrInsertionGuard.MaxSegmentCount)
+                return QrSketchResult.Fail(QrSketchErrorKind.TooManySegments,
+                    SegmentCeilingMessage(segmentCount));
+
             var violation = ContourValidator.FindViolation(flatPaths);
             if (violation != null)
                 return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
@@ -278,11 +307,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
             double grownUnits = n * (double)u + 2 * g;
 
             // Actual smallest delivered edge (integer units → mm).
+            // segmentCount was already totalled for the ceiling check.
             long minEdgeUnits = long.MaxValue;
-            int segmentCount = 0;
             foreach (var path in flatPaths)
             {
-                segmentCount += path.Count;
                 for (var i = 0; i < path.Count; i++)
                 {
                     var a = path[i];
@@ -334,6 +362,155 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             return QrSketchResult.Ok(new QrSketch(regions, contours, squares, info));
         }
+
+        /// <summary>
+        /// The Circle pipeline (spec #13, ticket #38): instead of contours,
+        /// emits a <see cref="QrCirclePlan"/> — the post-invert emission
+        /// mask over the working matrix, the cell pitch, the dot diameter
+        /// and the linear-pattern grid placement the host consumes verbatim
+        /// (the seed circle + two-directional pattern + create-time
+        /// instance skips of docs/PATTERN-SPIKE.md). No Clipper, no union,
+        /// no corner-contact machinery — disjoint dots cannot produce that
+        /// failure class at all, and growth never applies.
+        ///
+        /// The pattern grid is asymmetric by polarity because the seed
+        /// instance (1,1) can never be skipped: under normal polarity the
+        /// grid spans the N×N data square seeded on data cell (0,0) — the
+        /// guaranteed-dark finder corner (the working matrix's own corners
+        /// are all quiet-zone light and would leave an unskippable stray
+        /// dot in the margin); under invert the grid spans the whole M×M
+        /// matrix seeded on matrix cell (0,0) — a quiet-zone cell that is
+        /// light by construction, hence emitting. The mask is always
+        /// recorded over the full matrix; the pattern origin tells the
+        /// emitter where instance (1,1) sits inside it.
+        /// </summary>
+        private static QrSketchResult BuildCirclePlan(
+            bool[,] matrix, int dataCells, double sizeMm, int version,
+            bool invert, double dotFraction)
+        {
+            int m = matrix.GetLength(0);
+            int n = dataCells;
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+
+            // ---------- the dot-size parameter ----------
+            // Dot diameter d = f·p, pitch p = S/N (no growth under Circle).
+            // The per-request cap keeps the DELIVERED orthogonal dot-to-dot
+            // gap p−d at or above the recorded insertion floor: reject
+            // f ≥ cap outright (acceptance: strict), plus the obvious floor
+            // on the dot itself — it is the smallest delivered feature.
+            if (double.IsNaN(dotFraction) || double.IsInfinity(dotFraction) ||
+                dotFraction <= 0.0)
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                    $"Dot size must be a finite positive percentage of cell pitch; " +
+                    $"got '{dotFraction}'.");
+            double pitchMm = sizeMm / n;
+            double capFraction = 1.0 - QrInsertionGuard.MinInsertableFeatureMm / pitchMm;
+            if (dotFraction >= capFraction)
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                    $"Dot size {dotFraction * 100.0:G4}% of cell pitch leaves a gap of at " +
+                    $"most {pitchMm * (1.0 - dotFraction):F4} mm between neighbouring " +
+                    $"dots — at or under the recorded " +
+                    $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion floor. " +
+                    $"Stay under {capFraction * 100.0:G4}% for this size and payload " +
+                    "(a larger QR size or a denser payload lowers the cap).");
+            double dotDiameterMm = pitchMm * dotFraction;
+            if (dotDiameterMm < QrInsertionGuard.MinInsertableFeatureMm)
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidShapeParameter,
+                    $"Dot size {dotFraction * 100.0:G4}% of cell pitch delivers a " +
+                    $"{dotDiameterMm:F4} mm dot — below the recorded " +
+                    $"{QrInsertionGuard.MinInsertableFeatureMm} mm insertion floor. " +
+                    "Increase the dot size or the QR size.");
+
+            // ---------- the post-invert emission mask over the matrix ----------
+            var emit = new bool[m, m];
+            int emitted = 0;
+            for (var row = 0; row < m; row++)
+                for (var col = 0; col < m; col++)
+                {
+                    emit[row, col] = matrix[row, col] != invert;
+                    if (emit[row, col]) emitted++;
+                }
+            if (emitted == 0)
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
+                    invert
+                        ? "The cell matrix contains no light cells; nothing would be sketched."
+                        : "The cell matrix contains no dark cells; nothing would be sketched.");
+
+            // ---------- the pattern grid ----------
+            // The seed instance can never be skipped (docs/PATTERN-SPIKE.md
+            // PAT2), so the pattern origin sits on a cell that always emits:
+            // normal → the data square's top-left corner (data (0,0) is a
+            // dark finder corner on every real QR); invert → the matrix's
+            // top-left corner (a quiet-zone cell, light by construction).
+            int originRow, originCol, patternCells;
+            if (invert)
+            {
+                originRow = 0;
+                originCol = 0;
+                patternCells = m;
+            }
+            else
+            {
+                originRow = q;
+                originCol = q;
+                patternCells = n;
+            }
+            // The mask records the delivered truth: the seed emits whether
+            // the matrix wanted it or not (real QRs always do).
+            if (!emit[originRow, originCol])
+            {
+                emit[originRow, originCol] = true;
+                emitted++;
+            }
+
+            double pitchM = pitchMm / 1000.0;
+            var plan = new QrCirclePlan(emit, n, patternCells, originRow, originCol,
+                pitchM, dotDiameterMm / 1000.0, invert);
+
+            var info = new QrSketchInfo(
+                version: version,
+                cellCount: n,
+                matrixCellCount: m,
+                pitchMm: pitchMm,
+                growthFractionPerSide: 0.0,
+                growthMmPerSide: 0.0,
+                finalSizeMm: sizeMm,
+                minEdgeMm: dotDiameterMm,
+                minLightGapMm: pitchMm - dotDiameterMm,
+                contourCount: 0,
+                segmentCount: 0,
+                inverted: invert,
+                cellShape: QrCellShape.Circle,
+                cellShapeParameter: dotFraction,
+                instanceCount: plan.EmittedCount);
+
+            // The same construction squares the contour path stages: the QR
+            // square IS the data extent ±S/2 (no growth under Circle), the
+            // keep-out square the working-matrix edge ±M·p/2 (ADR 0002).
+            double halfDataM = n * pitchM / 2.0;
+            double halfMatrixM = m * pitchM / 2.0;
+            var squares = new List<QrConstructionSquare>(2)
+            {
+                new QrConstructionSquare(QrSquareRole.QrSquare, SquareVertices(halfDataM)),
+                new QrConstructionSquare(QrSquareRole.KeepOutSquare, SquareVertices(halfMatrixM)),
+            };
+
+            return QrSketchResult.Ok(new QrSketch(
+                new List<QrRegion>(), new List<QrContour>(), squares, info, plan));
+        }
+
+        /// <summary>
+        /// The actionable segment-ceiling refusal — the count, the budget
+        /// and the levers (smaller payload, lighter ECC, or the Circle
+        /// shape whose native pattern emits no segments at all).
+        /// </summary>
+        private static string SegmentCeilingMessage(long segmentCount) =>
+            $"The generated QR would draw {segmentCount} sketch segments — over " +
+            $"the recorded {QrInsertionGuard.MaxSegmentCount}-segment insertion " +
+            "guard (the sketch-edit-responsiveness bound of " +
+            "docs/INSERTION-GUARD.md). Shorten the content, pick a lighter " +
+            "error-correction level, or use Circle cells — native pattern " +
+            "dots deliver no segments.";
 
         private static SketchPoint2[] SquareVertices(double half) =>
             // Centred on the origin like the contours; CCW from bottom-left.

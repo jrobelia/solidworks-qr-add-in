@@ -78,6 +78,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>The per-side outline growth the field starts with, as a cell-width fraction (3%).</summary>
         public const double InitialGrowthFractionPerSide = 0.03;
 
+        /// <summary>
+        /// The dot size the shape-parameter field starts with, as a cell-pitch
+        /// fraction (90%) — the "high default" of spec #13: under every real
+        /// cap (the v1/25 mm request's ≈95.8%) and far above the dot floor.
+        /// </summary>
+        public const double InitialShapeParameterFraction = 0.90;
+
         /// <summary>Preview raster resolution (pixels per side, incl. margin).</summary>
         public const int PreviewPixelsAcross = 240;
 
@@ -115,6 +122,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
             InitialSizeMm.ToString(CultureInfo.InvariantCulture);
         private static readonly string InitialGrowthPercentText =
             (InitialGrowthFractionPerSide * 100.0).ToString(CultureInfo.InvariantCulture);
+        private static readonly string InitialShapeParameterPercentText =
+            (InitialShapeParameterFraction * 100.0).ToString(CultureInfo.InvariantCulture);
 
         private readonly Func<IQrSketchWindow> _windowFactory;
         private readonly Func<ISketchHost>? _hostProvider;
@@ -133,6 +142,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
         private bool _invert;
+        private QrCellShape _cellShape = QrCellShape.Square;
+        private string _shapeParameterText = InitialShapeParameterPercentText;
+        private double? _shapeParameterFraction;
         private QrSketchResult? _current;
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
@@ -516,6 +528,83 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// The per-cell shape in force (spec #13, ticket #38) —
+        /// <see cref="QrCellShape.Square"/>, today's grown contour output and
+        /// the default, or <see cref="QrCellShape.Circle"/> (one real circle
+        /// dot per emitted cell). Applies to future creates only; existing
+        /// sketches are never mutated.
+        /// </summary>
+        public QrCellShape CellShape => _cellShape;
+
+        /// <summary>
+        /// True while the growth field applies — every shape except Circle,
+        /// whose dots are already disjoint and size off the shape parameter
+        /// alone. Under Circle the growth text is kept verbatim but never
+        /// consulted — the same inert-field treatment the shape parameter
+        /// gets under Square — and the pane disables the field.
+        /// </summary>
+        public bool GrowthApplies => QrCellShapes.GrowthApplies(_cellShape);
+
+        /// <summary>
+        /// True while the shape-parameter field applies — Circle's dot size;
+        /// the pane disables the field under Square. The text itself is
+        /// always kept verbatim either way.
+        /// </summary>
+        public bool ShapeParameterApplies => QrCellShapes.ShapeParameterApplies(_cellShape);
+
+        /// <summary>
+        /// The shape-parameter field's label as the pane should show it —
+        /// Circle's dot size as a percent of cell pitch (the dot diameter).
+        /// </summary>
+        public string ShapeParameterLabel => QrCellShapes.ShapeParameterLabel(_cellShape);
+
+        /// <summary>
+        /// The shape-parameter field exactly as entered ("90" initially —
+        /// the dot diameter as a percent of cell pitch under Circle).
+        /// </summary>
+        public string ShapeParameterText => _shapeParameterText;
+
+        /// <summary>
+        /// The parsed shape-parameter fraction in force, or null while the
+        /// field text holds no usable value or the parameter is inapplicable
+        /// (Square) — never a clamped or substituted number.
+        /// </summary>
+        public double? RequestedShapeParameter => _shapeParameterFraction;
+
+        /// <summary>
+        /// Selects the per-cell primitive (spec #13, ticket #38) —
+        /// <see cref="QrCellShape.Square"/>, today's grown contour output
+        /// and the default, or <see cref="QrCellShape.Circle"/>, one real
+        /// circle dot per emitted cell — and re-validates the whole
+        /// request: the shape is part of the emitted geometry, so the
+        /// picture and the info lines rebuild just like a growth edit.
+        /// Inert fields follow the same discipline across the switch — the
+        /// shape-parameter text is kept verbatim under Square (re-validated
+        /// the moment a shape needs it: a malformed value surfaces the
+        /// field's own error, never a silent substitution), and under
+        /// Circle the growth text gets the same inert treatment. Applies to
+        /// future creates only; existing sketches are never mutated.
+        /// </summary>
+        public QrSketchResult SetCellShape(QrCellShape cellShape)
+        {
+            _cellShape = cellShape;
+            return Regenerate();
+        }
+
+        /// <summary>
+        /// Records the shape-parameter field verbatim — Circle's dot size as
+        /// a percent of the cell pitch — and re-validates the whole request.
+        /// Under Square the parameter is inert: the text is stored but never
+        /// consulted, so a malformed value cannot break the square request —
+        /// it surfaces the moment a shape that needs it is selected.
+        /// </summary>
+        public QrSketchResult SetShapeParameterText(string shapeParameterText)
+        {
+            _shapeParameterText = shapeParameterText ?? string.Empty;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// Records the error-correction level and re-validates the whole
         /// request — the level is part of the encoding, so a denser choice
         /// rebuilds the matrix, the picture, and the info lines just like a
@@ -544,29 +633,54 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>
         /// The request the CURRENT inputs describe — the one the generator
         /// and the create command both consume, so a create can never encode
-        /// different settings than the preview showed.
+        /// different settings than the preview showed. Under Circle growth
+        /// does not apply — the request carries 0 (the generator never
+        /// consults it for circles); under Square the shape parameter rides
+        /// along inert, never consulted.
         /// </summary>
         private QrSketchRequest CurrentRequest(double sizeMm, double growthFraction) =>
-            new QrSketchRequest(_content, sizeMm, growthFraction)
+            new QrSketchRequest(_content, sizeMm, GrowthApplies ? growthFraction : 0.0)
             {
                 EccLevel = _eccLevel,
                 Invert = _invert,
+                CellShape = _cellShape,
+                CellShapeParameter = _shapeParameterFraction ?? 0.0,
             };
 
         private QrSketchResult Regenerate()
         {
             // Field-level validity first so the error names the field that is
             // actually wrong; the generator still re-checks everything itself.
+            // The shape parameter is parsed only while a shape needs it —
+            // under Square the field is disabled and its text inert — and the
+            // growth field gets the same inert treatment under Circle (dots
+            // size off the dot-size parameter alone).
+            double growthFraction = 0.0;
+            double shapeParameter = 0.0;
             if (!TryParseSize(_sizeText, _lengthUnit, out double sizeMm, out string sizeError))
             {
                 _sizeMm = null;
+                _growthFraction = null;
+                _shapeParameterFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidSize, sizeError);
             }
-            else if (!TryParseGrowth(_growthText, out double growthFraction, out string growthError))
+            else if (GrowthApplies && !TryParseGrowth(
+                         _growthText, out growthFraction, out string growthError))
             {
                 _sizeMm = sizeMm;
                 _growthFraction = null;
+                _shapeParameterFraction = null;
                 _current = QrSketchResult.Fail(QrSketchErrorKind.InvalidGrowth, growthError);
+            }
+            else if (ShapeParameterApplies && !TryParseShapeParameter(
+                         _shapeParameterText,
+                         out shapeParameter, out string shapeParameterError))
+            {
+                _sizeMm = sizeMm;
+                _growthFraction = growthFraction;
+                _shapeParameterFraction = null;
+                _current = QrSketchResult.Fail(
+                    QrSketchErrorKind.InvalidShapeParameter, shapeParameterError);
             }
             else if (_preset.ComposeError != null)
             {
@@ -575,14 +689,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 // generator. The numeric fields stay recorded — they are not
                 // what is wrong.
                 _sizeMm = sizeMm;
-                _growthFraction = growthFraction;
+                _growthFraction = GrowthApplies ? growthFraction : (double?)null;
+                _shapeParameterFraction = ShapeParameterApplies ? shapeParameter : (double?)null;
                 _current = QrSketchResult.Fail(
                     QrSketchErrorKind.InvalidPayload, _preset.ComposeError.Message);
             }
             else
             {
                 _sizeMm = sizeMm;
-                _growthFraction = growthFraction;
+                _growthFraction = GrowthApplies ? growthFraction : (double?)null;
+                _shapeParameterFraction = ShapeParameterApplies ? shapeParameter : (double?)null;
                 _current = QrSketchGenerator.Generate(CurrentRequest(sizeMm, growthFraction));
             }
 
@@ -645,7 +761,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     info.Inverted
                         ? "Inverted — light code on a dark field"
                         : "Dark code on a light field"),
+                new QrInfoLine(
+                    "Cell shape",
+                    info.CellShape == QrCellShape.Circle
+                        ? "Circle — dot size " +
+                          (info.CellShapeParameter * 100.0).ToString(
+                              "G4", CultureInfo.InvariantCulture) +
+                          "% of cell pitch"
+                        : "Square"),
             };
+            // The delivered-dot count is the circle plan's fact — a
+            // segment count is meaningless for circle entities.
+            if (info.CellShape == QrCellShape.Circle)
+                lines.Add(new QrInfoLine("Dots", info.InstanceCount.ToString(
+                    CultureInfo.InvariantCulture)));
             return lines;
         }
 
@@ -744,6 +873,42 @@ namespace SolidWorksQrAddIn.Core.Interaction
             }
         }
 
+        /// <summary>
+        /// The shape-parameter field — Circle's dot size: the dot diameter
+        /// as a percentage of the cell pitch, greater than 0 and at most
+        /// 100 (dots must stay disjoint; the generator's per-request gap
+        /// cap is stricter still and names its own bound). Called only
+        /// while <see cref="ShapeParameterApplies"/>; under Square the text
+        /// is retained verbatim but never consulted.
+        /// </summary>
+        private static bool TryParseShapeParameter(
+            string text, out double fraction, out string error)
+        {
+            switch (ParseNumericField(text, "%", v => v > 0.0 && v <= 100.0, out double dotPercent))
+            {
+                case NumericFieldError.Empty:
+                    error = "Dot size is empty. Enter the dot diameter as a " +
+                            "percentage of the cell pitch (1–100).";
+                    fraction = 0;
+                    return false;
+                case NumericFieldError.NotANumber:
+                    error = $"Dot size must be a number — percent of the cell " +
+                            $"pitch; got '{Shorten(text)}'.";
+                    fraction = 0;
+                    return false;
+                case NumericFieldError.OutOfRange:
+                    error = $"Dot size must be a finite percentage greater than " +
+                            $"0% and at most 100% of the cell pitch — dots must " +
+                            $"stay disjoint; got '{Shorten(text)}'.";
+                    fraction = 0;
+                    return false;
+                default:
+                    fraction = dotPercent / 100.0;
+                    error = string.Empty;
+                    return true;
+            }
+        }
+
         private static bool TryParseGrowth(string text, out double growthFraction, out string error)
         {
             growthFraction = 0;
@@ -791,15 +956,17 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (!_current.Succeeded)
                 return CommandResult.Failure(_current.Error!.Message);
 
-            // _current.Succeeded ⇒ both fields parsed — the request is exactly
-            // the one the current result was generated and validated with.
+            // _current.Succeeded ⇒ every applicable field parsed — the
+            // request is exactly the one the current result was generated
+            // and validated with (under Circle the growth field is inert
+            // and stays null — the request carries 0, never consulted).
             // The window/command boundary must never let a host exception
             // escape toward SolidWorks — a failure result is the contract.
             CommandResult result;
             try
             {
                 result = _command.Execute(
-                    host, CurrentRequest(_sizeMm!.Value, _growthFraction!.Value));
+                    host, CurrentRequest(_sizeMm!.Value, _growthFraction ?? 0.0));
             }
             catch (Exception ex)
             {

@@ -181,10 +181,27 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// fold that forms the block — so the footprint and the quiet-zone
         /// boundary are definition content that scales and moves with the
         /// instance, with no host-side constraints, dimensions, or
-        /// equations. A null or empty list stages nothing. Throws
-        /// <see cref="SketchInsertionException"/> on failure.
+        /// equations. Under a staged <see cref="AddCirclePlan"/> there is no
+        /// block: the squares realize as plain construction sketch entities
+        /// beside the pattern (spec #13, ticket #39). A null or empty list
+        /// stages nothing. Throws <see cref="SketchInsertionException"/> on
+        /// failure.
         /// </summary>
         void AddConstructionSquares(IReadOnlyList<QrConstructionSquare> squares);
+
+        /// <summary>
+        /// Stages a circle-dot emission plan (spec #13, tickets #38/#39) —
+        /// the post-invert emission mask, pitch, dot diameter and pattern
+        /// grid placement — for commit-time emission as one seed circle plus
+        /// a two-directional sketch linear pattern whose light-cell
+        /// instances are omitted at create time (docs/PATTERN-SPIKE.md).
+        /// Mutually exclusive with staged <see cref="AddLine"/> contours —
+        /// a sketch carries either the contour/block payload or the circle
+        /// pattern, never both. Throws <see cref="SketchInsertionException"/>
+        /// on failure — including on a host that has no circle-pattern
+        /// emitter yet.
+        /// </summary>
+        void AddCirclePlan(QrCirclePlan plan);
 
         void KeepOpen();
 

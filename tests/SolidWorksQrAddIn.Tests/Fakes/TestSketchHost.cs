@@ -41,6 +41,24 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         public bool Construction { get; set; }
     }
 
+    /// <summary>
+    /// One circle entity in a sketch, sketch-space metres — the fake-side
+    /// model of the circle-pattern realization (spec #13, tickets #38/#39):
+    /// one circle per emitted cell, drawn directly in the sketch (no block).
+    /// </summary>
+    public sealed class FakeCircle
+    {
+        public FakeCircle(double centreX, double centreY, double diameter)
+        {
+            CentreX = centreX;
+            CentreY = centreY;
+            Diameter = diameter;
+        }
+        public double CentreX { get; }
+        public double CentreY { get; }
+        public double Diameter { get; }
+    }
+
     /// <summary>An in-memory sketch: a named feature holding its segments.</summary>
     public sealed class FakeSketch
     {
@@ -51,12 +69,29 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// Raw line segments drawn directly in this sketch. The QR contours
         /// no longer land here — they are wrapped in a block instance at
         /// commit — so a created QR sketch leaves this empty. User sketches
-        /// and failure paths still use it.
+        /// and failure paths still use it. Under circle mode the two
+        /// construction squares DO land here, construction-flagged — there
+        /// is no block to carry them (ticket #39).
         /// </summary>
         public List<FakeLine> Segments { get; } = new List<FakeLine>();
 
         /// <summary>Block instances placed in this sketch (the QR is exactly one).</summary>
         public List<FakeBlockInstance> BlockInstances { get; } = new List<FakeBlockInstance>();
+
+        /// <summary>
+        /// Circle entities the sketch holds — the realized circle-dot
+        /// pattern (spec #13, ticket #38): one circle per emitted cell,
+        /// drawn directly in the sketch beside the construction squares.
+        /// Empty for a contour/block creation.
+        /// </summary>
+        public List<FakeCircle> Circles { get; } = new List<FakeCircle>();
+
+        /// <summary>
+        /// The circle-dot plan this sketch was committed from, or null for
+        /// a contour/block creation — what a test asserts on when it asks
+        /// "what did the circle create leave".
+        /// </summary>
+        public QrCirclePlan? CirclePlan { get; set; }
 
         /// <summary>
         /// The geometry the sketch actually shows: raw drawn segments plus
@@ -439,6 +474,13 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         /// </summary>
         public bool FailSquareFlag { get; set; }
 
+        /// <summary>
+        /// When true, the circle-pattern realize stage fails mid-commit —
+        /// models a host whose circle-pattern emitter (ticket #39) refuses.
+        /// Some circles may already be drawn; abort removes the whole sketch.
+        /// </summary>
+        public bool FailCirclePattern { get; set; }
+
         /// <summary>When set, BeginSketchInsertion throws with this message (selection lost, etc.).</summary>
         public string? BeginFailure { get; set; }
 
@@ -631,6 +673,7 @@ namespace SolidWorksQrAddIn.Tests.Fakes
         private readonly List<FakeLine> _buffered = new List<FakeLine>();
         private readonly List<QrConstructionSquare> _stagedSquares =
             new List<QrConstructionSquare>();
+        private QrCirclePlan? _stagedCirclePlan;
         private bool _committed;
         private bool _aborted;
         private CleanupOutcome? _abortOutcome;
@@ -690,11 +733,29 @@ namespace SolidWorksQrAddIn.Tests.Fakes
                 _stagedSquares.AddRange(squares);
         }
 
+        /// <summary>
+        /// The circle-plan stage the command's circle branch calls — the
+        /// plan stores whole; <see cref="KeepOpen"/> realizes it as one
+        /// circle per emitted cell plus the construction squares as plain
+        /// construction entities (no block — spec #13, tickets #38/#39).
+        /// </summary>
+        public void AddCirclePlan(QrCirclePlan plan)
+        {
+            if (_aborted || _committed)
+                throw new SketchInsertionException("The insertion session is already finished.");
+            _stagedCirclePlan = plan;
+        }
+
+        /// <summary>The circle plan this session staged, if any — test observability.</summary>
+        public QrCirclePlan? StagedCirclePlan => _stagedCirclePlan;
+
         public void KeepOpen()
         {
             if (_host.KeepOpenThrows)
                 throw new InvalidOperationException("Injected: the host could not finish the sketch.");
-            if (_buffered.Count > 0)
+            if (_stagedCirclePlan != null)
+                RealizeAsCirclePattern();
+            else if (_buffered.Count > 0)
                 RealizeAsBlockInstance();
             _committed = true;
             // Live-verified on SW 2023 SP5: the AddToDB recording is refused
@@ -779,6 +840,46 @@ namespace SolidWorksQrAddIn.Tests.Fakes
             if (_sketch.BlockInstances.Count == 0)
                 throw new SketchInsertionException(
                     "The block definition formed but placed no instance in the sketch.");
+        }
+
+        /// <summary>
+        /// The circle-mode counterpart of <see cref="RealizeAsBlockInstance"/>
+        /// (spec #13, tickets #38/#39): the staged plan realizes as one
+        /// circle per emitted cell drawn directly in the sketch — no block,
+        /// no contours — and the staged squares land beside them as plain
+        /// construction segments. The native emitter's seed circle is cell
+        /// (0,0)-anchored; the fake models the visible result.
+        /// </summary>
+        private void RealizeAsCirclePattern()
+        {
+            var plan = _stagedCirclePlan!;
+            for (var r = 0; r < plan.CellsPerSide; r++)
+                for (var c = 0; c < plan.CellsPerSide; c++)
+                {
+                    if (!plan.Emits(r, c))
+                        continue;
+                    if (_host.FailCirclePattern)
+                        throw new SketchInsertionException(
+                            "Injected: the circle-pattern emitter could not finish the pattern.");
+                    var centre = plan.CellCentreM(r, c);
+                    _sketch.Circles.Add(
+                        new FakeCircle(centre.X, centre.Y, plan.DotDiameterM));
+                }
+
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                foreach (var e in square.Edges)
+                {
+                    squareIndex++;
+                    if (_host.FailSquareDraw && squareIndex == 1)
+                        throw new SketchInsertionException(
+                            "CreateLine returned no segment while drawing the construction square.");
+                    _sketch.Segments.Add(
+                        new FakeLine(e.Start.X, e.Start.Y, e.End.X, e.End.Y, construction: true));
+                }
+            }
+            _sketch.CirclePlan = plan;
         }
 
         public CleanupOutcome Abort()

@@ -53,6 +53,20 @@ moment it is resolved in discussion, not before.
 - **Ring split** — a finite-width channel through a nested ring that
   connects its hole to the surrounding space, so the ring no longer forms
   a closed nested profile.
+- **Cell shape** — the per-cell primitive the generator emits (spec #13,
+  ticket #38): **Square** (the grown contour path, default) or **Circle**
+  (one true circle dot per emitted cell, delivered as a `QrCirclePlan`
+  for the host's native linear pattern — ticket #39). Canonical codes:
+  `square`, `circle`.
+- **Dot size** — the Circle shape's parameter: the dot DIAMETER as a
+  percentage of the cell pitch, capped per request so the dot-to-dot gap
+  never falls below the 0.05 mm insertion floor. Under Circle the growth
+  field is inert — dots are already disjoint — and under Square the dot
+  field is inert; inert fields keep their entered text verbatim.
+- **Circle-dot pattern** — the sketch emission the `QrCirclePlan`
+  describes: one seed circle plus a two-directional sketch linear
+  pattern whose non-emitting cells are skipped at create time
+  (docs/PATTERN-SPIKE.md). No contours, no block.
 
 ## SolidWorks
 

@@ -43,5 +43,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// matrix edge, for marking/engraving workflows. Default false.
         /// </summary>
         public bool Invert { get; set; }
+
+        /// <summary>
+        /// The per-cell primitive (spec #13, ticket #38) —
+        /// <see cref="QrCellShape.Square"/>, the grown contour output and the
+        /// default, or <see cref="QrCellShape.Circle"/>, one real circle dot
+        /// per emitted cell delivered as a <see cref="QrCirclePlan"/> for the
+        /// host's native linear-pattern emitter. Default Square — identical
+        /// requests stay byte-identical to the historical output.
+        /// </summary>
+        public QrCellShape CellShape { get; set; } = QrCellShape.Square;
+
+        /// <summary>
+        /// The shape's one parameter — under Circle the dot DIAMETER as a
+        /// fraction of cell pitch, bounded per request so the delivered
+        /// dot-to-dot gap stays at or above the insertion floor
+        /// (docs/INSERTION-GUARD.md). Inert under Square — the value is
+        /// carried, never consulted.
+        /// </summary>
+        public double CellShapeParameter { get; set; }
     }
 }

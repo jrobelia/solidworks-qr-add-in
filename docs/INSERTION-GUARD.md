@@ -12,6 +12,7 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 | `MinGridFeatureUnits` | 10 units | Clipper2 integer imprecision is ±1 unit and edges under ~2 units can be dropped; 10 units keeps every feature ≥10× above that noise floor. |
 | `MinInsertableFeatureMm` | 0.05 mm | ~5000× above SolidWorks' ~1e-5 mm zero-length tolerance; the fixed 25 mm/3% request clears it with >20× margin on the *delivered* minimum edge (1.116 mm). |
 | `SizeToleranceMm` | 1e-6 mm | Declared tolerance on the final grown outline width; actual conversion error is ~1e-13 mm (pure affine map of integers). |
+| `MaxSegmentCount` | 4 400 segments | Sketch-edit-responsiveness ceiling on the delivered contour set (spec-13 tickets #35/#36, ported by #38). Measured live: the 7 722-segment disjoint-dots rung took ≈50.6 s to insert and ≈103 s to region-solve — past the wall; 4 400 sits just above the largest live-proven square insert (~4 000 segments, ≈6.1 s). Circle-cell output emits a dot pattern, not segments, so it never pays this budget. |
 
 ## What is guarded
 
@@ -28,6 +29,14 @@ Constants live in `src/SolidWorksQrAddIn.Core/Geometry/QrInsertionGuard.cs`:
 - **Contour validity**: zero area, zero-length edges, self-intersections, and
   residual corner-only contacts reject (`InvalidGeometry`) before any host
   mutation.
+- **Segment ceiling**: the flattened post-union contour total is counted
+  before the quadratic self-intersection sweep; `> 4 400` rejects
+  (`TooManySegments`) so a refused request never pays the O(n²) check.
+- **Circle dot bounds** (spec #13, ticket #38): under the Circle cell shape
+  the dots are disjoint by construction and carry no contour machinery — the
+  guard reduces to the per-request dot-size cap `f < 1 − 0.05/pitch`
+  (dot-to-dot gap ≥ 0.05 mm) plus the same 0.05 mm floor on the dot diameter
+  itself; both reject as `InvalidShapeParameter` before any host mutation.
 
 ## Tested range — payload `SW-QR-MVP` (version 1, N = 21)
 
