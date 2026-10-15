@@ -13,6 +13,17 @@ host-sketch entities).
 
 ## What the sketch contains after create
 
+Each construction square emits as one `CreateCornerRectangle` — the
+canonical rectangle primitive, four construction edges sharing ONE sketch
+point per corner (the genuinely closed profile the UI rectangle tool
+produces). Per-edge `CreateLine` never merges endpoints — it left two
+stacked sketch points at every corner, so a corner grab (the seed-offset
+dims' corner point, the dimensionless coincident binds below) held only
+one of the two edges meeting there — the PR-#43 QA defect. The returned
+segments carry no contractual order, so the emitter re-orders them into
+the square's canonical loop order by bound (`QrSquareEdges.OrderFor`):
+bottom = the horizontal edge at min-Y, left = the vertical at min-X.
+
 All inside one open sketch, created in this order (dims number `D1..` in
 creation order — a typical N=21 sketch looks exactly like this):
 
@@ -71,7 +82,9 @@ driving dim — is reachable as a transformation, not a second emission:
    remaining constraints/geometry).
 2. Coincident-bind the QR square's corner sketch points to the part's
    vertices (`GetSketchPoints()` + `ISketchPoint.Select4`, then
-   `SketchAddConstraints("sgCOINCIDENT")` — PAT6).
+   `SketchAddConstraints("sgCOINCIDENT")` — PAT6). Each corner is the
+   single sketch point the closed rectangle's two edges share, so one
+   bind constrains both edges meeting there.
 3. Re-point the **two spacing equations only** at the part's driving
    dim: `"D5" = "D1@PlateSketch"/N`, `"D6" = "D1@PlateSketch"/N`.
    Diameter, seed offsets and both quiet-zone dims all follow through
