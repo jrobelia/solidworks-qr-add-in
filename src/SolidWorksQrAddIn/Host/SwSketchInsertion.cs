@@ -289,8 +289,11 @@ namespace SolidWorksQrAddIn.Host
         ///      everything on exit;
         ///   2. the staged construction squares land as PLAIN construction
         ///      sketch entities — circle mode has no block definition to
-        ///      carry them — keeping the drawn edges per role: the #40
-        ///      dimensions hang on them;
+        ///      carry them — drawn as CreateCornerRectangle closed
+        ///      profiles (one merged sketch point per corner; the PR-#43
+        ///      QA defect was per-edge CreateLine's stacked endpoints),
+        ///      keeping the drawn edges per role: the #40 dimensions hang
+        ///      on them;
         ///   3. the master-geometry dimensions (ticket #40, PAT4/PAT7): one
         ///      DRIVING dim on the QR square's bottom edge (the user-facing
         ///      resize handle, "D_box"), then the keep-out square's offset
@@ -350,9 +353,14 @@ namespace SolidWorksQrAddIn.Host
             //    before the seed so the pattern step's selection state is
             //    only ever the seed circle. The drawn edges are kept per
             //    role: the master-geometry dimensions reference them.
+            //    The CLOSED draw (CreateCornerRectangle — one merged corner
+            //    point per square corner) is required here: the corner
+            //    sketch points are what the seed-offset dims and the PAT6
+            //    coincident binds grab, and per-edge CreateLine leaves two
+            //    stacked endpoints at every corner (the PR-#43 QA defect).
             var qrEdges = new List<ISketchSegment>();
             var keepEdges = new List<ISketchSegment>();
-            DrawConstructionSquares((role, segment) =>
+            DrawConstructionSquaresClosed((role, segment) =>
                 (role == QrSquareRole.QrSquare ? qrEdges : keepEdges).Add(segment));
             double qrMin = 0, keepMin = 0;
             foreach (var square in _stagedSquares)
@@ -799,13 +807,17 @@ namespace SolidWorksQrAddIn.Host
 
         /// <summary>
         /// Draws every staged construction-square edge and flags it
-        /// construction — the loop both realize paths share: the block path
-        /// folds the segments into the definition, the circle path buckets
-        /// them by role for the master-dim wiring; <paramref name="sink"/>
-        /// collects each drawn segment with its square's role. A swallowed
-        /// flag failure would land the square as SOLID geometry — profile
-        /// content that feeds extrudes — so it propagates honestly and the
-        /// abort path owns the partial sketch.
+        /// construction — the BLOCK path's square loop (the circle path
+        /// draws closed rectangles instead — see
+        /// <see cref="DrawConstructionSquaresClosed"/>): per-edge
+        /// CreateLine is what folds into the definition byte-identically,
+        /// and the unclosed corner endpoints never matter inside a block —
+        /// the instance renders the definition, no host dim or constraint
+        /// touches its corners. <paramref name="sink"/> collects each
+        /// drawn segment with its square's role. A swallowed flag failure
+        /// would land the square as SOLID geometry — profile content that
+        /// feeds extrudes — so it propagates honestly and the abort path
+        /// owns the partial sketch.
         /// </summary>
         private void DrawConstructionSquares(Action<QrSquareRole, ISketchSegment> sink)
         {
@@ -833,9 +845,124 @@ namespace SolidWorksQrAddIn.Host
         }
 
         /// <summary>
+        /// The circle path's construction-square draw — one
+        /// ISketchManager.CreateCornerRectangle per staged square: the
+        /// canonical rectangle primitive (the UI rectangle tool's own
+        /// emission) whose four edges SHARE corner sketch points, so the
+        /// square lands as a genuinely closed profile. Per-edge CreateLine
+        /// — still what the block path draws, unchanged — leaves TWO
+        /// stacked endpoints at every corner: SolidWorks never merges the
+        /// endpoints of separately created lines, so the unclosed square
+        /// was not a rigid profile and each corner grab (the seed-offset
+        /// dims' corner point, the PAT6 coincident binds) held only one of
+        /// the two edges meeting there — the PR-#43 QA defect.
+        /// The rectangle's returned segments carry no contractual order —
+        /// <paramref name="sink"/> receives them in the square's canonical
+        /// edge order (<see cref="QrConstructionSquare.Edges"/>: bottom,
+        /// right, top, left), matched by bound via
+        /// <see cref="QrSquareEdges.OrderFor"/>, so the dim wiring's index
+        /// roles are exactly the line-drawn ones. A swallowed flag failure
+        /// would land the square as SOLID profile geometry, so it
+        /// propagates honestly like the shared loop's.
+        /// </summary>
+        private void DrawConstructionSquaresClosed(
+            Action<QrSquareRole, ISketchSegment> sink)
+        {
+            var squareIndex = 0;
+            foreach (var square in _stagedSquares)
+            {
+                squareIndex++;
+                string label = square.Role == QrSquareRole.QrSquare
+                    ? "QR square" : "keep-out square";
+                double minX = double.MaxValue, minY = double.MaxValue;
+                double maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var v in square.Vertices)
+                {
+                    minX = Math.Min(minX, v.X); minY = Math.Min(minY, v.Y);
+                    maxX = Math.Max(maxX, v.X); maxY = Math.Max(maxY, v.Y);
+                }
+                object? raw = null;
+                try
+                {
+                    raw = _mgr.CreateCornerRectangle(
+                        minX, minY, 0.0, maxX, maxY, 0.0);
+                }
+                catch (Exception ex)
+                {
+                    throw new SketchInsertionException(
+                        $"CreateCornerRectangle failed for the {label} " +
+                        $"(square {squareIndex}): {ex.Message}", ex);
+                }
+                var segments = new List<ISketchSegment>(4);
+                if (raw is object[] returned)
+                    foreach (var o in returned)
+                        if (o is ISketchSegment s)
+                            segments.Add(s);
+                if (segments.Count != 4)
+                    throw new SketchInsertionException(
+                        $"CreateCornerRectangle returned {segments.Count} segments " +
+                        $"for the {label} (square {squareIndex}), not the " +
+                        "rectangle's four.");
+                var observed = new List<SketchEdge>(4);
+                foreach (var s in segments)
+                    observed.Add(ObservedEdge(s, label, squareIndex));
+                // Quarter-side tolerance: the endpoints read back exactly the
+                // staged vertices, and no two sides sit closer than a side.
+                var order = QrSquareEdges.OrderFor(
+                    square, observed, (maxX - minX) * 0.25);
+                if (order == null)
+                    throw new SketchInsertionException(
+                        $"The {label}'s rectangle returned an edge set that is " +
+                        $"not the square's four sides (square {squareIndex}) — " +
+                        "the dim wiring cannot identify the bottom/left edges.");
+                foreach (int idx in order)
+                {
+                    var segment = segments[idx];
+                    try { segment.ConstructionGeometry = true; }
+                    catch (Exception ex)
+                    {
+                        throw new SketchInsertionException(
+                            "The construction-geometry flag could not be applied " +
+                            $"to the {label} (square {squareIndex}): {ex.Message}",
+                            ex);
+                    }
+                    sink(square.Role, segment);
+                }
+            }
+        }
+
+        /// <summary>
+        /// One returned rectangle edge as a <see cref="SketchEdge"/> for the
+        /// side matching — endpoints live on the ISketchLine sibling
+        /// interface (GetStartPoint2/GetEndPoint2; ISketchSegment carries
+        /// none).
+        /// </summary>
+        private static SketchEdge ObservedEdge(
+            ISketchSegment segment, string label, int squareIndex)
+        {
+            try
+            {
+                if (segment is ISketchLine line &&
+                    line.GetStartPoint2() is ISketchPoint a &&
+                    line.GetEndPoint2() is ISketchPoint b)
+                    return new SketchEdge(
+                        new SketchPoint2(a.X, a.Y), new SketchPoint2(b.X, b.Y));
+            }
+            catch (Exception ex)
+            {
+                throw new SketchInsertionException(
+                    $"A returned edge of the {label} (square {squareIndex}) " +
+                    $"could not be read for the side matching: {ex.Message}", ex);
+            }
+            throw new SketchInsertionException(
+                $"A returned edge of the {label} (square {squareIndex}) " +
+                "exposed no endpoints.");
+        }
+
+        /// <summary>
         /// One CreateLine + error wrap for the staged-edge draw — shared by
-        /// the contour loop and both square loops so every staged edge
-        /// lands the same way and fails the same way.
+        /// the contour loop and the block path's square loop so every
+        /// staged edge lands the same way and fails the same way.
         /// </summary>
         private ISketchSegment DrawSketchEdge(
             double x1, double y1, double x2, double y2, string what, string which)

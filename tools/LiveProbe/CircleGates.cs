@@ -27,6 +27,9 @@ namespace SolidWorksQrAddIn.LiveProbe
     ///   census      — real ARC entities, arcs == regions == emitted dots,
     ///                 plus the exact centre set: every emitted cell
     ///                 resolved one-to-one, every skipped cell absent;
+    ///                 and the two construction squares genuinely closed
+    ///                 (one merged sketch point per corner, not two
+    ///                 stacked endpoints — the PR-#43 QA defect);
     ///   extrude     — dot sketch regions object-selected inside retained
     ///                 cells feed FeatureExtrusion3; under invert the same
     ///                 dots feed a Cut-Extrude (Dir=true, the
@@ -239,11 +242,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // GetSpecificFeature2 exposes the same in-edit sketch.
                 var skObjA = FindSketchFeature(docA, skA)?.GetSpecificFeature2() as ISketch;
                 CheckCentreCensus("open-sketch centres (A)", skObjA, plan);
+                CheckClosedSquares("open-sketch squares (A)", skObjA, plan);
                 mgrA.InsertSketch(false);
                 var cenC = ParseCensus(probe.PatternCensusProbe(skA));
                 CheckCensus("committed census (A)", cenC, plan, expectedLines: 10);
                 skObjA = FindSketchFeature(docA, skA)?.GetSpecificFeature2() as ISketch;
                 CheckCentreCensus("committed centres (A)", skObjA, plan);
+                CheckClosedSquares("committed squares (A)", skObjA, plan);
 
                 // Region objects: emitting cells carry a circle-bounded
                 // region that object-selects; skipped cells carry none.
@@ -552,6 +557,46 @@ namespace SolidWorksQrAddIn.LiveProbe
             Check(v.ForbiddenPresent == 0,
                 $"every skipped cell is absent ({tag})",
                 $"present={v.ForbiddenPresent} skipped={plan.SkippedCount}");
+        }
+
+        /// <summary>
+        /// The construction squares must be genuinely CLOSED profiles —
+        /// drawn as one CreateCornerRectangle each, a square shares a
+        /// single sketch point at every corner (4 points over 4 edges);
+        /// per-edge CreateLine leaves two stacked endpoints per corner
+        /// (8 points) — the spec-#13 QA defect (PR #43): the corner grab
+        /// in DimBetweenPoints and the PAT6 coincident binds then hold
+        /// only one of the two edges meeting there. The check counts the
+        /// sketch points sitting on each square's four corner positions —
+        /// exactly one each. Corners sit half a cell outside the pattern
+        /// grid (keep-out) or on cell boundaries (QR), so no other sketch
+        /// point (dot centres, skipped-cell slots, direction-line ends)
+        /// lands within the quarter-pitch tolerance.
+        /// </summary>
+        private static void CheckClosedSquares(string tag, ISketch? sk, QrCirclePlan plan)
+        {
+            var pts = new List<SketchPoint2>();
+            if (sk?.GetSketchPoints() is object[] raw)
+                foreach (var po in raw)
+                    if (po is ISketchPoint p)
+                        pts.Add(new SketchPoint2(p.X, p.Y));
+            double tol = plan.PitchM * 0.25;
+            foreach (var (label, half) in new[]
+                     {
+                         ("QR square", plan.DataCells * plan.PitchM / 2.0),
+                         ("keep-out square", plan.CellsPerSide * plan.PitchM / 2.0),
+                     })
+            {
+                int cornerPoints = 0;
+                foreach (var (cx, cy) in new[]
+                         { (-half, -half), (+half, -half), (+half, +half), (-half, +half) })
+                    cornerPoints += pts.Count(p =>
+                        Math.Abs(p.X - cx) <= tol && Math.Abs(p.Y - cy) <= tol);
+                Check(cornerPoints == 4,
+                    $"{label} corners are one merged sketch point each ({tag})",
+                    $"cornerPoints={cornerPoints}/4 " +
+                    $"(2x = the unclosed stacked-endpoint defect) pts={pts.Count}");
+            }
         }
 
         /// <summary>The census assertions every committed circle sketch must meet.</summary>

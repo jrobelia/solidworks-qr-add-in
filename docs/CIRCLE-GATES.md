@@ -12,6 +12,14 @@ Ran live against the deployed build (`%LOCALAPPDATA%\SolidWorksQrAddIn`)
 on SolidWorks 2023 SP5 (revision 31.5.0) with no prior `SLDWORKS.exe`
 running. Exit code 0; final line `# CIRCLES ALL PASSED`.
 
+Re-run on `fix/square-corner-coincidence` (PR-#43 QA fix): the circle
+path's construction squares are now emitted as `CreateCornerRectangle`
+closed profiles — four edges sharing one sketch point per corner — instead
+of four per-edge `CreateLine` calls whose corner endpoints never merged.
+Gate 2 gained the proof: each square's four corners hold exactly one
+sketch point (two stacked endpoints would count eight). Same exit code 0;
+`# CIRCLES ALL PASSED`.
+
 Fixture: payload `SW-QR-MVP` @ 25 mm, ECC M, dot 90% → N=21, M=29 working
 matrix, pitch 1.1905 mm, dot Ø 1.0714 mm — **228 emitted dots / 213
 skipped cells** normal, **613 emitted / 228 skipped** inverted.
@@ -21,7 +29,7 @@ skipped cells** normal, **613 emitted / 228 skipped** inverted.
 | Gate | What it proves | Result |
 |---|---|---|
 | 1 plumbing | Session defaults square/normal; unknown shape refused; field setters apply + report `INVALID EmptyContent` pre-content and `VALID dots=…` post-content; param/invert round-trips | PASS (16/16) |
-| 2 census | arcs == regions == emitted (228), open-sketch AND committed; every emitted cell resolves one centre, no strays, every skipped cell absent; dot regions object-select; skipped cells carry no dot region | PASS (20/20) |
+| 2 census | arcs == regions == emitted (228), open-sketch AND committed; every emitted cell resolves one centre, no strays, every skipped cell absent; **both construction squares closed — one sketch point per corner** (open-sketch AND committed); dot regions object-select; skipped cells carry no dot region | PASS (24/24) |
 | 3 dims | 8 equations installed; `D1` master 25 mm → 50 mm rescale drives spacing/diameter/quiet-box; measured dot field doubles (23.81 → 47.62 mm) | PASS (10/10) |
 | 4 orphans | User-side `EditDelete` orphans 8 `D@Sketch1` equations; the next create's start-purge succeeds, leaving exactly the new sketch's 8 | PASS (5/5) |
 | 5 extrude | 3 dot regions object-selected → `Boss-Extrude1` | PASS (2/2) |
@@ -38,12 +46,12 @@ skipped cells** normal, **613 emitted / 228 skipped** inverted.
 
 | Phase | Time |
 |---|---|
-| Session set + validate | 0.016 s |
-| Create (full round trip) | **90.7 s** |
-| Committed region solve | 53.5 s (3 579 regions) |
-| Edit re-enter + re-solve | 0.9 s + **77.9 s** |
-| Master rescale (D1 ×1.5) | 2.0 s |
-| Census read | 27.2 s |
+| Session set + validate | 0.018 s |
+| Create (full round trip) | **91.9 s** |
+| Committed region solve | 54.3 s (3 579 regions) |
+| Edit re-enter + re-solve | 0.9 s + **78.9 s** |
+| Master rescale (D1 ×1.5) | 2.2 s |
+| Census read | 26.9 s |
 
 Over-bound rung `v14-invert k=332 → 3 872 dots`: `INVALID
 TooManyInstances` on the session and `ERROR` on create — refused before
@@ -121,9 +129,11 @@ each class:
 ## Headless evidence
 
 - `dotnet build SolidWorksQrAddIn.sln -c Release` — 0 warnings, 0 errors.
-- `dotnet test tests\SolidWorksQrAddIn.Tests` — **567 passed** (added
+- `dotnet test tests\SolidWorksQrAddIn.Tests` — **577 passed** (added
   `An_arc_centre_on_a_skipped_cell_fails_the_census` and re-pointed the
-  skipped-cell point test at the measured behaviour).
+  skipped-cell point test at the measured behaviour; the PR-#43 fix added
+  `QrSquareEdgesTests` — 10 cases covering the rectangle-segment →
+  bottom/right/top/left matching that wires the master dims).
 
 To re-run: close SolidWorks, `sync-dev-deploy.ps1`, then
 
