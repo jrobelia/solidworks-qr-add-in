@@ -117,6 +117,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBlock _sizeLabel;
         private HostLengthUnit _sizeInputUnit;
         private readonly TextBox _growthBox;
+        private readonly TextBlock _growthLabel;
         private readonly ComboBox _shapeCombo;
         private readonly TextBlock _shapeParamLabel;
         private readonly TextBox _shapeParamBox;
@@ -203,16 +204,17 @@ namespace SolidWorksQrAddIn.UI
             };
             panel.Children.Add(_sizeBox);
 
-            panel.Children.Add(new TextBlock
+            _growthLabel = new TextBlock
             {
                 Text = "Cell growth per side (% of cell width):",
                 Margin = new Thickness(0, 8, 0, 4),
-            });
+            };
+            panel.Children.Add(_growthLabel);
             _growthBox = new TextBox
             {
                 ToolTip = "Widens each dark cell on all sides by this percentage of " +
                           "the cell spacing, helping diagonally touching cells connect. " +
-                          "The QR code size stays fixed. Disabled under Circle — " +
+                          "The QR code size stays fixed. Hidden under Circle — " +
                           "dot cells are already disjoint; the dot size below is " +
                           "their only sizing knob.",
             };
@@ -221,7 +223,7 @@ namespace SolidWorksQrAddIn.UI
             // The cell-shape selector (spec #13, ticket #38): a discrete
             // two-option dropdown — a committed pick pushes into the
             // session immediately like the ECC selector. The dot-size field
-            // below and the growth field above trade which one is enabled:
+            // below and the growth field above trade which one is shown:
             // growth is inert under Circle, dot size is inert under Square —
             // both keep their entered text verbatim either way.
             panel.Children.Add(new TextBlock
@@ -253,7 +255,7 @@ namespace SolidWorksQrAddIn.UI
             _shapeParamBox = new TextBox
             {
                 ToolTip = "The dot diameter as a percentage of the cell pitch — " +
-                          "Circle cells only; the field is inert (disabled) " +
+                          "Circle cells only; the field is hidden " +
                           "under Square. Dots must stay disjoint: the value is " +
                           "capped per request so the dot-to-dot gap never falls " +
                           "below the insertion floor.",
@@ -778,14 +780,19 @@ namespace SolidWorksQrAddIn.UI
             _contentLabel.Text = _session.ContentPresetId == PayloadComposer.DefaultPresetId
                 ? "Text or URL (encoded exactly as entered):"
                 : _session.CurrentPreset.DisplayName + " payload (editable verbatim):";
-            // Inert-field disablement (spec #13, ticket #38): under Circle
-            // the growth box greys out (its text is kept verbatim, never
-            // consulted); under Square the dot-size box is the inert one.
-            // Disabled inputs still SHOW the session's text — an inert
-            // field's entered value is never hidden or cleared.
-            _growthBox.IsEnabled = _session.GrowthApplies;
+            // Inert-field hiding (spec #13, ticket #38): under Circle the
+            // growth field is gone; under Square the dot-size field is.
+            // A hidden field keeps its session text verbatim — re-picking
+            // the shape restores the field with the value as entered.
+            var growthShown = _session.GrowthApplies
+                ? Visibility.Visible : Visibility.Collapsed;
+            _growthLabel.Visibility = growthShown;
+            _growthBox.Visibility = growthShown;
             _shapeParamLabel.Text = _session.ShapeParameterLabel;
-            _shapeParamBox.IsEnabled = _session.ShapeParameterApplies;
+            var paramShown = _session.ShapeParameterApplies
+                ? Visibility.Visible : Visibility.Collapsed;
+            _shapeParamLabel.Visibility = paramShown;
+            _shapeParamBox.Visibility = paramShown;
             FlagPresetFieldError();
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
             RebuildInfoRows();
@@ -862,8 +869,8 @@ namespace SolidWorksQrAddIn.UI
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
                        $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
                        $"viewShape={_shapeCombo.SelectedValue} viewParam={_shapeParamBox.Text} " +
-                       $"viewGrowthEnabled={_growthBox.IsEnabled} " +
-                       $"viewParamEnabled={_shapeParamBox.IsEnabled}";
+                       $"viewGrowthVisible={_growthBox.Visibility == Visibility.Visible} " +
+                       $"viewParamVisible={_shapeParamBox.Visibility == Visibility.Visible}";
             }
         }
 
