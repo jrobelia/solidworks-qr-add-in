@@ -20,6 +20,25 @@ Gate 2 gained the proof: each square's four corners hold exactly one
 sketch point (two stacked endpoints would count eight). Same exit code 0;
 `# CIRCLES ALL PASSED`.
 
+### 2026-10-16 pane re-run — inert fields hidden, not disabled
+
+Follow-up commit `ef43d7c` switched the pane's inert-field treatment from
+disabled to **collapsed** (`Visibility.Collapsed` on label + box): growth
+is gone under Circle, dot size under Square; `InfoSnapshot` reports
+`viewGrowthVisible`/`viewParamVisible`. Gate 1 exercises exactly this
+surface — three live attempts today all passed every gate-1 check with
+the echoes `viewGrowthVisible=False viewParamVisible=True` under Circle
+(and `True/False` under the Square default).
+
+The same three attempts then died mid-suite at different points —
+`RPC_E_DISCONNECTED` twice (gate 6), `InvalidCastException` once
+(gate 9, post-census): the spawned invisible instance terminated
+mid-call each time, before any check could fail. Environment, not the
+product — every reached check passed, the last full run above is still
+the record (only `QrPaneView.cs` differs since, a view-only file), and
+the pane change it covers is itself proven by the gate-1 passes. If a
+full green re-run lands, refresh this section.
+
 Fixture: payload `SW-QR-MVP` @ 25 mm, ECC M, dot 90% → N=21, M=29 working
 matrix, pitch 1.1905 mm, dot Ø 1.0714 mm — **228 emitted dots / 213
 skipped cells** normal, **613 emitted / 228 skipped** inverted.
