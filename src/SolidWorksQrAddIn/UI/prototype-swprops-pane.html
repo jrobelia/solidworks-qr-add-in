@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE — throwaway. Question: what should the "SW Properties" content
+     type look like in the QR pane? Four structurally different variants of
+     the preset-fields region, switchable via ?variant=A..D or the bottom bar.
+     Mock: pane chrome mimics the WPF task pane; property list + resolution
+     are fake in-page data. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QR pane prototype — SW Properties preset</title>
+<style>
+  :root { --pane-w: 292px; --edge: #adadad; --bg: #f5f5f5; }
+  * { box-sizing: border-box; font-family: "Segoe UI", Tahoma, sans-serif; font-size: 12px; }
+  body { margin: 0; background: #dadada; display: flex; justify-content: center; padding: 24px 0 96px; }
+  .pane { width: var(--pane-w); background: var(--bg); border: 1px solid var(--edge);
+          padding: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  .row { margin: 0 0 6px; }
+  label.cap { display: block; margin-bottom: 2px; color: #222; }
+  select, input[type=text], textarea { width: 100%; border: 1px solid var(--edge); padding: 3px 4px;
+          background: #fff; }
+  textarea { resize: vertical; font-family: Consolas, monospace; }
+  .presetfields { margin-bottom: 6px; }
+  .btnrow { display: flex; gap: 6px; margin-top: 8px; }
+  button { flex: 1; padding: 4px 0; border: 1px solid var(--edge); background: #e1e1e1; cursor: pointer; }
+  button:hover { background: #e5f1fb; border-color: #0078d7; }
+  .grey { opacity: .55; }
+  fieldset { border: 1px solid var(--edge); margin: 0 0 6px; padding: 6px; }
+  legend { padding: 0 4px; color: #444; }
+  .resolved { font-family: Consolas, monospace; }
+  .err { color: #c00; }
+  .ok { color: #106b10; }
+
+  /* variant B bits */
+  .capline { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 2px; }
+  .capline select { width: 150px; }
+  .echo { margin-top: 3px; padding: 2px 0; border-top: 1px dotted var(--edge); color: #555; word-break: break-all; }
+
+  /* variant C bits */
+  .divider { text-align: center; color: #888; margin: 2px 0; }
+
+  /* variant D bits */
+  .tokmap { border: 1px solid var(--edge); background: #fff; margin-top: 4px; max-height: 120px; overflow: auto; }
+  .tokmap .t { display: flex; justify-content: space-between; padding: 2px 6px; border-bottom: 1px solid #eee; }
+  .tokmap .t:last-child { border-bottom: 0; }
+  .tokmap .tk { font-family: Consolas, monospace; }
+  .tokmap .tv { font-family: Consolas, monospace; color: #555; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* floating switcher */
+  #switcher { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    background: #222; color: #eee; border-radius: 20px; padding: 8px 14px; display: flex;
+    gap: 12px; align-items: center; box-shadow: 0 3px 10px rgba(0,0,0,.4); z-index: 9;
+    font-size: 13px; }
+  #switcher button { background: #444; color: #eee; border: 0; border-radius: 14px;
+    width: 28px; height: 28px; flex: none; font-size: 14px; }
+  #switcher button:hover { background: #0078d7; }
+  #switcher .vname { min-width: 190px; text-align: center; }
+  .hint { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%); color: #777; }
+</style>
+</head>
+<body>
+
+<div class="pane">
+  <div class="row">
+    <label class="cap">Content type:</label>
+    <select id="preset">
+      <option value="raw">Raw text</option>
+      <option value="url">URL</option>
+      <option value="wifi">WiFi</option>
+      <option value="contact">Contact (vCard)</option>
+      <option value="mail">E-mail</option>
+      <option value="sms">SMS</option>
+      <option value="phone">Phone call</option>
+      <option value="geo">Geolocation</option>
+      <option value="swprops" selected>SW Properties</option>
+    </select>
+  </div>
+  <div class="presetfields" id="presetFields"></div>
+
+  <div class="row grey"><label class="cap">QR code size (mm):</label><input type="text" value="25" disabled></div>
+  <div class="row grey"><label class="cap">Cell shape:</label><select disabled><option>Square</option><option>Circle</option></select></div>
+  <div class="row grey"><label class="cap">Growth (% of cell):</label><input type="text" value="3" disabled></div>
+  <div class="row grey"><label class="cap">Error correction:</label><select disabled><option>M</option></select></div>
+  <div class="row grey"><label><input type="checkbox" disabled> Invert (light code on dark)</label></div>
+  <div class="btnrow"><button disabled>Preview</button><button disabled>Create</button></div>
+</div>
+
+<div class="hint">← / → or the bar flips variants · ?variant=A…D</div>
+<div id="switcher">
+  <button id="prev">‹</button>
+  <span class="vname" id="vname"></span>
+  <button id="next">›</button>
+</div>
+
+<script>
+// ---- fake part properties (would come from CustomPropertyManager) ----
+const PROPS = [
+  { name: "PartNo",       value: "12345-B" },
+  { name: "Revision",     value: "C" },
+  { name: "Description",  value: "Mounting bracket" },
+  { name: "Material",     value: "6061-T6" },
+  { name: "DrawnBy",      value: "JRB" },
+  { name: "Vendor",       value: "" },                       // empty -> error path
+];
+const propVal = n => { const p = PROPS.find(p => p.name === n); return p ? p.value : null; };
+
+// ---- $PRP resolver (mirrors the spec: name the offender, fail hard) ----
+function resolveTemplate(t) {
+  const tokens = [...t.matchAll(/\$PRP:"([^"]+)"/g)].map(m => m[1]);
+  let out = t, bad = null;
+  for (const name of tokens) {
+    const v = propVal(name);
+    if (v === null)      { bad = `unknown property '${name}'`; break; }
+    if (v === "")        { bad = `property '${name}' is empty`;  break; }
+    out = out.split(`$PRP:"${name}"`).join(v);
+  }
+  const leftover = out.match(/\$PRP:"([^"]+)"/);            // e.g. typo'd name not in list
+  if (!bad && leftover) bad = `unknown property '${leftover[1]}'`;
+  return { text: out, error: bad, tokens };
+}
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+const ph = "(insert part property…)";
+const propOptions = () => `<option value="">${ph}</option>` +
+  PROPS.map(p => `<option value="${esc(p.name)}">${esc(p.name)}${p.value === "" ? "  (empty)" : ""}</option>`).join("");
+
+function insertAtCaret(area, text) {
+  const s = area.selectionStart ?? area.value.length;
+  area.value = area.value.slice(0, s) + text + area.value.slice(area.selectionEnd ?? s);
+  area.selectionStart = area.selectionEnd = s + text.length;
+  area.focus();
+}
+function wireInsert(ddId, areaId, onChange) {
+  const dd = document.getElementById(ddId), area = document.getElementById(areaId);
+  dd.addEventListener("change", () => {
+    if (!dd.value) return;
+    insertAtCaret(area, `$PRP:"${dd.value}"`);
+    dd.value = "";
+    onChange();
+  });
+  area.addEventListener("input", onChange);
+}
+function resolvedLine(t) {
+  const r = resolveTemplate(t);
+  return r.error ? `<span class="err">${esc(r.error)}</span>`
+                 : `<span class="ok">${esc(r.text) || "(empty)"}</span>`;
+}
+
+// ---------------- variants ----------------
+const VARIANTS = {
+  A: {
+    name: "A (Grouped composer)",
+    render: () => `
+      <fieldset>
+        <legend>Template</legend>
+        <div class="row"><select id="propdd">${propOptions()}</select></div>
+        <div class="row"><textarea id="tpl" rows="3">PART-$PRP:"PartNo"-$PRP:"Revision"</textarea></div>
+        <div class="row"><label class="cap">Resolved:</label>
+          <input type="text" id="res" class="resolved" readonly style="background:#f8f8f8"></div>
+      </fieldset>`,
+    wire: () => {
+      const upd = () => {
+        const r = resolveTemplate(document.getElementById("tpl").value);
+        const res = document.getElementById("res");
+        res.value = r.error ? "ERR: " + r.error : r.text;
+        res.style.color = r.error ? "#c00" : "#106b10";
+      };
+      wireInsert("propdd", "tpl", upd); upd();
+    }
+  },
+  B: {
+    name: "B (Compact inline)",
+    render: () => `
+      <div class="row">
+        <div class="capline"><label class="cap" style="margin:0">Template:</label>
+          <select id="propdd">${propOptions()}</select></div>
+        <textarea id="tpl" rows="3">PART-$PRP:"PartNo"-$PRP:"Revision"</textarea>
+        <div class="echo resolved" id="res"></div>
+      </div>`,
+    wire: () => {
+      const upd = () => document.getElementById("res").innerHTML =
+        "→ " + resolvedLine(document.getElementById("tpl").value);
+      wireInsert("propdd", "tpl", upd); upd();
+    }
+  },
+  C: {
+    name: "C (Before/after split)",
+    render: () => `
+      <div class="row"><label class="cap">Template:</label>
+        <textarea id="tpl" rows="2">PART-$PRP:"PartNo"-$PRP:"Revision"</textarea></div>
+      <div class="row"><select id="propdd">${propOptions()}</select></div>
+      <div class="divider">▼ resolves to ▼</div>
+      <div class="row"><label class="cap">Encoded payload:</label>
+        <textarea id="res" rows="2" class="resolved" readonly style="background:#f8f8f8"></textarea></div>`,
+    wire: () => {
+      const upd = () => {
+        const r = resolveTemplate(document.getElementById("tpl").value);
+        const res = document.getElementById("res");
+        res.value = r.error ? "ERR: " + r.error : r.text;
+        res.style.color = r.error ? "#c00" : "#106b10";
+      };
+      wireInsert("propdd", "tpl", upd); upd();
+    }
+  },
+  D: {
+    name: "D (Token checklist)",
+    render: () => `
+      <div class="row"><label class="cap">Template:</label>
+        <textarea id="tpl" rows="3">PART-$PRP:"PartNo"-$PRP:"Revision"</textarea></div>
+      <div class="row"><select id="propdd">${propOptions()}</select></div>
+      <div class="tokmap" id="tokmap"></div>
+      <div class="row" style="margin-top:4px"><label class="cap">Resolved:</label>
+        <input type="text" id="res" class="resolved" readonly style="background:#f8f8f8"></div>`,
+    wire: () => {
+      const upd = () => {
+        const t = document.getElementById("tpl").value;
+        const r = resolveTemplate(t);
+        const map = document.getElementById("tokmap");
+        map.innerHTML = r.tokens.length === 0
+          ? `<div class="t"><span class="tv">no $PRP tokens</span></div>`
+          : r.tokens.map(n => {
+              const v = propVal(n);
+              const s = v === null ? `<span class="err">unknown</span>`
+                      : v === ""   ? `<span class="err">empty</span>`
+                      : `<span class="ok">✓</span>`;
+              return `<div class="t"><span class="tk">$PRP:"${esc(n)}"</span>` +
+                     `<span class="tv">${s} ${v === null || v === "" ? "" : esc(v)}</span></div>`;
+            }).join("");
+        const res = document.getElementById("res");
+        res.value = r.error ? "ERR: " + r.error : r.text;
+        res.style.color = r.error ? "#c00" : "#106b10";
+      };
+      wireInsert("propdd", "tpl", upd); upd();
+    }
+  },
+};
+
+// ---------------- switcher + preset plumbing ----------------
+const params = new URLSearchParams(location.search);
+let cur = params.get("variant") || "A";
+if (!VARIANTS[cur]) cur = "A";
+
+function applyVariant() {
+  document.getElementById("vname").textContent = VARIANTS[cur].name;
+  const p = document.getElementById("preset");
+  if (p.value === "swprops") renderPresetFields();
+}
+function renderPresetFields() {
+  const host = document.getElementById("presetFields");
+  const p = document.getElementById("preset");
+  if (p.value === "swprops") {
+    host.innerHTML = VARIANTS[cur].render();
+    VARIANTS[cur].wire();
+  } else {
+    // stub other presets so context switching is visible
+    host.innerHTML = p.value === "raw"
+      ? `<div class="row grey"><label class="cap">Content:</label><textarea rows="3" disabled>raw text payload…</textarea></div>`
+      : `<div class="row grey"><label class="cap">${p.options[p.selectedIndex].text}:</label><input type="text" disabled value="(preset fields)"></div>`;
+  }
+}
+function go(v) {
+  cur = v;
+  const u = new URL(location); u.searchParams.set("variant", v);
+  history.replaceState(null, "", u);
+  applyVariant();
+}
+document.getElementById("prev").onclick = () => go(String.fromCharCode(65 + (cur.charCodeAt(0) - 65 + 3) % 4));
+document.getElementById("next").onclick = () => go(String.fromCharCode(65 + (cur.charCodeAt(0) - 65 + 1) % 4));
+document.addEventListener("keydown", e => {
+  const f = document.activeElement;
+  if (f && (f.tagName === "INPUT" || f.tagName === "TEXTAREA" || f.isContentEditable)) return;
+  if (e.key === "ArrowLeft") document.getElementById("prev").click();
+  if (e.key === "ArrowRight") document.getElementById("next").click();
+});
+document.getElementById("preset").addEventListener("change", renderPresetFields);
+
+applyVariant(); renderPresetFields();
+</script>
+</body>
+</html>
