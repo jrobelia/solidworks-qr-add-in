@@ -58,7 +58,9 @@ namespace SolidWorksQrAddIn.Tests
         public void Only_the_spacing_pair_references_the_master_directly()
         {
             // The dimensionless retarget edits exactly these two lines;
-            // every other dim follows through the spacing names.
+            // every other dim follows through the spacing names. (The
+            // driven-echo alternative was reverted — driven dims lag the
+            // equation pass by one rebuild, live-verified.)
             var eqs = QrCircleEquations.For(Plan(), Scheme());
             int roots = eqs.Count(e => e.Rhs.Contains("\"D1@Sketch7\""));
             Assert.Equal(2, roots);

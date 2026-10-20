@@ -853,13 +853,17 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         // ================= gate 7 — dimensionless end-state =================
         //
-        // docs/CIRCLE-DIMENSIONS.md's manual transition, driven through the
-        // API: delete the QR-square master dim, coincident-bind the square's
-        // corner sketch points to plate vertices (PAT6), then re-point only
-        // the two spacing equations at the plate's driving dim — the rest of
-        // the table follows through the spacing names. Afterwards the plate
-        // dim alone must rescale the whole dot field: no sketch driving dim
-        // remains, which is what "dimensionless" means here.
+        // docs/CIRCLE-DIMENSIONS.md's transition, driven through the API:
+        // delete the QR-square master dim, coincident-bind the square's
+        // corner sketch points to plate vertices (PAT6), then re-point
+        // only the two spacing equations at the plate's driving dim — the
+        // rest of the table follows through the spacing names. (A driven
+        // square-size "echo" dim was tried as the equation root to make
+        // even this unnecessary — reverted after live evidence: driven
+        // dims refresh after the equation pass, so the master rescale
+        // lagged one rebuild behind.) Afterwards the plate dim alone must
+        // rescale the whole dot field: no sketch driving dim remains,
+        // which is what "dimensionless" means here.
 
         private static void CircleGate7_Dimensionless(
             ISldWorks sw, IAddInProbe probe, string template, QrCirclePlan plan,
@@ -990,11 +994,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"spacing=[{string.Join(",", spacingLhs)}] box='{boxRef}'");
                 if (spacingLhs.Count != 2) return;
 
-                // 1. Bind the corners in-edit; the master dim's deletion
-                //    waits for post-commit — the host refuses to delete a
-                //    dimension while equations still reference it (measured
-                //    live: an in-edit EditDelete ran without error yet the
-                //    dim stayed resolvable after the commit).
+                // 1. Bind the corners first. The square over-defines
+                //    transiently (corners pinned to the 60 mm plate while
+                //    the master still drives 25 mm) — tolerated, and the
+                //    master delete below is what resolves the conflict.
                 var boxDim = doc.IParameter(boxRef) as IDimension;
                 string boxFull = "";
                 try { boxFull = boxDim?.FullName ?? ""; } catch { }
@@ -1034,10 +1037,16 @@ namespace SolidWorksQrAddIn.LiveProbe
                     "QR-square corners coincident-bound to plate vertices (PAT6)",
                     $"b1={b1}(near {(near1 < 0 ? "?" : (near1 * 1000).ToString("F3") + "mm")}) " +
                     $"b2={b2}(near {(near2 < 0 ? "?" : (near2 * 1000).ToString("F3") + "mm")})");
+                // A second exit — the add-in's open sketch does not always
+                // exit on the first InsertSketch(false); the delete below
+                // MUST run committed: an in-edit EditDelete ran without
+                // error yet the dim stayed resolvable (measured live,
+                // twice).
                 c.Mgr.InsertSketch(false);
 
                 // 2. Delete the two spacing equations FIRST — they are what
-                //    references the master dim; then the dim deletes.
+                //    references the master dim; the host refuses a dim
+                //    delete while equations still point at it.
                 for (int i = spacingIdx.Count - 1; i >= 0; i--)
                     try { eqm!.Delete(spacingIdx[i]); } catch { }
                 doc.ClearSelection2(true);
@@ -1055,7 +1064,12 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"sel={dimSel} deleted={deleted} " +
                     $"resolved={(doc.IParameter(boxRef) != null)}");
 
-                // 3. Re-point the spacing equations at the plate dim.
+                // 3. Re-point the spacing equations at the plate's driving
+                //    dim — the documented transition step (a driven "echo"
+                //    dim on the square was tried to make even this
+                //    unnecessary; reverted — driven dims lag the equation
+                //    pass by one rebuild, live-verified). Everything else
+                //    in the table follows through the spacing names.
                 int added = 0;
                 foreach (var lhs in spacingLhs)
                     try { if (eqm!.Add(-1, $"\"{lhs}\" = \"{plateEq}\"/{plan.DataCells}") >= 0) added++; }
@@ -1064,6 +1078,19 @@ namespace SolidWorksQrAddIn.LiveProbe
                 try { doc.EditRebuild3(); } catch { }
                 Check(added == 2, "spacing equations retargeted at the plate dim",
                     $"added={added}/2 -> \"{plateEq}\"/{plan.DataCells}");
+
+                // The binds + retarget already read the plate's 60 mm:
+                // spacing = 60/N before the rescale.
+                var bound = ParseDims(probe.PatternDimsProbe(qrName));
+                double boundWant = 60.0 / plan.DataCells;
+                Check(bound != null &&
+                      Math.Abs(DimVal(bound, DimNum(spacingLhs[0])) - boundWant) < 0.02 &&
+                      Math.Abs(DimVal(bound, DimNum(spacingLhs[1])) - boundWant) < 0.02,
+                    "spacing follows the bound square through the plate dim",
+                    bound == null ? "no dims" :
+                        $"{spacingLhs[0]}={DimVal(bound, DimNum(spacingLhs[0])):F4}mm " +
+                        $"{spacingLhs[1]}={DimVal(bound, DimNum(spacingLhs[1])):F4}mm " +
+                        $"want≈{boundWant:F4}mm");
 
                 // 4. Drive the plate 60 → 90 mm; spacing must follow.
                 var setRes = probe.SetPatternDimProbe(plateEq, 0.090);

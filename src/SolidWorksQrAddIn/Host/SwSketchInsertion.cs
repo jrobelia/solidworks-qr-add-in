@@ -509,6 +509,14 @@ namespace SolidWorksQrAddIn.Host
             dims.SeedOffsetY = EqName(soy, sketchName, "seed vertical-offset dimension");
             dims.SeedOffsetYSign = SignOf(soy);
 
+            // 6b. A driven "square-size echo" dim between the square's two
+            //    bottom corners was tried here so equations could root at
+            //    geometry instead of the deletable master — reverted after
+            //    live evidence: driven dims refresh AFTER equations
+            //    evaluate, so every master rescale lagged one rebuild
+            //    behind (docs/CIRCLE-DIMENSIONS.md). Only a driving dim is
+            //    a single-solve equation source.
+
             // 7. The equation table — the proven sequence: IEquationMgr.Add
             //    per entry, then EvaluateAll + EditRebuild3. Every driven
             //    dim funnels through the one master (the box dim): spacing

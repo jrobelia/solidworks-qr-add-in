@@ -60,6 +60,17 @@ drive (spacing follows the plate dim 4.2857 mm after the master
 delete), the gate-9 near-bound rung (3 579 dots, editSolve 79.2 s)
 and the square regression all re-verified on this build.
 
+Second re-run same day after the driven-echo experiment was reverted
+(`docs/CIRCLE-DIMENSIONS.md` records why): **ALL CHECKS PASSED** again.
+Two lessons encoded in gate 7's sequence now — (a) `InsertSketch(false)`
+does not always exit the add-in's open sketch on the first call, so a
+second exit runs after the binds; (b) deleting the master dim while the
+spacing equations still reference it fails silently in-edit
+(`resolved=True` after `deleted=True`). The proven order is binds →
+second exit → delete the two spacing equations → delete the master →
+retarget the spacing equations at the plate dim. Near-bound perf on
+this run: create 94.3 s, committed solve 53.7 s, editSolve 78.3 s.
+
 Fixture: payload `SW-QR-MVP` @ 25 mm, ECC M, dot 90% → N=21, M=29 working
 matrix, pitch 1.1905 mm, dot Ø 1.0714 mm — **228 emitted dots / 213
 skipped cells** normal, **613 emitted / 228 skipped** inverted.

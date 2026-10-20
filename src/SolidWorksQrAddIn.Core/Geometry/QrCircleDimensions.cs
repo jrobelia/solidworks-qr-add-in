@@ -40,12 +40,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///
     /// The whole derived set funnels through ONE master reference —
     /// <see cref="Box"/> is every equation's root (directly for the two
-    /// spacing dims, transitively for everything else). That is what makes
-    /// the dimensionless end-state reachable (docs/CIRCLE-DIMENSIONS.md):
-    /// delete the box dim, constrain the square's corners to part geometry,
-    /// and re-point exactly the two spacing equations at the part's own
-    /// driving dim — diameter, offsets and quiet-zone dims all follow
-    /// (the PAT6 arrangement).
+    /// spacing dims, transitively for everything else). A driven
+    /// "echo" dim on the square was tried as the root so a master delete
+    /// would orphan nothing — reverted after live evidence: SolidWorks
+    /// evaluates equations BEFORE the solve refreshes driven dims, so the
+    /// spacing pair lagged one rebuild behind every master edit (25→50 mm
+    /// left spacing at the old pitch). Only a DRIVING dim is a single-solve
+    /// equation source, and any driving dim is deletable — the
+    /// dimensionless end-state therefore keeps the documented transition
+    /// (docs/CIRCLE-DIMENSIONS.md): delete the box dim, bind the corners to
+    /// part geometry, retarget exactly the two spacing equations at the
+    /// part's driving dim — diameter, offsets and quiet-zone dims all
+    /// follow (the PAT6 arrangement).
     /// </summary>
     public sealed class QrCircleDimScheme
     {

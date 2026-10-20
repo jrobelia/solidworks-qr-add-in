@@ -96,6 +96,18 @@ documented manual/API step for now (the emitter always emits the
 dimensioned state); a dedicated conversion command is out of scope for
 #40 and can ride #42's live-verified surfaces later.
 
+**Why the delete is not automatic (measured live, 2026-10-20).** A driven
+"echo" dimension between the square's two bottom corners was tried as the
+equation root — the equations would then read whatever geometry sizes the
+square after a master delete, no retarget needed. It works, but
+SolidWorks' solve order makes it unusable as a source: **equations
+evaluate before the solve refreshes driven dims**, so every master
+rescale lagged one rebuild behind — `D1` 25→50 mm left spacing at the
+old pitch until a second rebuild. Only a driving dim is a single-solve
+equation source, and any driving dim is deletable; the two-line retarget
+above is the cost of instant live rescale, and retargeting at the plate's
+own driving dim keeps the dimensionless path lag-free too.
+
 ## Probe surface (the #42 live gates)
 
 * `PatternCensusProbe(sketch)` — segment/region census + plan echo
