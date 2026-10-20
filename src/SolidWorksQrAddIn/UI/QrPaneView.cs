@@ -240,10 +240,9 @@ namespace SolidWorksQrAddIn.UI
             _shapeParamBox = new TextBox
             {
                 ToolTip = "The dot diameter as a percentage of the cell pitch — " +
-                          "Circle cells only; the field is hidden " +
-                          "under Square. Dots must stay disjoint: the value is " +
-                          "capped per request so the dot-to-dot gap never falls " +
-                          "below the insertion floor.",
+                          "higher = larger dots. Dots must stay disjoint: the " +
+                          "value is capped per request so the dot-to-dot gap " +
+                          "never falls below the insertion floor.",
             };
             panel.Children.Add(_shapeParamBox);
 
@@ -261,9 +260,7 @@ namespace SolidWorksQrAddIn.UI
             {
                 ToolTip = "Widens each dark cell on all sides by this percentage of " +
                           "the cell spacing, helping diagonally touching cells connect. " +
-                          "The QR code size stays fixed. Hidden under Circle — " +
-                          "dot cells are already disjoint; the dot size above is " +
-                          "their only sizing knob.",
+                          "The QR code size stays fixed.",
             };
             panel.Children.Add(_growthBox);
 
