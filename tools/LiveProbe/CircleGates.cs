@@ -950,6 +950,16 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(qrSketch != null, "the face QR sketch is open for the transition");
                 if (qrSketch == null) return;
 
+                // The create now leaves the sketch in edit — the KeepOpen
+                // contract the user asked for. Exit before the transition:
+                // the coincident binds below run fine on a committed sketch,
+                // but in-edit they over-define the square against the live
+                // master dim — the conflicted exit left the dim undeletable
+                // post-commit (measured live: EditDelete ran, the parameter
+                // still resolved). The committed-sketch order here is the
+                // transition docs/CIRCLE-DIMENSIONS.md prescribes anyway.
+                try { c.Mgr.InsertSketch(false); } catch { }
+
                 // Find the master + spacing names from the installed eqs:
                 // the spacing pair is the only `"D@sk" = "X@sk"/N` form.
                 string qrName = qr;

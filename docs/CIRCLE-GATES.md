@@ -39,6 +39,27 @@ the record (only `QrPaneView.cs` differs since, a view-only file), and
 the pane change it covers is itself proven by the gate-1 passes. If a
 full green re-run lands, refresh this section.
 
+### 2026-10-20 circle create leaves the sketch open — clean full re-run
+
+`RealizeAsCirclePattern` called `EditRebuild3` inside the equation step,
+which exits sketch edit mode (block-spike live proof, `Program.cs`) —
+the circle create committed the sketch while the square path left it
+open for editing. The emitter now re-enters after the census
+(`SelectByID2` by name + `InsertSketch(true)`), restoring KeepOpen's
+contract: the user lands inside the new sketch exactly like square mode.
+
+Gate 7's dimensionless transition was tuned to the committed-sketch
+reality — coincident binds in-edit over-defined the square against the
+live master dim and the conflicted exit left the dim undeletable. The
+gate now exits the fresh sketch before the transition (the order
+`docs/CIRCLE-DIMENSIONS.md` prescribes) — unchanged coverage.
+
+Full `circles` re-run: **ALL CHECKS PASSED**, exit 0. Gate 2's
+open-sketch census, the gate-3 dimension drive, gate-7 dimensionless
+drive (spacing follows the plate dim 4.2857 mm after the master
+delete), the gate-9 near-bound rung (3 579 dots, editSolve 79.2 s)
+and the square regression all re-verified on this build.
+
 Fixture: payload `SW-QR-MVP` @ 25 mm, ECC M, dot 90% → N=21, M=29 working
 matrix, pitch 1.1905 mm, dot Ø 1.0714 mm — **228 emitted dots / 213
 skipped cells** normal, **613 emitted / 228 skipped** inverted.

@@ -598,6 +598,33 @@ namespace SolidWorksQrAddIn.Host
                         "skipped) — skipped instances did not take or dot " +
                         "geometry landed off-plan.");
             }
+
+            // KeepOpen promises the sketch is left in edit mode — but the
+            // equation step's EditRebuild3 EXITS it (live-verified in the
+            // block spike: "EditRebuild3 exits sketch edit mode ... re-enter
+            // first", tools/LiveProbe/Program.cs). The square path never
+            // rebuilds so it stays in edit; re-enter the way the spike did —
+            // select the sketch feature by name, then InsertSketch(true).
+            // Best-effort: a refused re-entry leaves the (fully correct)
+            // sketch closed rather than deleted on a technicality.
+            if (_mgr.ActiveSketch == null)
+            {
+                try { _doc.ClearSelection2(true); } catch { }
+                bool picked = false;
+                if (_ext != null)
+                {
+                    try
+                    {
+                        picked = _ext.SelectByID2(
+                            sketchName, "SKETCH", 0.0, 0.0, 0.0,
+                            false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault);
+                    }
+                    catch { }
+                }
+                if (picked)
+                    try { _mgr.InsertSketch(true); } catch { }
+            }
         }
 
         /// <summary>
