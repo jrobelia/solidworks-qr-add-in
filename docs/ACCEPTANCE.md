@@ -178,7 +178,7 @@ read-back + exact in-plane round-trip). The named-undo gate is a documented
 reports it as a `# LIMITATION` line and asserts the safety invariant (undo
 never removes prior user work) instead.
 
-Then reap the spawned instance if needed: `taskkill /IM SLDWORKS.exe /F`
+Then reap the spawned instance if needed: `taskkill /PID <pid> /F`
 (only ever the instance the run spawned — never an interactive session).
 
 ## F. Performance record — `LiveProbe perf`

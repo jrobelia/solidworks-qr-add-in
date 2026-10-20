@@ -458,7 +458,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -1715,7 +1715,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 

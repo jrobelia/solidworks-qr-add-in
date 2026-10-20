@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Win32;
 using QRCoder;
 using SolidWorksQrAddIn.Core;
 using SolidWorksQrAddIn.Core.Commands;
@@ -77,11 +79,63 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         /// <summary>
         /// true only while the attached instance is a fresh, invisible
-        /// COM-launched one — the only kind it is safe to ExitApp. An
+        /// COM-launched one — the only kind it is safe to kill. An
         /// instance that is already visible (or already holds documents) is
         /// somebody's interactive session: the probe refuses to mutate it.
         /// </summary>
         private static bool _spawnedFresh;
+
+        /// <summary>
+        /// HKCU AddInsStartup\{clsid} value captured at launch. SolidWorks
+        /// rewrites the flag to 0 on every runtime unload, so a probe run
+        /// would silently untick the user's Start-Up checkbox — restored at
+        /// teardown.
+        /// </summary>
+        private static int? _startupFlagAtLaunch;
+        private static bool _startupFlagCaptured;
+
+        private static readonly string StartupFlagKey =
+            @"HKEY_CURRENT_USER\" + AddinIdentity.AddinsStartupKeyPath + @"\" + AddinIdentity.Clsid;
+
+        private static void CaptureStartupFlag()
+        {
+            if (_startupFlagCaptured) return;   // first attach wins — a later one
+            _startupFlagCaptured = true;        // could read our own unload's 0
+            try
+            {
+                if (Registry.GetValue(StartupFlagKey, "", null) is int v)
+                    _startupFlagAtLaunch = v;
+            }
+            catch { }
+        }
+
+        private static void RestoreStartupFlag()
+        {
+            if (_startupFlagAtLaunch == null) return;
+            try
+            {
+                Registry.SetValue(StartupFlagKey, "", _startupFlagAtLaunch.Value,
+                    RegistryValueKind.DWord);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Tears down the spawned instance: restores the captured Start-Up
+        /// flag, closes documents (so no recovery prompt greets the user's
+        /// next launch), then kills the process by PID. Never ExitApp — a
+        /// graceful shutdown flushes this instance's stale per-user settings
+        /// snapshot over whatever the user's interactive session saved
+        /// meanwhile. Never taskkill /IM either — that would kill the
+        /// user's session as well.
+        /// </summary>
+        private static void TeardownSpawned(ISldWorks? sw)
+        {
+            RestoreStartupFlag();
+            if (!_spawnedFresh || sw == null) return;
+            try { sw.CloseAllDocuments(true); } catch { }
+            try { Process.GetProcessById(sw.GetProcessID()).Kill(); } catch { }
+        }
 
         public static int Main(string[] args)
         {
@@ -495,7 +549,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 // Only exit an instance this probe spawned fresh; never exit
                 // an attached session.
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -676,7 +730,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
             Console.WriteLine(_failures == 0 ? "# PERF DONE" : $"# {_failures} perf check(s) failed");
             return _failures == 0 ? 0 : 1;
@@ -766,7 +820,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -885,10 +939,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 session?.Release();
                 nativeWatcher?.Dispose();
-                if (_spawnedFresh)
-                {
-                    try { sw?.CloseAllDocuments(true); sw?.ExitApp(); } catch { }
-                }
+                TeardownSpawned(sw);
             }
         }
 
@@ -978,7 +1029,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -1040,7 +1091,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -1913,7 +1964,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -4230,7 +4281,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -5502,7 +5553,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -6051,7 +6102,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -6687,7 +6738,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -6959,7 +7010,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             else
                 t = Type.GetTypeFromProgID(progId);
             if (t == null) { Console.WriteLine($"FAIL  ProgID/CLSID {progId} not registered"); return null; }
-            return Activator.CreateInstance(t) as ISldWorks;
+            var created = Activator.CreateInstance(t) as ISldWorks;
+            if (created != null) CaptureStartupFlag();
+            return created;
         }
 
         private static void WaitForStartup(ISldWorks sw)
@@ -7116,7 +7169,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 
@@ -7454,7 +7507,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
             finally
             {
-                try { if (_spawnedFresh) sw?.ExitApp(); } catch { }
+                TeardownSpawned(sw);
             }
         }
 

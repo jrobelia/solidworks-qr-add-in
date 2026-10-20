@@ -343,15 +343,20 @@ still arrive on MTA COM worker threads; the `QrTaskPaneControl` adapter
 marshals every session-facing view call (`ShowModeless`/`FocusWindow`/`Close`/
 `SyncFromSession`) onto the UI thread via WinForms `Invoke`.
 
-SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
-terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
+SolidWorks exit: teardown never calls `ExitApp()` — a graceful shutdown of
+the spawned instance flushes its stale per-user settings snapshot over
+whatever an interactive session saved meanwhile (add-in Start-Up checkboxes
+included). `TeardownSpawned` restores the captured Start-Up flag, closes
+documents, then kills the spawned PID. If an instance lingers, reap by PID
+only — `taskkill /PID <pid> /F`. `taskkill /IM SLDWORKS.exe /F` kills the
+user's interactive session too; never use it.
 
 **Attached-session guard:** `Activator.CreateInstance` returns the *running*
 instance when one exists — so if the engineer's SolidWorks is already open,
 the probe would attach to their interactive session instead of spawning an
 invisible one. The probe therefore refuses to run when the attached instance
-is visible or already holds documents, and only calls `ExitApp` on an
-instance it spawned fresh. A second ProgID argument selects the version
+is visible or already holds documents, and only kills an instance it spawned
+fresh (`TeardownSpawned`). A second ProgID argument selects the version
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
 useful when another SolidWorks release is already running. This box has
 only SW 2023 installed — `SldWorks.Application.30`/`.31` both resolve to

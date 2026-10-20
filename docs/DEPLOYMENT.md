@@ -293,8 +293,10 @@ machine-wide changes are always an explicit user action.
 - LiveProbe is never installed: run it from its own build output
   (`tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe
   <deployDir>`). It refuses to touch a visible or document-holding
-  SolidWorks session — run it only when no interactive session is open, then
-  `taskkill /IM SLDWORKS.exe /F` reaps the invisible instance it spawned.
+  SolidWorks session — run it only when no interactive session is open. It
+  reaps its spawned instance by PID at teardown; if one lingers,
+  `taskkill /PID <pid> /F` — never `taskkill /IM SLDWORKS.exe`, which kills
+  an interactive session too.
 - **(Historical — the add-in no longer ships a toolbar)** A persisted
   command-group toolbar could render as a tiny empty sliver: SolidWorks keeps
   command-group toolbar geometry per user under
