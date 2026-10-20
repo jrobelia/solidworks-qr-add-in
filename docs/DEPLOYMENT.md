@@ -83,7 +83,9 @@ not an MSI).
    elevated RegAsm takes the `MachineWide` registration plan —
    `HKLM\SOFTWARE\SolidWorks\AddIns\{clsid}` (default=1, Title,
    Description) plus the per-user `AddInsStartup` flag — so the add-in
-   appears in **Tools → Add-Ins** and auto-loads at startup.
+   appears in **Tools → Add-Ins** and auto-loads at startup. The
+   `AddInsStartup` flag is written only when absent, so re-registering
+   never overrides an existing Start-Up checkbox.
 4. A failed RegAsm aborts the "success" ending with an error box that
    quotes the exact manual-repair command — the exit code is checked, never
    silently swallowed.
@@ -142,7 +144,8 @@ a bare file check would let 4.6/4.7 hosts through and fail mid-install.
    - `HKCU\SOFTWARE\SolidWorks\AddIns\{clsid}` — `(default)`=1, Title,
      Description.
    - `HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}` — `(default)`=1
-     (load at startup).
+     (load at startup). Written only when the key is absent — re-running
+     the script preserves the user's existing Start-Up checkbox.
 
 4. **Verified 2026-10-09 on the baseline install:** the interactive
    **Tools → Add-Ins…** dialog enumerates `HKLM\SOFTWARE\SolidWorks\AddIns` —

@@ -17,6 +17,8 @@
        HKLM Classes registration plus HKLM AddIns discovery and the
        AddInsStartup flag ([ComRegisterFunction] MachineWide plan) - so the
        add-in appears in Tools > Add-Ins and auto-loads the dev build.
+       AddInsStartup is written only when absent: a re-register never
+       overrides the user's existing Start-Up checkbox.
 
   Run once after setup, and again after every installer test to restore the
   dev registration (the installer's uninstall leaves stale machine keys and
@@ -59,6 +61,14 @@ try {
     $dll = Join-Path (Resolve-Path $DeployDir).Path 'SolidWorksQrAddIn.dll'
     if (-not (Test-Path $dll)) { throw "Add-in DLL not found: $dll - run sync-dev-deploy.ps1 first." }
 
+    # Snapshot the Start-Up flag first - step 1's unregister deletes the key,
+    # which would defeat the registration plan's preserve-if-present write.
+    $startupKeyPath = "HKCU:\SOFTWARE\SolidWorks\AddInsStartup\$Clsid"
+    $savedStartup = $null
+    if (Test-Path $startupKeyPath) {
+        $savedStartup = (Get-ItemProperty $startupKeyPath).'(default)'
+    }
+
     # 1. Clear any HKCU registration so the per-user CodeBase cannot shadow
     #    the machine one (COM prefers HKCU when fully populated).
     $unreg = Join-Path $PSScriptRoot 'unregister-addin-hkcu.ps1'
@@ -73,6 +83,11 @@ try {
     #    [ComRegisterFunction] (HKLM AddIns discovery + HKCU AddInsStartup).
     & $RegAsm /codebase "$dll"
     if ($LASTEXITCODE -ne 0) { throw "RegAsm failed with exit code $LASTEXITCODE" }
+
+    if ($null -ne $savedStartup) {
+        New-Item -Path $startupKeyPath -Force | Out-Null
+        Set-ItemProperty -Path $startupKeyPath -Name '(default)' -Value ([int]$savedStartup)
+    }
 
     Write-Host "Registered $Clsid -> $dll"
     Write-Host 'Start SolidWorks: the add-in is listed in Tools > Add-Ins and auto-loads the dev build.'
