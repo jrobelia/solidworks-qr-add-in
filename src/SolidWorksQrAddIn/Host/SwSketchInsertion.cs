@@ -310,8 +310,11 @@ namespace SolidWorksQrAddIn.Host
         ///      DeleteInstances string is passed verbatim: 1-based
         ///      "(col,row)" pairs, the only skip format that works on this
         ///      build. X/Y spacing dims stay ON — they are the driving
-        ///      dims the equations below target. Instance-count dims and
-        ///      the angle dim stay off;
+        ///      dims the equations below target. The angle-between-axes
+        ///      dim stays ON — without it the direction lines are
+        ///      underdefined and the whole pattern can tilt once a
+        ///      square corner is pinned to part geometry. Instance-count
+        ///      dims stay off;
         ///   6. the remaining driven dims (PAT4/PAT5): a diameter dim on the
         ///      seed arc, and horizontal + vertical dims from the pattern-
         ///      anchor corner (the square corner the seed cell sits inside)
@@ -453,7 +456,10 @@ namespace SolidWorksQrAddIn.Host
                     0.0, 3.0 * Math.PI / 2.0,   // −y rows; −π/2 itself is REFUSED (PAT12)
                     plan.DeleteInstances,
                     true, true,          // X/Y spacing dims — driving dims for #40
-                    false, false, false);
+                    true,                // AngleDim — "dimension angle between axes"; without
+                                         // it the direction lines are underdefined and the
+                                         // pattern can tilt once a corner is pinned (PR-#43 QA)
+                    false, false);       // instance-count dims stay off
             }
             catch (Exception ex)
             {

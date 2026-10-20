@@ -34,12 +34,13 @@ creation order — a typical N=21 sketch looks exactly like this):
 | `D3` | QR bottom edge ↔ keep-out bottom edge | 4·pitch | quiet-zone offset, driven |
 | `D4` | keep-out bottom edge | N+8 pitches | keep-out size, driven |
 | `D5`,`D6` | pattern X/Y spacing | pitch | driven — created by `CreateLinearSketchStepAndRepeat` (`spacingDims=true`) |
-| `D7` | seed arc | pitch·f | seed diameter, driven (`IAddDiameterDimension2`) |
-| `D8`,`D9` | pattern-anchor corner → seed centre | pitch/2 | seed position, driven |
+| `D7` | pattern between-axes angle | 90° (π/2 rad) | **driving** — created by `CreateLinearSketchStepAndRepeat` (`AngleDim=true`); without it the direction lines are underdefined and the pattern can tilt once a square corner is pinned |
+| `D8` | seed arc | pitch·f | seed diameter, driven (`IAddDiameterDimension2`) |
+| `D9`,`D10` | pattern-anchor corner → seed centre | pitch/2 | seed position, driven |
 
-The pattern may also emit count dims (`D10`,`D11` — instance counts,
-`spacingDims` off in our call so usually absent; see #41 for the count
-knob). Names are **never assumed**: sketch dims are not sub-features, so
+The pattern may also emit count dims (`D11`,`D12` — instance counts,
+`CreateNumOfInstancesDimIn*Dir` off in our call so usually absent; see
+#41 for the count knob). Names are **never assumed**: sketch dims are not sub-features, so
 the emitter discovers each `D{n}@<sketch>` name through `IParameter`
 scans, and equations reference `IDimension.FullName` minus the trailing
 `@<Part>.Part` (`EqName` in `SwSketchInsertion`). The sketch name comes

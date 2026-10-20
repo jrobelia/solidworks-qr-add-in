@@ -265,24 +265,44 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 // ================= GATE 3 — dimension drive =================
                 Console.WriteLine("# ---- gate 3: dimension drive ----");
-                var dimsA = ParseDims(probe.PatternDimsProbe(skA));
-                var eqsA = ParseEquations(probe.PatternDimsProbe(skA));
+                string dimsLineA = probe.PatternDimsProbe(skA);
+                var dimsA = ParseDims(dimsLineA);
+                var eqsA = ParseEquations(dimsLineA);
                 Check(dimsA != null && eqsA != null && eqsA.Count == 8,
-                    "dimension census: 8 equations installed", probe.PatternDimsProbe(skA));
+                    "dimension census: 8 equations installed", dimsLineA);
                 double pitchMm = plan.PitchM * 1000.0;
                 double boxMm = plan.PitchM * plan.DataCells * 1000.0;
+                // Dim names are creation-ordered — the pattern's between-axes
+                // angle dim (AngleDim) shifts the seed dims' numbering — so
+                // the targets are discovered through the equation texts, not
+                // hardcoded D{n} (same discovery gate 7 runs).
+                var spA = SpacingLhs(eqsA, skA);
+                string? diaLhs = DiameterLhs(eqsA, spA);
                 if (dimsA != null)
                 {
                     Check(Math.Abs(DimVal(dimsA, "D1") - boxMm) < 0.01,
                         "D1 master dim = the 25 mm QR square",
                         $"D1={DimVal(dimsA, "D1"):F4}mm want≈{boxMm:F4}");
-                    Check(Math.Abs(DimVal(dimsA, "D5") - pitchMm) < 0.01 &&
-                          Math.Abs(DimVal(dimsA, "D6") - pitchMm) < 0.01,
+                    Check(spA.Count == 2 &&
+                          Math.Abs(DimVal(dimsA, DimNum(spA[0])) - pitchMm) < 0.01 &&
+                          Math.Abs(DimVal(dimsA, DimNum(spA[1])) - pitchMm) < 0.01,
                         "spacing dims = box/N",
-                        $"D5={DimVal(dimsA, "D5"):F4} D6={DimVal(dimsA, "D6"):F4} want≈{pitchMm:F4}");
+                        $"spacing=[{string.Join(",", spA)}] want≈{pitchMm:F4}");
                     Check(Math.Abs(DimVal(dimsA, "D4") - pitchMm * plan.CellsPerSide) < 0.02,
                         "keep-out size = spacing·M",
                         $"D4={DimVal(dimsA, "D4"):F4} want≈{pitchMm * plan.CellsPerSide:F4}");
+                    // The pattern's between-axes driving dim (AngleDim=true)
+                    // — the constraint that keeps the whole pattern from
+                    // tilting once a square corner is pinned to part
+                    // geometry (PR-#43 QA: constraining a corner let the
+                    // grid rotate when the axes angle was left undriven).
+                    string? angleDim = dimsA.FirstOrDefault(kv =>
+                        Math.Abs(kv.Value - Math.PI / 2 * 1000) < 0.05 ||
+                        Math.Abs(kv.Value - 3 * Math.PI / 2 * 1000) < 0.05).Key;
+                    Check(angleDim != null &&
+                          dimsLineA.Contains($"{angleDim}={dimsA[angleDim]:F4}mm(s2)"),
+                        "between-axes angle dim is driving (the pattern cannot tilt)",
+                        $"angleDim={angleDim ?? "none"}");
                 }
                 var fieldBefore = RegionCircleCentres(sw, docA, skA);
                 var spanBefore = FieldSpan(fieldBefore);
@@ -299,13 +319,17 @@ namespace SolidWorksQrAddIn.LiveProbe
                 {
                     Check(Math.Abs(DimVal(dimsB, "D1") - boxMm * 2) < 0.02,
                         "master dim doubled", $"D1={DimVal(dimsB, "D1"):F4}mm");
-                    Check(Math.Abs(DimVal(dimsB, "D5") - pitchMm * 2) < 0.02 &&
-                          Math.Abs(DimVal(dimsB, "D6") - pitchMm * 2) < 0.02,
+                    Check(spA.Count == 2 &&
+                          Math.Abs(DimVal(dimsB, DimNum(spA[0])) - pitchMm * 2) < 0.02 &&
+                          Math.Abs(DimVal(dimsB, DimNum(spA[1])) - pitchMm * 2) < 0.02,
                         "spacing dims track the master",
-                        $"D5={DimVal(dimsB, "D5"):F4} D6={DimVal(dimsB, "D6"):F4}");
-                    Check(Math.Abs(DimVal(dimsB, "D7") - pitchMm * 2 * 0.9) < 0.02,
+                        $"{string.Join("/", spA.Select(s =>
+                            $"{s}={DimVal(dimsB, DimNum(s)):F4}"))}");
+                    Check(diaLhs != null &&
+                          Math.Abs(DimVal(dimsB, DimNum(diaLhs)) - pitchMm * 2 * 0.9) < 0.02,
                         "dot diameter tracks spacing",
-                        $"D7={DimVal(dimsB, "D7"):F4} want≈{pitchMm * 2 * 0.9:F4}");
+                        $"{diaLhs}={DimVal(dimsB, DimNum(diaLhs ?? "D0")):F4} " +
+                        $"want≈{pitchMm * 2 * 0.9:F4}");
                     Check(Math.Abs(DimVal(dimsB, "D4") - pitchMm * 2 * plan.CellsPerSide) < 0.05,
                         "quiet-zone box tracks spacing",
                         $"D4={DimVal(dimsB, "D4"):F4} want≈{pitchMm * 2 * plan.CellsPerSide:F4}");
@@ -1139,6 +1163,42 @@ namespace SolidWorksQrAddIn.LiveProbe
         {
             int at = eqName.IndexOf('@');
             return at > 0 ? eqName.Substring(0, at) : eqName;
+        }
+
+        /// <summary>The LHS refs ("D{n}@{sketch}") of the two equations
+        /// rooted at the master "D1@{sketch}" — the pattern's spacing pair.
+        /// Name-driven discovery: the pattern's angle/count dims shift the
+        /// D{n} numbering, so hardcoding position is brittle.</summary>
+        private static List<string> SpacingLhs(List<string>? eqs, string sketch)
+        {
+            var hits = new List<string>();
+            if (eqs == null) return hits;
+            string needle = $"\"D1@{sketch}\"";
+            foreach (var e in eqs)
+            {
+                int q1 = e.IndexOf('"');
+                int q2 = q1 < 0 ? -1 : e.IndexOf('"', q1 + 1);
+                if (q2 > q1 && e.Contains(needle))
+                    hits.Add(e.Substring(q1 + 1, q2 - q1 - 1));
+            }
+            return hits;
+        }
+
+        /// <summary>The LHS ref of the seed-diameter equation — the one that
+        /// reads "{spacingX}"*f. This fixture always runs dot=90%, so the
+        /// marker is the literal "*0.9".</summary>
+        private static string? DiameterLhs(List<string>? eqs, List<string> spacing)
+        {
+            if (eqs == null || spacing.Count == 0) return null;
+            string needle = $"\"{spacing[0]}\"*0.9";
+            foreach (var e in eqs)
+            {
+                if (!e.Contains(needle)) continue;
+                int q1 = e.IndexOf('"');
+                int q2 = e.IndexOf('"', q1 + 1);
+                if (q2 > q1) return e.Substring(q1 + 1, q2 - q1 - 1);
+            }
+            return null;
         }
 
         /// <summary>Distance from (x,y) to the nearest sketch point — bind evidence.</summary>
