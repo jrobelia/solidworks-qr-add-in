@@ -71,6 +71,15 @@ second exit → delete the two spacing equations → delete the master →
 retarget the spacing equations at the plate dim. Near-bound perf on
 this run: create 94.3 s, committed solve 53.7 s, editSolve 78.3 s.
 
+Third re-run same day — pattern angle now dimensioned (`AngleDim=true`
+on `CreateLinearSketchStepAndRepeat`, the PR-#43 QA tilt fix):
+**ALL CHECKS PASSED**. The between-axes dim lands FIRST of the pattern's
+own dims — `D5=1570.7963mm(s2)` (π/2 rad, driving), spacing `D6`/`D7`,
+diameter `D8`, offsets `D9`/`D10`. Gate 3 now discovers spacing and
+diameter names through the equation texts instead of hardcoded `D{n}`,
+and asserts the angle dim exists and is driving. Near-bound perf:
+create 96.2 s, committed solve 60.6 s, editSolve 88.9 s.
+
 Fixture: payload `SW-QR-MVP` @ 25 mm, ECC M, dot 90% → N=21, M=29 working
 matrix, pitch 1.1905 mm, dot Ø 1.0714 mm — **228 emitted dots / 213
 skipped cells** normal, **613 emitted / 228 skipped** inverted.

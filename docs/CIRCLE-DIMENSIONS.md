@@ -33,8 +33,8 @@ creation order — a typical N=21 sketch looks exactly like this):
 | `D2` | QR left edge ↔ keep-out left edge | 4·pitch | quiet-zone offset, driven |
 | `D3` | QR bottom edge ↔ keep-out bottom edge | 4·pitch | quiet-zone offset, driven |
 | `D4` | keep-out bottom edge | N+8 pitches | keep-out size, driven |
-| `D5`,`D6` | pattern X/Y spacing | pitch | driven — created by `CreateLinearSketchStepAndRepeat` (`spacingDims=true`) |
-| `D7` | pattern between-axes angle | 90° (π/2 rad) | **driving** — created by `CreateLinearSketchStepAndRepeat` (`AngleDim=true`); without it the direction lines are underdefined and the pattern can tilt once a square corner is pinned |
+| `D5` | pattern between-axes angle | 90° (π/2 rad) | **driving** — created by `CreateLinearSketchStepAndRepeat` (`AngleDim=true`), emitted FIRST of the pattern's own dims; without it the direction lines are underdefined and the pattern can tilt once a square corner is pinned |
+| `D6`,`D7` | pattern X/Y spacing | pitch | driven — created by `CreateLinearSketchStepAndRepeat` (`spacingDims=true`) |
 | `D8` | seed arc | pitch·f | seed diameter, driven (`IAddDiameterDimension2`) |
 | `D9`,`D10` | pattern-anchor corner → seed centre | pitch/2 | seed position, driven |
 
