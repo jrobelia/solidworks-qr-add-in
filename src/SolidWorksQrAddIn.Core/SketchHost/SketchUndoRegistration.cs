@@ -18,12 +18,14 @@ namespace SolidWorksQrAddIn.Core.Hosting
     {
         public SketchUndoRegistration(
             string undoName, string sketchName, IReadOnlyList<SketchEdge> edges,
-            IReadOnlyList<QrConstructionSquare>? constructionSquares = null)
+            IReadOnlyList<QrConstructionSquare>? constructionSquares = null,
+            QrCirclePlan? circlePlan = null)
         {
             UndoName = undoName;
             SketchName = sketchName;
             Edges = edges;
             ConstructionSquares = constructionSquares;
+            CirclePlan = circlePlan;
         }
 
         /// <summary>The undo step's display name (SketchHostContract.CreationUndoName).</summary>
@@ -38,8 +40,16 @@ namespace SolidWorksQrAddIn.Core.Hosting
         /// <summary>
         /// The construction squares the command staged, or null when the
         /// creation carried none — a redo re-stages them inside the block
-        /// definition so the squares survive an undo/redo cycle.
+        /// definition (or beside the circle pattern) so the squares survive
+        /// an undo/redo cycle.
         /// </summary>
         public IReadOnlyList<QrConstructionSquare>? ConstructionSquares { get; }
+
+        /// <summary>
+        /// The circle-dot emission plan the command staged, or null for a
+        /// contour/block creation — a redo re-stages it through
+        /// <see cref="ISketchInsertion.AddCirclePlan"/>.
+        /// </summary>
+        public QrCirclePlan? CirclePlan { get; }
     }
 }

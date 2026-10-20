@@ -113,5 +113,5 @@ probe's marker coordinates are literals in metres (11 mm / 7 mm /
 
 See `docs/BUILDING.md` → *Live verification*. The probe refuses to touch a
 visible or document-holding SolidWorks session; run it when no interactive
-session is open, then `taskkill /IM SLDWORKS.exe /F` to reap the spawned
-invisible instance.
+session is open; the probe reaps its spawned instance by PID at teardown
+(`taskkill /PID <pid> /F` if one lingers — never `taskkill /IM`).

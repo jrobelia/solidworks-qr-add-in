@@ -10,7 +10,9 @@
     HKCU\SOFTWARE\Classes\CLSID\{clsid}\ProgId         (-> SolidWorksQrAddIn.SwAddin)
     HKCU\SOFTWARE\Classes\SolidWorksQrAddIn.SwAddin    (+ \CLSID subkey)
     HKCU\SOFTWARE\SolidWorks\AddIns\{clsid}            (default=1, Title, Description)
-    HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}     (default=1)
+    HKCU\SOFTWARE\SolidWorks\AddInsStartup\{clsid}     (default=1 — written only
+      when the key is absent, so re-registering never overrides the user's
+      Tools > Add-Ins Start-Up checkbox)
 
   Equivalent in effect to `RegAsm /codebase` + the add-in's
   [ComRegisterFunction], but usable without elevation. Touches ONLY this
@@ -87,7 +89,9 @@ Reg "SOFTWARE\Classes\$ProgId\CLSID"                    '(default)' $Clsid
 Reg "SOFTWARE\SolidWorks\AddIns\$Clsid"                '(default)' 1 'REG_DWORD'
 Reg "SOFTWARE\SolidWorks\AddIns\$Clsid"                'Title'       $Title
 Reg "SOFTWARE\SolidWorks\AddIns\$Clsid"                'Description' $Descrip
-Reg "SOFTWARE\SolidWorks\AddInsStartup\$Clsid"         '(default)' 1 'REG_DWORD'
+if (-not (Test-Path "HKCU:\SOFTWARE\SolidWorks\AddInsStartup\$Clsid")) {
+    Reg "SOFTWARE\SolidWorks\AddInsStartup\$Clsid"     '(default)' 1 'REG_DWORD'
+}
 
 Write-Host "Registered $Clsid -> $dll"
 Write-Host "  (per-user HKCU only; run unregister-addin-hkcu.ps1 to remove)"

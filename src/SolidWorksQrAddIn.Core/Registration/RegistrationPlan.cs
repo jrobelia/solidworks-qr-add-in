@@ -16,18 +16,23 @@ namespace SolidWorksQrAddIn.Core.Registration
     /// </summary>
     public sealed class RegistryWrite
     {
-        public RegistryWrite(RegistryHiveKind hive, string keyPath, string? valueName, object value)
+        public RegistryWrite(RegistryHiveKind hive, string keyPath, string? valueName, object value,
+            bool preserveIfPresent = false)
         {
             Hive = hive;
             KeyPath = keyPath;
             ValueName = valueName;
             Value = value;
+            PreserveIfPresent = preserveIfPresent;
         }
 
         public RegistryHiveKind Hive { get; }
         public string KeyPath { get; }
         public string? ValueName { get; }
         public object Value { get; }
+
+        /// <summary>Skip the write when the target key already exists.</summary>
+        public bool PreserveIfPresent { get; }
     }
 
     /// <summary>
@@ -64,7 +69,9 @@ namespace SolidWorksQrAddIn.Core.Registration
     {
         /// <summary>
         /// The official layout for a machine-wide (RegAsm /codebase as admin)
-        /// install: HKLM AddIns discovery entry + per-user startup flag.
+        /// install: HKLM AddIns discovery entry + per-user startup flag. The
+        /// startup flag is written only when absent so a re-register never
+        /// overrides the user's Tools &gt; Add-Ins Start-Up checkbox.
         /// </summary>
         public static IReadOnlyList<RegistryWrite> MachineWide() => new[]
         {
@@ -75,13 +82,15 @@ namespace SolidWorksQrAddIn.Core.Registration
             new RegistryWrite(RegistryHiveKind.LocalMachine,
                 AddinIdentity.AddinsKeyPath + @"\" + AddinIdentity.Clsid, "Description", AddinIdentity.Description),
             new RegistryWrite(RegistryHiveKind.CurrentUser,
-                AddinIdentity.AddinsStartupKeyPath + @"\" + AddinIdentity.Clsid, null, 1),
+                AddinIdentity.AddinsStartupKeyPath + @"\" + AddinIdentity.Clsid, null, 1,
+                preserveIfPresent: true),
         };
 
         /// <summary>
         /// Per-user (no admin) development install: discovery + startup entries
         /// both under HKCU. The COM CLSID/InprocServer32 block goes under
         /// HKCU\SOFTWARE\Classes — written by the dev script, not this plan.
+        /// The startup flag is written only when absent, same as MachineWide.
         /// </summary>
         public static IReadOnlyList<RegistryWrite> PerUser() => new[]
         {
@@ -92,7 +101,8 @@ namespace SolidWorksQrAddIn.Core.Registration
             new RegistryWrite(RegistryHiveKind.CurrentUser,
                 AddinIdentity.AddinsKeyPath + @"\" + AddinIdentity.Clsid, "Description", AddinIdentity.Description),
             new RegistryWrite(RegistryHiveKind.CurrentUser,
-                AddinIdentity.AddinsStartupKeyPath + @"\" + AddinIdentity.Clsid, null, 1),
+                AddinIdentity.AddinsStartupKeyPath + @"\" + AddinIdentity.Clsid, null, 1,
+                preserveIfPresent: true),
         };
 
         /// <summary>

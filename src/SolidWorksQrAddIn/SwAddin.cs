@@ -375,6 +375,11 @@ namespace SolidWorksQrAddIn
                 RegistryKey hive = e.Hive == RegistryHiveKind.LocalMachine
                     ? Registry.LocalMachine
                     : Registry.CurrentUser;
+                if (e.PreserveIfPresent)
+                {
+                    using (RegistryKey? existing = hive.OpenSubKey(e.KeyPath))
+                        if (existing != null) continue;
+                }
                 using (RegistryKey? key = hive.CreateSubKey(e.KeyPath, true))
                 {
                     if (key == null)

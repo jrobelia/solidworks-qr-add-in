@@ -511,7 +511,7 @@ flag the route doesn't cover).
 dotnet build tools\LiveProbe\LiveProbe.csproj -c Release
 scripts\pack-deploy.ps1
 robocopy deploy\SolidWorksQrAddIn "$env:LOCALAPPDATA\SolidWorksQrAddIn" /MIR
-taskkill /IM SLDWORKS.exe /F   # before AND after — SLDWORKS lingers
+taskkill /PID <pid> /F   # before AND after — a lingering SPAWNED instance only, never an interactive session
 tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe blockqr
 ```
 

@@ -203,7 +203,46 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
 ```
+
+The `circles` mode (ticket #42) is the spec-13 circle-pattern production
+gate: session plumbing and state round-trips, the emitted-dot census
+(arcs == regions == emitted, skip list = the light cells), per-dot region
+selection feeding a boss extrude and — under inverted polarity — a cut,
+the master-dim drive (spacing, diameter, seed offsets and quiet-zone box
+tracking `box/N`), the dimensionless end-state transition of
+`docs/CIRCLE-DIMENSIONS.md` (master dim deleted, corners bound to part
+vertices, the two spacing equations retargeted), the named-undo toggle,
+the deleted-sketch equation-orphan repro plus the create-start purge, the
+near-bound rung against `QrInsertionGuard.MaxCircleInstances` with timing,
+and the over-bound refusal before any host mutation — closed by the
+square-mode regression so the block pipeline stays proven. Like
+`xsettings` it **refuses to run while any `SLDWORKS.exe` process exists**,
+and it prints the module-side rung table (every QR version's emitted-dot
+count at both polarities) before that refusal so a blocked run still
+shows which rungs the live half would measure. Run it after
+`sync-dev-deploy.ps1` so the deployed add-in carries the build under
+test; results are recorded in `docs/CIRCLE-GATES.md`.
+
+The `circlediag` mode is the diagnostic sibling of `circles` — it prints
+raw live evidence (session-verdict shapes, in-edit vs committed sketch
+enumeration routes, region-pick variants, second-document plate
+extrusion, face-sketch region classification, block-host segment census)
+with no pass/fail, for isolating gate failures. Same occupied-seat
+refusal discipline as `circles`.
+
+The `circledims` mode (ticket #40) is the circle-mode master-geometry
+live gate: a real circle-mode create through the session, then
+`PatternDimsProbe` (dim names/values/driven states + the equation list)
+and `SetPatternDimProbe` (a `SetSystemValue3` rescale of the QR-square
+master dim), verified against the expected `box/N` law — see
+`docs/CIRCLE-DIMENSIONS.md` for the dim/equation map it asserts. It is a
+second `LiveProbe.exe pattern 12` away from the raw-API replication
+(PAT12 in `docs/PATTERN-SPIKE.md`). Run after `sync-dev-deploy.ps1` so
+the deployed add-in carries the build under test.
 
 The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
 extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
@@ -304,15 +343,20 @@ still arrive on MTA COM worker threads; the `QrTaskPaneControl` adapter
 marshals every session-facing view call (`ShowModeless`/`FocusWindow`/`Close`/
 `SyncFromSession`) onto the UI thread via WinForms `Invoke`.
 
-SolidWorks exit: `ExitApp()` on a COM-launched instance does not always
-terminate the process — use `taskkill /IM SLDWORKS.exe /F` after verification.
+SolidWorks exit: teardown never calls `ExitApp()` — a graceful shutdown of
+the spawned instance flushes its stale per-user settings snapshot over
+whatever an interactive session saved meanwhile (add-in Start-Up checkboxes
+included). `TeardownSpawned` restores the captured Start-Up flag, closes
+documents, then kills the spawned PID. If an instance lingers, reap by PID
+only — `taskkill /PID <pid> /F`. `taskkill /IM SLDWORKS.exe /F` kills the
+user's interactive session too; never use it.
 
 **Attached-session guard:** `Activator.CreateInstance` returns the *running*
 instance when one exists — so if the engineer's SolidWorks is already open,
 the probe would attach to their interactive session instead of spawning an
 invisible one. The probe therefore refuses to run when the attached instance
-is visible or already holds documents, and only calls `ExitApp` on an
-instance it spawned fresh. A second ProgID argument selects the version
+is visible or already holds documents, and only kills an instance it spawned
+fresh (`TeardownSpawned`). A second ProgID argument selects the version
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
 useful when another SolidWorks release is already running. This box has
 only SW 2023 installed — `SldWorks.Application.30`/`.31` both resolve to

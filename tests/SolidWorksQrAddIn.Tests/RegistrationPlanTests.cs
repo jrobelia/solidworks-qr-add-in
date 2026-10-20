@@ -28,14 +28,14 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
-        public void Machine_wide_plan_enables_startup_under_HKCU()
+        public void Machine_wide_plan_enables_startup_under_HKCU_only_when_absent()
         {
             var entries = RegistrationPlan.MachineWide();
 
             Assert.Contains(entries, e =>
                 e.Hive == RegistryHiveKind.CurrentUser &&
                 e.KeyPath == @"SOFTWARE\SolidWorks\AddInsStartup\" + AddinIdentity.Clsid &&
-                e.ValueName == null && Equals(e.Value, 1));
+                e.ValueName == null && Equals(e.Value, 1) && e.PreserveIfPresent);
         }
 
         [Fact]
@@ -51,7 +51,7 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains(addins, e => e.ValueName == "Description");
             Assert.Contains(entries, e =>
                 e.KeyPath == @"SOFTWARE\SolidWorks\AddInsStartup\" + AddinIdentity.Clsid &&
-                Equals(e.Value, 1));
+                Equals(e.Value, 1) && e.PreserveIfPresent);
         }
 
         [Fact]

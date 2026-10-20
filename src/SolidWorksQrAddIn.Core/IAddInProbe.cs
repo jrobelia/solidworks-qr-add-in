@@ -61,9 +61,13 @@ namespace SolidWorksQrAddIn.Core
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
         /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
-        /// invert=&lt;bool&gt; unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
+        /// invert=&lt;bool&gt; shape=&lt;code&gt; param=&lt;text&gt;
+        /// unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
         /// size/growth are the field texts exactly as shown (initially 25
-        /// and 3); preset is the content-type id (initially "raw").
+        /// and 3); preset is the content-type id (initially "raw");
+        /// shape is the cell-shape code (initially "square") and param the
+        /// shape-parameter field text exactly as shown (initially "90" —
+        /// Circle's dot size).
         /// </summary>
         string WindowStateProbe();
 
@@ -104,6 +108,28 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrInvertProbe(bool invert);
+
+        /// <summary>
+        /// Picks the per-cell shape exactly like the pane's shape selector:
+        /// "square" or "circle" (case-insensitive). Returns
+        /// "VALID cells=&lt;n&gt; ..." — under Circle
+        /// "dots=&lt;n&gt;" replaces the contour/segment counts, which are
+        /// not meaningful for circle entities — or
+        /// "INVALID &lt;kind&gt; &lt;message&gt;" for the revalidated request,
+        /// and "ERROR unknown cell shape …" for anything outside the two
+        /// codes.
+        /// </summary>
+        string SetQrCellShapeProbe(string shape);
+
+        /// <summary>
+        /// Pushes shape-parameter text into the session exactly like the
+        /// pane's dot-size box — Circle's dot diameter as a percentage of
+        /// cell pitch. Returns "VALID cells=&lt;n&gt; dots=&lt;n&gt;
+        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// The text is stored verbatim under Square too — inert there, but
+        /// never silently dropped.
+        /// </summary>
+        string SetQrShapeParamProbe(string paramText);
 
         /// <summary>
         /// Picks the content-type preset exactly like the pane's dropdown:
@@ -175,5 +201,47 @@ namespace SolidWorksQrAddIn.Core
         /// shown picture equals the module's rendering of the same payload.
         /// </summary>
         string PreviewSignatureProbe();
+
+        /// <summary>
+        /// Pattern/entity census for the ticket-#42 circle live gates
+        /// (spec #13): reads a sketch's segment census — entity type tallies
+        /// (arc/line/other via the segment type code, robust against the
+        /// sibling-COM-type instances docs/PATTERN-SPIKE.md PAT0 reports),
+        /// construction-flag count, closed-region count — plus the feature
+        /// type string, and echoes the circle plan the session's current
+        /// result carries (emitted/skipped instance counts, pattern cells,
+        /// pitch, dot diameter, invert) so the harness can compare the
+        /// emitted-vs-skipped expectation with what the sketch actually
+        /// holds. Pass the sketch name a create returned; an empty or null
+        /// name censuses the sketch open in edit mode. Returns
+        /// "PATCENSUS ..." or "ERROR ..." — a square-payload session echoes
+        /// "plan=none".
+        /// </summary>
+        string PatternCensusProbe(string sketchName);
+
+        /// <summary>
+        /// Dimension + equation surface for the ticket-#42 circle live
+        /// gates (spec #13, ticket #40): resolves every "D{n}@&lt;sketch&gt;"
+        /// parameter — mm value and driven-state code each — in creation
+        /// order (the QR-square master dim is the FIRST dim the emitter
+        /// creates, so the smallest D-number), then lists the document's
+        /// equations verbatim. Pass the sketch name a create returned; an
+        /// empty or null name inspects the sketch open in edit mode.
+        /// Returns "PATDIMS sketch='&lt;name&gt;' dims=&lt;n&gt;
+        /// D1=&lt;mm&gt;mm(s&lt;state&gt;) ... eqs=&lt;n&gt; '&lt;eq&gt;' ...
+        /// mode=&lt;circle|square&gt;" or "ERROR ...".
+        /// </summary>
+        string PatternDimsProbe(string sketchName);
+
+        /// <summary>
+        /// Drives one driving dimension by name — the "D{n}@{sketch}"
+        /// equation-reference form or a full name; resolved through
+        /// IParameter — via SetSystemValue3(valueM, this-config) +
+        /// EditRebuild3, then echoes the value SolidWorks actually stored.
+        /// The live gate resizes the master dim and re-censuses the
+        /// pattern. Returns "PATSET '&lt;name&gt;'=&lt;mm&gt;mm rc=&lt;n&gt;"
+        /// or "ERROR ...".
+        /// </summary>
+        string SetPatternDimProbe(string dimensionName, double valueM);
     }
 }

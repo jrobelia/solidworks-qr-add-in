@@ -20,6 +20,16 @@ namespace SolidWorksQrAddIn.Core.Commands
                 "The sketch is open for editing.",
                 createdSketchName);
 
+        /// <summary>
+        /// The circle-mode counterpart (spec #13, ticket #38): the created
+        /// sketch carries a dot pattern, not a block — the message says so.
+        /// </summary>
+        public static CommandResult SuccessCirclePattern(string createdSketchName) =>
+            new CommandResult(true,
+                $"Created sketch '{createdSketchName}' with a QR circle-dot pattern. " +
+                "The sketch is open for editing.",
+                createdSketchName);
+
         public static CommandResult Failure(string message) =>
             new CommandResult(false, message, null);
     }

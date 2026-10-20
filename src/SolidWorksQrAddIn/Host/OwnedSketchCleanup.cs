@@ -36,45 +36,95 @@ namespace SolidWorksQrAddIn.Host
         /// <summary>
         /// Select and delete exactly this session's sketch feature — nothing
         /// else. Returns null on success, or a detail naming the failed stage
-        /// (select vs delete vs an exception).
+        /// (select vs delete vs an exception). Equation handling is
+        /// refusal-driven: the entries keyed to this sketch are LIVE
+        /// references while it survives, so the ticket-#19 sweep that
+        /// unblocks the delete runs only on a proven refusal — and a delete
+        /// that STILL refuses restores them. Every successful delete ends
+        /// in the orphan sweep, per the SketchEquationHygiene contract.
         /// </summary>
         public static string? DeleteSketchFeature(IModelDoc2 doc, IFeature sketchFeature)
         {
             var name = sketchFeature.Name;
             try
             {
-                doc.ClearSelection2(true);
                 var ext = doc.Extension as IModelDocExtension
                     ?? throw new SketchHostException("The document exposed no extension interface.");
-                bool selected = ext.SelectByID2(
-                    name, "SKETCH", 0, 0, 0, false, 0, null,
-                    (int)swSelectOption_e.swSelectOptionDefault);
-                if (!selected)
-                    return $"could not select sketch feature '{name}' for deletion";
-                if (!ext.DeleteSelection2(0))
+
+                // The refusal-driven ordering is pinned headless in
+                // OwnedSketchDeletePlan: plain delete, then children, and
+                // only a proven refusal sweeps the equations keyed to this
+                // feature — they are LIVE references while it survives.
+                // A delete that STILL refuses after the purge restores them.
+                int childrenFlags =
+                    (int)(swDeleteSelectionOptions_e.swDelete_Children |
+                          swDeleteSelectionOptions_e.swDelete_Absorbed);
+                bool firstRefusalLogged = false;
+                var result = OwnedSketchDeletePlan.Run(
+                    select: () => SelectSketch(doc, ext, name),
+                    deletePlain: () => ext.DeleteSelection2(0),
+                    deleteWithChildren: () =>
+                    {
+                        if (!firstRefusalLogged)
+                        {
+                            // A sketch consumed by later features (an
+                            // extrude built from it) refuses the plain
+                            // delete — the same subtree removal an
+                            // interactive "delete children? yes" performs.
+                            Diag.Log($"plain delete of '{name}' refused — " +
+                                "retrying with children");
+                            firstRefusalLogged = true;
+                        }
+                        return ext.DeleteSelection2(childrenFlags);
+                    },
+                    purgeReferences: () =>
+                    {
+                        var purged =
+                            SketchEquationHygiene.PurgeEquationsReferencing(doc, name);
+                        Diag.Log($"removed {purged.Count} equation(s) referencing " +
+                            $"'{name}' — retrying delete");
+                        return purged;
+                    },
+                    restore: texts =>
+                        SketchEquationHygiene.RestoreEquations(doc, texts),
+                    sweepOrphans: () =>
+                        SketchEquationHygiene.PurgeOrphanedEquations(doc));
+
+                switch (result.Outcome)
                 {
-                    // A sketch consumed by later features (e.g. an extrude
-                    // built from it) refuses the plain delete — the children
-                    // cannot outlive their profile, so the undo path deletes
-                    // them with it (the same subtree removal an interactive
-                    // "delete children? yes" performs).
-                    Diag.Log($"plain delete of '{name}' refused — retrying with children");
-                    doc.ClearSelection2(true);
-                    selected = ext.SelectByID2(
-                        name, "SKETCH", 0, 0, 0, false, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault);
-                    if (!selected ||
-                        !ext.DeleteSelection2(
-                            (int)(swDeleteSelectionOptions_e.swDelete_Children |
-                                  swDeleteSelectionOptions_e.swDelete_Absorbed)))
+                    case OwnedSketchDeleteOutcome.Deleted:
+                        return null;
+                    case OwnedSketchDeleteOutcome.SelectFailed:
+                        return $"could not select sketch feature '{name}' for deletion";
+                    case OwnedSketchDeleteOutcome.DeleteRefusedAfterPurge:
+                        return $"DeleteSelection2 failed for '{name}' — its " +
+                            $"{result.Purged} equation reference(s) were " +
+                            $"removed first; {result.Restored} restored";
+                    default:
                         return $"DeleteSelection2 failed for '{name}'";
                 }
-                return null;
             }
             catch (Exception ex)
             {
                 return $"deleting '{name}' failed: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Clears the selection and selects exactly this sketch feature —
+        /// the delete step reads the current selection.
+        /// </summary>
+        private static bool SelectSketch(
+            IModelDoc2 doc, IModelDocExtension ext, string name)
+        {
+            try
+            {
+                doc.ClearSelection2(true);
+                return ext.SelectByID2(
+                    name, "SKETCH", 0, 0, 0, false, 0, null,
+                    (int)swSelectOption_e.swSelectOptionDefault);
+            }
+            catch { return false; }
         }
     }
 }
