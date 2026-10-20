@@ -204,28 +204,13 @@ namespace SolidWorksQrAddIn.UI
             };
             panel.Children.Add(_sizeBox);
 
-            _growthLabel = new TextBlock
-            {
-                Text = "Cell growth per side (% of cell width):",
-                Margin = new Thickness(0, 8, 0, 4),
-            };
-            panel.Children.Add(_growthLabel);
-            _growthBox = new TextBox
-            {
-                ToolTip = "Widens each dark cell on all sides by this percentage of " +
-                          "the cell spacing, helping diagonally touching cells connect. " +
-                          "The QR code size stays fixed. Hidden under Circle — " +
-                          "dot cells are already disjoint; the dot size below is " +
-                          "their only sizing knob.",
-            };
-            panel.Children.Add(_growthBox);
-
             // The cell-shape selector (spec #13, ticket #38): a discrete
             // two-option dropdown — a committed pick pushes into the
-            // session immediately like the ECC selector. The dot-size field
-            // below and the growth field above trade which one is shown:
-            // growth is inert under Circle, dot size is inert under Square —
-            // both keep their entered text verbatim either way.
+            // session immediately like the ECC selector. The growth and
+            // dot-size fields below trade which one is shown — growth is
+            // inert under Circle, dot size under Square — so the selector
+            // and everything above it never moves when the shape flips.
+            // Both fields keep their entered text verbatim either way.
             panel.Children.Add(new TextBlock
             {
                 Text = "Cell shape:",
@@ -261,6 +246,26 @@ namespace SolidWorksQrAddIn.UI
                           "below the insertion floor.",
             };
             panel.Children.Add(_shapeParamBox);
+
+            // Growth lives under the selector with dot size: the two
+            // shape-conditional fields share one slot, so hiding/reshowing
+            // never shifts the selector's position (QA note on PR #43 —
+            // growth used to sit ABOVE the dropdown and the layout jumped).
+            _growthLabel = new TextBlock
+            {
+                Text = "Cell growth per side (% of cell width):",
+                Margin = new Thickness(0, 8, 0, 4),
+            };
+            panel.Children.Add(_growthLabel);
+            _growthBox = new TextBox
+            {
+                ToolTip = "Widens each dark cell on all sides by this percentage of " +
+                          "the cell spacing, helping diagonally touching cells connect. " +
+                          "The QR code size stays fixed. Hidden under Circle — " +
+                          "dot cells are already disjoint; the dot size above is " +
+                          "their only sizing knob.",
+            };
+            panel.Children.Add(_growthBox);
 
             panel.Children.Add(new TextBlock
             {
