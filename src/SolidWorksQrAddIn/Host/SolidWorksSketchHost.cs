@@ -41,13 +41,7 @@ namespace SolidWorksQrAddIn.Host
             if (doc == null)
                 return new SketchHostState(HostDocumentKind.None, SupportSelection.None, false);
 
-            var kind = doc.GetType() switch
-            {
-                (int)swDocumentTypes_e.swDocPART => HostDocumentKind.Part,
-                (int)swDocumentTypes_e.swDocASSEMBLY => HostDocumentKind.Assembly,
-                (int)swDocumentTypes_e.swDocDRAWING => HostDocumentKind.Drawing,
-                _ => HostDocumentKind.Unknown,
-            };
+            var kind = HostDocumentKinds.Of(doc);
 
             var mgr = doc.SketchManager as ISketchManager;
             var editing = mgr?.ActiveSketch != null;

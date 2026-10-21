@@ -187,6 +187,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "circlediag", StringComparison.OrdinalIgnoreCase))
                 return CircleDiagMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "swprops", StringComparison.OrdinalIgnoreCase))
+                return SwpropsMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -7611,6 +7614,8 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string PatternDimsProbe(string sketchName) => Invoke("PatternDimsProbe", sketchName);
             public string SetPatternDimProbe(string dimensionName, double valueM)
                 => Invoke("SetPatternDimProbe", dimensionName, valueM);
+            public string SwPropertiesProbe() => Invoke("SwPropertiesProbe");
+            public string SwPropertyResolveProbe(string name) => Invoke("SwPropertyResolveProbe", name);
         }
     }
 }

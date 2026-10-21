@@ -1512,6 +1512,72 @@ namespace SolidWorksQrAddIn
             }
         }
 
+        // ---------------- part-property source (ticket-#44 gates) ----------------
+
+        /// <summary>
+        /// Enumerates the resolvable property names of the active part
+        /// through the real <see cref="SwPartPropertySource"/> — a fresh
+        /// adapter per call, like CreateQrFromWindowProbe's fresh host —
+        /// so a stale capture can never hide property or configuration
+        /// edits the gate makes between calls.
+        /// </summary>
+        public string SwPropertiesProbe()
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var snapshot = new SwPartPropertySource(_sw).CaptureProperties();
+                if (snapshot.Document != HostDocumentKind.Part)
+                    return $"SWPROPS kind={snapshot.Document} names=0";
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"SWPROPS kind=part doc='{snapshot.DocumentTitle ?? ""}' " +
+                          $"config='{snapshot.ConfigurationName ?? ""}' " +
+                          $"names={snapshot.Names.Count}");
+                foreach (var n in snapshot.Names)
+                    sb.Append($" '{n}'");
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Resolves one property reference through the real
+        /// <see cref="SwPartPropertySource"/>. The verdict echoes the
+        /// seam's named kinds — RESOLVED carries the verbatim value;
+        /// EMPTY and MISSING are distinct answers, never a silent
+        /// empty string.
+        /// </summary>
+        public string SwPropertyResolveProbe(string name)
+        {
+            var session = ReadySession;
+            if (session == null || _sw == null)
+                return NotConnectedError;
+            try
+            {
+                var res = new SwPartPropertySource(_sw).Resolve(name ?? "");
+                switch (res.Kind)
+                {
+                    case PartPropertyResolutionKind.Resolved:
+                        return $"SWPROP '{res.Name}' RESOLVED '{res.Value}'";
+                    case PartPropertyResolutionKind.Empty:
+                        return $"SWPROP '{res.Name}' EMPTY";
+                    case PartPropertyResolutionKind.Missing:
+                        return $"SWPROP '{res.Name}' MISSING";
+                    default:
+                        return $"SWPROP '{res.Name}' NODOC";
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR {ex.GetType().Name}: {ex.Message}";
+            }
+        }
+
         private static int CountSketchFeatures(IModelDoc2 doc)
         {
             int n = 0;

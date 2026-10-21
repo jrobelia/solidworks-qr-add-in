@@ -50,6 +50,18 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      are remembered per preset: re-picking the type restores the
     ///      fields and recomposes, overwriting the box with their payload.
     ///
+    ///      THE RESOLUTION RULE (spec #21): a preset declaring a
+    ///      <see cref="PayloadFieldKind.Template"/> field (SW Properties)
+    ///      composes to a payload TEMPLATE — literal text plus
+    ///      <c>$PRP:"name"</c> references. Between compose and
+    ///      <see cref="_content"/> the session resolves every reference
+    ///      through a fresh <see cref="IPartPropertySource"/> — the box and
+    ///      the encoder only ever carry the resolved literal, and create
+    ///      re-resolves immediately before generating. A missing, empty or
+    ///      unreadable reference fails the request with an INVALID verdict
+    ///      naming it; <c>$PRP</c> text under every other preset stays
+    ///      literal because only the Template kind resolves.
+    ///
     ///   2. Create. <see cref="CreateSketch"/> runs the insertion command with
     ///      the CURRENT inputs against a freshly-captured host state — the
     ///      command itself revalidates the active part, the selected support,
@@ -127,6 +139,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         private readonly Func<IQrSketchWindow> _windowFactory;
         private readonly Func<ISketchHost>? _hostProvider;
+        private readonly Func<IPartPropertySource>? _propertyProvider;
         private readonly IHostStateWatcher? _hostWatcher;
         private readonly CreateQrSketchCommand _command = new CreateQrSketchCommand();
         private IQrSketchWindow? _window;
@@ -159,17 +172,32 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// a later read failure retains the last known unit.
         /// </param>
         /// <param name="hostWatcher">
-        /// Optional host-state change source (active-document switch, length
-        /// unit edit). Each <see cref="IHostStateWatcher.Changed"/> event
-        /// re-formats the unit-dependent readouts — the document's units
-        /// land live without any field edit and without polling.
+        /// Optional host-state change source (active-document switch or
+        /// close, length unit edit, configuration switch, property edit).
+        /// Each
+        /// <see cref="IHostStateWatcher.Changed"/> event re-formats the
+        /// unit-dependent readouts — and, while a Template-kind preset is
+        /// selected, re-resolves the template against the live part — so
+        /// the document's state lands live without any field edit and
+        /// without polling.
+        /// </param>
+        /// <param name="propertyProvider">
+        /// Optional fresh-source factory for SW Properties preset templates
+        /// (spec #21): consulted per resolution and per
+        /// <see cref="SwPropertyNames"/> read — a fresh source every time,
+        /// like the fresh-host rule, so property/configuration edits are
+        /// never hidden by a stale capture. Without one a template carrying
+        /// <c>$PRP</c> references simply cannot resolve — it fails honestly;
+        /// tokenless templates still compose verbatim.
         /// </param>
         public QrSketchSession(
             Func<IQrSketchWindow> windowFactory, Func<ISketchHost>? hostProvider = null,
-            IHostStateWatcher? hostWatcher = null)
+            IHostStateWatcher? hostWatcher = null,
+            Func<IPartPropertySource>? propertyProvider = null)
         {
             _windowFactory = windowFactory ?? throw new ArgumentNullException(nameof(windowFactory));
             _hostProvider = hostProvider;
+            _propertyProvider = propertyProvider;
             _lengthUnit = ReadLengthUnit();
             _sizeText = FormatSizeText(InitialSizeMm, _lengthUnit);
             _hostWatcher = hostWatcher;
@@ -263,14 +291,26 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         /// <summary>
         /// Re-formats the cell-size readout and info lines against the
-        /// document's CURRENT length unit — no regeneration, only display.
-        /// Host notifications and showing the pane call this, so a
+        /// document's CURRENT length unit — display-only for the numeric
+        /// fields. Host notifications and showing the pane call this, so a
         /// document-unit change or document switch lands live even when the
-        /// engineer has not edited a field. Best-effort: a host that cannot
-        /// be read leaves the last formatting in place.
+        /// engineer has not edited a field. While a Template-kind preset is
+        /// selected it also re-resolves the template (and regenerates):
+        /// the resolved payload depends on the live part's properties, not
+        /// just its units. Best-effort: a host that cannot be read leaves
+        /// the last formatting in place.
         /// </summary>
         public void RefreshInfo()
         {
+            // A document/configuration/property change can change which
+            // properties exist or what a template resolves to — re-resolve a
+            // Template-kind payload through a fresh source BEFORE the display
+            // refresh, so the Resolved row and the insert names can never
+            // show a stale part's data. Re-resolution regenerates (and
+            // notifies the view) itself; under every other kind nothing
+            // recomposes — $PRP text elsewhere stays literal.
+            if (TemplateField != null)
+                ComposePreset();
             var unit = ReadLengthUnit();
             bool unitChanged = !SameUnit(unit, _lengthUnit);
             if (unitChanged)
@@ -369,6 +409,45 @@ namespace SolidWorksQrAddIn.Core.Interaction
         public PayloadComposeError? PresetFieldError => _preset.ComposeError;
 
         /// <summary>
+        /// The resolvable property names of the active part and its active
+        /// configuration — the insert dropdown's items, in the source's
+        /// merged order (configuration names first, deduplicated). Read
+        /// through a fresh source per call, like the unit read: empty when
+        /// there is no provider, no part, or an unreadable store — the
+        /// dropdown shows its placeholder, never stale names.
+        /// </summary>
+        public IReadOnlyList<string> SwPropertyNames
+        {
+            get
+            {
+                try
+                {
+                    return _propertyProvider?.Invoke().CaptureProperties().Names
+                           ?? (IReadOnlyList<string>)Array.Empty<string>();
+                }
+                catch { return Array.Empty<string>(); }
+            }
+        }
+
+        /// <summary>
+        /// The Resolved row under a Template-kind field — the literal the QR
+        /// will encode after <c>$PRP</c> resolution, or "ERR: reason" while
+        /// the template cannot resolve. Null under every other preset: the
+        /// row only exists there.
+        /// </summary>
+        public string? ResolvedTemplatePreview
+        {
+            get
+            {
+                if (TemplateField == null)
+                    return null;
+                return _preset.ComposeError != null
+                    ? "ERR: " + _preset.ComposeError.Message
+                    : _content;
+            }
+        }
+
+        /// <summary>
         /// Selects the content-type preset and composes immediately from its
         /// remembered fields (defaults on first pick): a composed payload
         /// lands in the content box verbatim; a field set that cannot compose
@@ -439,7 +518,49 @@ namespace SolidWorksQrAddIn.Core.Interaction
             var compose = PayloadComposer.Compose(_preset.Id, PresetFields);
             _preset.ComposeError = compose.Error;
             _content = compose.Succeeded ? compose.Content! : string.Empty;
+            if (compose.Succeeded && TemplateField is { } templateField)
+            {
+                // A Template-kind field composes to a payload TEMPLATE —
+                // resolve its $PRP references against the live part here,
+                // between compose and _content, so the box and the encoder
+                // only ever carry the resolved literal (QrSketchRequest
+                // learns nothing about properties).
+                var resolved = ResolveTemplatePayload(_content, templateField.Key);
+                _preset.ComposeError = resolved.Error;
+                _content = resolved.Succeeded ? resolved.Content! : string.Empty;
+            }
             return Regenerate();
+        }
+
+        /// <summary>
+        /// The current preset's Template-kind field descriptor — the input
+        /// whose text is a payload template mixing literal text and
+        /// <c>$PRP:"name"</c> references — or null under every other preset
+        /// (which is exactly why <c>$PRP</c> text elsewhere stays literal).
+        /// </summary>
+        private PayloadFieldDescriptor? TemplateField =>
+            CurrentPreset.Fields.FirstOrDefault(f => f.Kind == PayloadFieldKind.Template);
+
+        /// <summary>
+        /// Resolves a composed template through a FRESH property source —
+        /// one provider call per resolution, mirroring the fresh-host rule:
+        /// a cached source could never see property or configuration edits.
+        /// A missing provider or a throwing one answers like a missing
+        /// document — nothing to resolve against. A failure is re-keyed at
+        /// the template field so the pane flags its box, and prefixed with
+        /// the preset's display name like the composer's own errors.
+        /// </summary>
+        private PayloadComposeResult ResolveTemplatePayload(string template, string fieldKey)
+        {
+            IPartPropertySource? source = null;
+            try { source = _propertyProvider?.Invoke(); }
+            catch { /* an unreadable source resolves like no document */ }
+            var resolved = SwPropertyTemplate.Resolve(template, source);
+            if (resolved.Succeeded || resolved.Error == null)
+                return resolved;
+            return PayloadComposeResult.Fail(
+                resolved.Error.Kind, fieldKey,
+                CurrentPreset.DisplayName + ": " + resolved.Error.Message);
         }
 
         private static PayloadPresetDescriptor? FindPreset(string? presetId) =>
@@ -951,6 +1072,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public CommandResult CreateSketch(ISketchHost host)
         {
+            // A Template-kind payload re-resolves against the LIVE part at
+            // create time — property or configuration edits behind the
+            // pane's back must land in the encoded literal, never a stale
+            // resolution. Fresh source, same rule as the fresh host below;
+            // a failure lands in the pending compose error and the invalid
+            // guard refuses before the host is touched.
+            if (TemplateField != null)
+                ComposePreset();
             if (_current == null)
                 return CommandResult.Failure(PromptText);
             if (!_current.Succeeded)

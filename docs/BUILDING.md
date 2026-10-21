@@ -124,17 +124,21 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   task-pane tab) and session→view sync of probe-driven edits via the
   `IQrSketchWindow` seam.
 - **Payload composer** (`PayloadComposerTests`, spec #11/ticket #26): the
-  eight phase-1 presets in dropdown order with unique field keys and
-  declared choice defaults, plus byte-exact payload literals per preset —
+  nine content-type presets in dropdown order — the eight spec-11 types
+  plus spec-21's SW Properties — with unique field keys and declared
+  choice defaults, plus byte-exact payload literals per preset —
   Raw passthrough (whitespace/line breaks verbatim; empty composes for
   downstream validation), URL scheme defaulting, WIFI: escaping, the
   hidden-network flag, the open-network password drop, required
   ssid/password, tel:/sms:/mailto: URIs behind dialable-only number and
   e-mail shape checks, the contact card in vCard 3.0/4.0/2.1 and MeCard
-  with the at-least-one-name rule, and geo:/Google-Maps links accepting
-  comma decimals inside their coordinate ranges. Failures are data, not
-  throws: every rejection returns an error naming the bad field (missing
-  required, invalid choice/boolean, unknown preset id).
+  with the at-least-one-name rule, geo:/Google-Maps links accepting
+  comma decimals inside their coordinate ranges, and the SW Properties
+  template field composing verbatim — `$PRP` tokens pass through for the
+  session to resolve; the host-free composer never expands them.
+  Failures are data, not throws: every rejection returns an error naming
+  the bad field (missing required, invalid choice/boolean, unknown
+  preset id).
 - **Content-type presets** (`QrContentPresetTests`, ticket #27 — the session
   seam): picking a type exposes its field descriptors; field edits compose
   the literal payload into the content box verbatim (picture + info lines
@@ -146,6 +150,25 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   Raw keeping the composed text as free content, undeclared field keys and
   unknown preset ids refused with the selection kept, create inserting the
   composed payload's geometry, and preset edits syncing the open window.
+- **SW Properties** (spec #21 — `PartPropertySourceTests`,
+  `SwPropertyTemplateTests`, `SwPropsPresetTests`): the property-source
+  seam enumerates and resolves against the document-level and
+  active-configuration stores under SolidWorks' own precedence —
+  configuration shadows document, the merged name list is deduplicated
+  with configuration names first, whitespace values resolve verbatim,
+  present-but-empty is distinct from missing, and no-document is its own
+  verdict. The payload-template resolver substitutes every
+  `$PRP:"name"` reference — unique names in first-appearance order, a
+  repeated name resolving once but replacing everywhere, a resolved VALUE
+  that itself contains `$PRP` text staying literal — while unquoted and
+  bare `$PRP` forms stay text and malformed remnants (an empty or
+  unclosed name) fail openly naming the token. At the session seam the
+  `swprops` preset exposes the Template-kind field; every field edit and
+  host-change event re-resolves the content, the Resolved preview and
+  the insert-name list (a property that vanished behind the UI's back
+  turns the request INVALID naming it); create re-resolves against the
+  live store and refuses a missing or empty reference before any host
+  mutation; and `$PRP` text under every other preset stays literal.
 - **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
   payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
   two-direction scaling, preserved ring→hole→island nesting, finite overlap
@@ -206,6 +229,7 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
 ```
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
@@ -257,6 +281,22 @@ mutate — and it prints its module-side expectations (composed payload, rung
 table, accepted size) before that refusal so a blocked run still shows what
 the live half would check. Gate results are recorded in
 `docs/XSETTINGS-GATES.md`.
+
+The `swprops` mode (ticket #46) is the spec-21 SW Properties end-to-end
+live gate. The harness itself writes the fixture — document-level,
+configuration-specific, empty and whitespace-only properties via
+`CustomPropertyManager.Add3` on TWO configurations of the same part (plus a
+second document with its own values) — then drives the pane path
+(`SetQrContentTypeProbe`/`SetQrPresetFieldProbe`/`WindowStateProbe`'s
+`viewTemplateNames`/`viewResolved` echoes/`CreateQrFromWindowProbe`) and
+proves each created sketch encodes exactly the resolved literal by the
+module-identical route (block census + exploded 1:1 contour match).
+Configuration and document switches must re-resolve the names, the Resolved
+row and the preview; a missing or empty `$PRP` reference must refuse the
+create before any host mutation; the no-document case must report NODOC.
+Like `xsettings` it **refuses to run while any `SLDWORKS.exe` process
+exists** and prints its fixture plan before that refusal. Gate results are
+recorded in `docs/SWPROPS-GATES.md`.
 
 The `units` mode uses a session-free instance and checks the native document
 watcher plus the actual pane's rendered size label, input, and cell-size value.
