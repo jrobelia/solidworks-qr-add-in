@@ -273,7 +273,11 @@ opt-in: an engineer choosing extrudability accepts a readability margin
 trade, and marking workflows often weight permanence over scan margin.
 Whether that trade is acceptable, or whether the finder sites justify the
 harder hairline route, is a product call the spike's width measurements
-should inform.
+should inform. **Update — the hybrid resolves it** (live-proven in the
+third interactive run, §6): hairline cuts at the three regular finder
+rings — the easy, repeatable subset of contour-cutting — and whole-cell
+drops at arbitrary data-area sites, keeping the hard geometry confined to
+exactly three known orthogonal bands.
 
 **Invert.** The same rule applies to whatever the emitted polarity
 produces: under invert the *light* cells emit, so the ring sites move
@@ -330,7 +334,11 @@ matrix centre — see screenshot on #31) made SolidWorks auto-select all
 remaining contours on the real-size block instance, no prompt. Second
 run: **finite-width cuts** through each enclosing ring — narrow channels
 leaving essentially all ring material in place — produced the same
-result: auto-selection engaged across the whole sketch. This confirms:
+result: auto-selection engaged across the whole sketch. **Third run —
+the hybrid, live-proven end-to-end**: thin cuts at the three finder
+rings (the repeatable structural sites) *plus* whole-cell deletions for
+the internal island sites — auto-selection again engaged across the
+sketch. This confirms:
 (a) the interactive solver **does** consume block-internal contours; (b)
 the trigger is exactly "an island completely surrounded by a filled
 region" (the doubly-nested condition); (c) **all-or-nothing is
@@ -339,13 +347,30 @@ data-area site the finder-only fixture list undercounted; and (d) **the
 solver treats a narrow channel as a real opening** — the finite-width
 variant preserves the ring's material and still restores auto-selection.
 
+The engineer's third run also fixes the hybrid design the trade-off
+below hinted at: **hairline cuts at the three (regular, repeatable)
+finder rings; whole-cell drops at arbitrary data-area sites.** Two
+corollaries fall out of the run:
+
+- The data-area channel path must reach **exterior-connected void**, not
+  merely tunnel into a differently-enclosed volume — it "might be many
+  cells" when sites nest inside other holes. Implement as BFS whose
+  target set is the matrix's *flood-filled exterior light region*
+  (flood from the border over un-emitted cells), iterating until no
+  doubly-nested hole survives.
+- Since data-site drops spend real ECC budget and finder cuts spend
+  detection margin, the option should be **gated on a minimum
+  error-correction level** (e.g. refuse at L; the pane already exposes
+  the ECC choice, so the session/composer seam can validate it).
+
 What the interactive runs do not measure: the *minimum* effective channel
 width (the test cuts were comfortably visible, not hairline) — i.e.
 whether a `MinInsertableFeatureMm`-scale channel still reads as open to
 the solver, or whether the width floor is set by solver visibility rather
 than insertion validity. The grid-bridge route makes this moot for the
 product (its channel is `u−2g`, far above either floor), but a width
-sweep stays on the live matrix for the contour-notch variant.
+sweep stays on the live matrix for the contour-notch variant — which the
+hybrid now needs at the three finder sites.
 
 **Does the notch restore automatic profile selection? — Probably yes on
 exploded/native geometry; interactively, the enclosure-removal mechanism
@@ -405,9 +430,10 @@ hole + 3-cell island square — a hand-drawn finder pattern);
 | E10 (manual) | FX-QR notched | real-size block, interactive | engineer clicks sketch → Extruded Boss/Base | no doubly-nested prompt; PM previews all profiles without picks | **the user-facing claim — interactive only, cannot be driven headless** |
 
 E10 is now **proven interactively** (2026-10-21): auto-selection engages
-on the real-size block once enclosures are removed — and a narrow
-finite-width cut counts as "removed". The remaining rows bound the API
-route and the native-geometry claim.
+on the real-size block once enclosures are removed — deletion, uniform
+finite-width cuts, AND the hybrid (thin finder cuts + data-site cell
+drops) all worked. The remaining rows bound the API route and the
+native-geometry claim.
 
 Minimum decisive set: **E1, E2, E3, E6** — E1/E3 decide the native claim,
 E2 isolates the mechanism, E6 bounds the carrier claim. E10 is done.
