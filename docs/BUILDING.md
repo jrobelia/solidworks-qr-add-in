@@ -206,6 +206,7 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#44 part-property source gates
 ```
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
