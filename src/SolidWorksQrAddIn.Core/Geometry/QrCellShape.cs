@@ -109,6 +109,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
             shape == QrCellShape.Circle;
 
         /// <summary>
+        /// Whether the ring-split option (spec #51) applies to
+        /// <paramref name="shape"/> — only Square, the sole contour-producing
+        /// variant. Under Circle the toggle is inert (dots emit no contours,
+        /// nothing nests) and the pane hides the control: a shape with no
+        /// contours never offers a meaningless control. The stored flag
+        /// itself round-trips verbatim either way — the same inert-field
+        /// discipline the growth and dot-size texts follow.
+        /// </summary>
+        public static bool RingSplitApplies(QrCellShape shape) =>
+            shape == QrCellShape.Square;
+
+        /// <summary>
         /// The shape-parameter field's label as the pane should show it —
         /// Circle's dot size as a percent of cell pitch (the dot diameter).
         /// </summary>

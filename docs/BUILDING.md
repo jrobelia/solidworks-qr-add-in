@@ -318,7 +318,8 @@ and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
 `SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`, `SetQrEccProbe`,
-`SetQrInvertProbe`, `SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
+`SetQrInvertProbe`, `SetQrRingSplitProbe`, `SetQrContentTypeProbe`,
+`SetQrPresetFieldProbe`,
 `CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
 `RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for

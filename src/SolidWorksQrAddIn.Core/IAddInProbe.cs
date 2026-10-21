@@ -61,13 +61,15 @@ namespace SolidWorksQrAddIn.Core
         /// Window/session state without changing it:
         /// "STATE open=&lt;bool&gt; windows=&lt;n&gt; hasRequest=&lt;bool&gt;
         /// size=&lt;text&gt; growth=&lt;text&gt; preset=&lt;id&gt; ecc=&lt;level&gt;
-        /// invert=&lt;bool&gt; shape=&lt;code&gt; param=&lt;text&gt;
+        /// invert=&lt;bool&gt; ringsplit=&lt;bool&gt; shape=&lt;code&gt;
+        /// param=&lt;text&gt;
         /// unit=&lt;sym&gt; cell=&lt;text&gt; ..." —
         /// size/growth are the field texts exactly as shown (initially 25
         /// and 3); preset is the content-type id (initially "raw");
         /// shape is the cell-shape code (initially "square") and param the
         /// shape-parameter field text exactly as shown (initially "90" —
-        /// Circle's dot size).
+        /// Circle's dot size); ringsplit is the open-nested-rings option
+        /// (initially false).
         /// </summary>
         string WindowStateProbe();
 
@@ -108,6 +110,18 @@ namespace SolidWorksQrAddIn.Core
         /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
         /// </summary>
         string SetQrInvertProbe(bool invert);
+
+        /// <summary>
+        /// Sets the open-nested-rings option exactly like the pane's
+        /// ring-split checkbox (spec #51, ticket #54): under the Square cell
+        /// shape every island-bearing void is opened so no doubly-nested
+        /// contour survives. Returns "VALID cells=&lt;n&gt; contours=&lt;c&gt;
+        /// segs=&lt;s&gt; size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt;
+        /// &lt;message&gt;" — below error correction M the verdict is
+        /// "INVALID InvalidEccLevel ..." naming the ECC field. Inert under
+        /// Circle (dots emit no contours).
+        /// </summary>
+        string SetQrRingSplitProbe(bool ringSplit);
 
         /// <summary>
         /// Picks the per-cell shape exactly like the pane's shape selector:
