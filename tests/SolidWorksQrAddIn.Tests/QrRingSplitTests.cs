@@ -3,20 +3,28 @@ using System.Linq;
 using QRCoder;
 using SolidWorksQrAddIn.Core.Commands;
 using SolidWorksQrAddIn.Core.Geometry;
+using SolidWorksQrAddIn.Core.Interaction;
+using SolidWorksQrAddIn.Core.Preview;
 using SolidWorksQrAddIn.Tests.Fakes;
 using Xunit;
 
 namespace SolidWorksQrAddIn.Tests
 {
     /// <summary>
-    /// Ticket #52 — the opt-in ring split at the request→result seam. With the
-    /// flag on under the Square cell shape, the emitted set loses every
-    /// island-bearing void: un-emitted cells flooded from the working-matrix
-    /// border mark the exterior-connected void, and a minimal module-aligned
-    /// cell path dropped through each enclosing band joins the hole's void to
-    /// that flood — iterated to any nesting depth, under either polarity. The
-    /// option is refused below ECC M, Circle output ignores it, and with it
-    /// off the output is byte-identical to the historical pipeline.
+    /// Tickets #52/#54 — the opt-in ring split. #52 built the request→result
+    /// seam: with the flag on under the Square cell shape, the emitted set
+    /// loses every island-bearing void — un-emitted cells flooded from the
+    /// working-matrix border mark the exterior-connected void, and a minimal
+    /// module-aligned cell path dropped through each enclosing band joins the
+    /// hole's void to that flood — iterated to any nesting depth, under either
+    /// polarity. The option is refused below ECC M, Circle output ignores it,
+    /// and with it off the output is byte-identical to the historical
+    /// pipeline. #54 carries the option across the session/pane seam: a fixed
+    /// toggle beside invert, off by default and orthogonal to content presets;
+    /// the below-M refusal surfaces as an INVALID verdict naming the ECC
+    /// field; under Circle the control is inert and hidden; the preview shows
+    /// the opened geometry through the existing parity contract; and the info
+    /// line reports the opened-site and dropped-cell counts.
     /// </summary>
     public class QrRingSplitTests
     {
@@ -387,6 +395,278 @@ namespace SolidWorksQrAddIn.Tests
 
             Assert.True(result.Succeeded, result.Error?.Message);
             Assert.Equal(QrCellShape.Circle, result.Sketch!.Info.CellShape);
+        }
+
+        // ---------------- session & pane seam (ticket #54) ----------------
+        // The option is a fixed pane toggle beside invert — not a per-preset
+        // field: its state rides the session into QrSketchRequest.RingSplit
+        // under every content type, the below-M refusal surfaces as an
+        // INVALID verdict naming the ECC field, and the info line reports
+        // what the treatment cost.
+
+        private static (QrSketchSession session, List<FakeQrWindow> windows) NewSession()
+        {
+            var windows = new List<FakeQrWindow>();
+            var session = new QrSketchSession(() =>
+            {
+                var w = new FakeQrWindow();
+                windows.Add(w);
+                return w;
+            });
+            return (session, windows);
+        }
+
+        private static string InfoValue(QrSketchSession session, string label)
+        {
+            foreach (var line in session.InfoLines)
+                if (line.Label == label)
+                    return line.Value;
+            throw new System.Exception($"no info line labelled '{label}'");
+        }
+
+        /// <summary>The session's initial-fields request with the option set.</summary>
+        private static QrSketchRequest ExpectedRequest(bool ringSplit) =>
+            new QrSketchRequest(PayloadA,
+                QrSketchSession.InitialSizeMm,
+                QrSketchSession.InitialGrowthFractionPerSide)
+            { RingSplit = ringSplit };
+
+        [Fact]
+        public void The_pane_option_defaults_off()
+        {
+            var (session, _) = NewSession();
+
+            Assert.False(session.RingSplit);
+            Assert.True(session.RingSplitApplies);   // square is the default shape
+        }
+
+        [Theory]
+        [InlineData(QrCellShape.Square, true)]
+        [InlineData(QrCellShape.Circle, false)]
+        public void Ring_split_applies_to_the_contour_producing_shape_only(
+            QrCellShape shape, bool applies)
+        {
+            Assert.Equal(applies, QrCellShapes.RingSplitApplies(shape));
+        }
+
+        [Fact]
+        public void SetRingSplit_regenerates_the_request_picture_and_view()
+        {
+            var (session, windows) = NewSession();
+            session.SetContent(PayloadA);
+            session.OpenOrFocusWindow();
+            var unsplitSignature = session.Picture!.Signature();
+            var syncs = windows[0].SyncCount;
+
+            var result = session.SetRingSplit(true);
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.True(session.RingSplit);
+            var info = session.CurrentResult!.Sketch!.Info;
+            Assert.True(info.OpenedSiteCount >= 3,
+                $"the v1 payload's three finder rings open: {info.OpenedSiteCount}");
+            Assert.True(info.DroppedCellCount >= info.OpenedSiteCount);
+            // Preview parity: the picture IS a direct render of the split
+            // module result — channels and dropped cells, no second renderer.
+            var expected = QrPictureRenderer.Render(
+                QrSketchGenerator.Generate(ExpectedRequest(ringSplit: true)).Sketch!,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+            Assert.Equal(expected, session.Picture!.Signature());
+            Assert.NotEqual(unsplitSignature, session.Picture!.Signature());
+            // The open view re-pulls: session→view sync like any field edit.
+            Assert.True(windows[0].SyncCount > syncs);
+        }
+
+        [Fact]
+        public void Toggling_back_off_restores_the_unsplit_output()
+        {
+            var (session, _) = NewSession();
+            session.SetContent(PayloadA);
+            var unsplit = session.Picture!.Signature();
+
+            session.SetRingSplit(true);
+            session.SetRingSplit(false);
+
+            Assert.False(session.RingSplit);
+            Assert.Equal(unsplit, session.Picture!.Signature());
+            Assert.Equal(0, session.CurrentResult!.Sketch!.Info.OpenedSiteCount);
+        }
+
+        [Fact]
+        public void RingSplit_without_valid_content_stays_invalid_but_the_setting_sticks()
+        {
+            var (session, _) = NewSession();
+
+            var result = session.SetRingSplit(true);
+
+            Assert.False(result.Succeeded);
+            Assert.Null(session.Picture);
+            Assert.True(session.RingSplit);
+
+            // Content typed afterwards previews the opened geometry.
+            session.SetContent(PayloadA);
+            Assert.True(session.HasValidRequest);
+            var expected = QrPictureRenderer.Render(
+                QrSketchGenerator.Generate(ExpectedRequest(ringSplit: true)).Sketch!,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+            Assert.Equal(expected, session.Picture!.Signature());
+        }
+
+        [Fact]
+        public void An_untouched_option_produces_the_historical_output()
+        {
+            // Default off: the pending request carries RingSplit=false and the
+            // preview is exactly today's render — zero risk on the default path.
+            var (session, _) = NewSession();
+            session.SetContent(PayloadA);
+
+            var expected = QrPictureRenderer.Render(
+                QrSketchGenerator.Generate(ExpectedRequest(ringSplit: false)).Sketch!,
+                QrSketchSession.PreviewPixelsAcross).Signature();
+            Assert.Equal(expected, session.Picture!.Signature());
+            Assert.Equal(0, session.CurrentResult!.Sketch!.Info.OpenedSiteCount);
+            Assert.Equal(0, session.CurrentResult!.Sketch!.Info.DroppedCellCount);
+        }
+
+        [Fact]
+        public void The_below_M_refusal_names_the_ecc_field_and_never_touches_the_host()
+        {
+            var (session, _) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.SetContent(PayloadA);
+            session.SetRingSplit(true);
+
+            var refused = session.SetEccLevel(QRCodeGenerator.ECCLevel.L);
+
+            Assert.False(refused.Succeeded);
+            Assert.Equal(QrSketchErrorKind.InvalidEccLevel, refused.Error!.Kind);
+            Assert.Contains("EccLevel", refused.Error.Message);
+            Assert.False(session.HasValidRequest);
+            Assert.Null(session.Picture);
+            Assert.Equal(refused.Error.Message, session.StatusText);
+
+            // Create is refused by the same verdict — the host is never
+            // touched, so nothing partial or stale can reach the part.
+            var create = session.CreateSketch(host);
+            Assert.False(create.Succeeded);
+            Assert.Empty(host.Document!.Sketches);
+            Assert.Empty(host.Document.BlockDefinitions);
+
+            // The fix the message names — raising the level — clears it.
+            var raised = session.SetEccLevel(QRCodeGenerator.ECCLevel.M);
+            Assert.True(raised.Succeeded, raised.Error?.Message);
+            Assert.True(session.CurrentResult!.Sketch!.Info.OpenedSiteCount >= 3);
+        }
+
+        [Fact]
+        public void Under_circle_the_toggle_is_inert_and_neither_gate_applies()
+        {
+            var (session, _) = NewSession();
+            session.SetContent(PayloadA);
+            session.SetCellShape(QrCellShape.Circle);
+
+            Assert.False(session.RingSplitApplies);   // the pane hides the control
+
+            var result = session.SetRingSplit(true);
+
+            // The flag stores verbatim — the inert-field discipline the
+            // growth and dot-size texts already follow — but drives nothing:
+            // dots emit no contours and no cells drop, and the ECC gate does
+            // not apply either, even at L.
+            Assert.True(session.RingSplit);
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal(0, result.Sketch!.Info.OpenedSiteCount);
+            Assert.Equal(0, result.Sketch!.Info.DroppedCellCount);
+            var underL = session.SetEccLevel(QRCodeGenerator.ECCLevel.L);
+            Assert.True(underL.Succeeded, underL.Error?.Message);
+
+            // Back on Square the stored flag applies — and the below-M
+            // refusal surfaces, exactly like a malformed inert text surfacing
+            // on the shape that needs it.
+            var back = session.SetCellShape(QrCellShape.Square);
+            Assert.False(back.Succeeded);
+            Assert.Equal(QrSketchErrorKind.InvalidEccLevel, back.Error!.Kind);
+            Assert.True(session.RingSplit);
+            Assert.True(session.RingSplitApplies);
+        }
+
+        [Fact]
+        public void The_info_line_reports_opened_sites_and_dropped_cells()
+        {
+            var (session, _) = NewSession();
+            session.SetContent(PayloadA);
+
+            // Option off carries no row — the treatment's cost report appears
+            // only while it is in force, like the circle mode's Dots row.
+            Assert.DoesNotContain(session.InfoLines, l => l.Label == "Ring split");
+
+            session.SetRingSplit(true);
+
+            var info = session.CurrentResult!.Sketch!.Info;
+            var row = InfoValue(session, "Ring split");
+            Assert.Contains(info.OpenedSiteCount + " void", row);
+            Assert.Contains("opened", row);
+            Assert.Contains(info.DroppedCellCount + " cell", row);
+            Assert.Contains("dropped", row);
+        }
+
+        [Fact]
+        public void Create_under_ring_split_inserts_the_opened_geometry()
+        {
+            var (session, _) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.SetContent(PayloadA);
+            session.SetRingSplit(true);
+
+            var result = session.CreateSketch(host);
+
+            Assert.True(result.Succeeded, result.Message);
+            var sketch = host.Document!.Sketches.Single();
+            var expected = QrSketchGenerator.Generate(
+                ExpectedRequest(ringSplit: true)).Sketch!;
+            Assert.Equal(expected.Info.SegmentCount, sketch.ProfileSegments.Count());
+        }
+
+        [Fact]
+        public void The_toggle_applies_to_future_creates_only()
+        {
+            // A sketch keeps the geometry it was created with — a later
+            // toggle never mutates committed work.
+            var (session, _) = NewSession();
+            var host = HostWithSelectedPlane();
+            session.SetContent(PayloadA);
+            session.CreateSketch(host);
+            host.Document!.ActiveSketch = null;
+            var unsplitSegs = host.Document.Sketches[0].ProfileSegments.Count();
+
+            session.SetRingSplit(true);
+            var result = session.CreateSketch(host);
+
+            Assert.True(result.Succeeded, result.Message);
+            var expected = QrSketchGenerator.Generate(
+                ExpectedRequest(ringSplit: true)).Sketch!;
+            Assert.Equal(expected.Info.SegmentCount,
+                host.Document.Sketches[1].ProfileSegments.Count());
+            Assert.Equal(unsplitSegs, host.Document.Sketches[0].ProfileSegments.Count());
+            Assert.NotEqual(unsplitSegs, host.Document.Sketches[1].ProfileSegments.Count());
+        }
+
+        [Fact]
+        public void The_option_rides_every_content_preset_orthogonally()
+        {
+            // A fixed pane field, not a per-preset input: picking a content
+            // type and composing its fields leaves the toggle in force, and
+            // the composed payload gets the same opened geometry.
+            var (session, _) = NewSession();
+            session.SetRingSplit(true);
+            session.SetContentType("url");
+            session.SetPresetField("url", "https://example.com/qr");
+
+            Assert.True(session.RingSplit);
+            Assert.True(session.HasValidRequest, session.StatusText);
+            Assert.Contains("example.com/qr", session.Content);
+            Assert.True(session.CurrentResult!.Sketch!.Info.OpenedSiteCount >= 3,
+                "the composed payload's finder rings open like raw content's");
         }
     }
 }

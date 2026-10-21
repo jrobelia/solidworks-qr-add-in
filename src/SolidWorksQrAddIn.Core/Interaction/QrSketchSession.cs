@@ -17,7 +17,8 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///
     ///   1. Inputs → geometry → picture. <see cref="SetContent"/>,
     ///      <see cref="SetSizeText"/>, <see cref="SetGrowthText"/>,
-    ///      <see cref="SetEccLevel"/> and <see cref="SetInvert"/> store each
+    ///      <see cref="SetEccLevel"/>, <see cref="SetInvert"/> and
+    ///      <see cref="SetRingSplit"/> store each
     ///      edit EXACTLY as entered (no trimming or replacing rejected
     ///      values), re-validate, regenerate the QR
     ///      contour result, and re-render the picture from it. An invalid
@@ -155,6 +156,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private double? _growthFraction = InitialGrowthFractionPerSide;
         private QRCodeGenerator.ECCLevel _eccLevel = QRCodeGenerator.ECCLevel.M;
         private bool _invert;
+        private bool _ringSplit;
         private QrCellShape _cellShape = QrCellShape.Square;
         private string _shapeParameterText = InitialShapeParameterPercentText;
         private double? _shapeParameterFraction;
@@ -256,6 +258,20 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// a white-on-black field for marking/engraving. Default off.
         /// </summary>
         public bool Invert => _invert;
+
+        /// <summary>
+        /// The ring-split option in force (spec #51, ticket #54): when set
+        /// under the Square cell shape, the generator opens every
+        /// island-bearing void — a thin module-aligned channel dropped
+        /// through each enclosing band joins its void to exterior-connected
+        /// space, so no ring → hole → island nesting survives for
+        /// SolidWorks' automatic profile selection to refuse. Default off;
+        /// refused below error correction M (cell drops spend correction
+        /// budget); inert under Circle — dots emit no contours, so the
+        /// stored flag applies to nothing (the pane hides the control via
+        /// <see cref="RingSplitApplies"/>). Applies to future creates only.
+        /// </summary>
+        public bool RingSplit => _ringSplit;
 
         /// <summary>The generation result for the current inputs (null until the first edit).</summary>
         public QrSketchResult? CurrentResult => _current;
@@ -674,6 +690,16 @@ namespace SolidWorksQrAddIn.Core.Interaction
         public bool ShapeParameterApplies => QrCellShapes.ShapeParameterApplies(_cellShape);
 
         /// <summary>
+        /// True while the ring-split option applies — Square only, the sole
+        /// contour-producing shape. Under Circle the toggle is inert (dots
+        /// emit no contours, nothing nests) and the pane hides the control:
+        /// a shape with no contours never offers a meaningless control. The
+        /// flag itself is kept verbatim either way — the same inert-field
+        /// discipline the growth and shape-parameter texts follow.
+        /// </summary>
+        public bool RingSplitApplies => QrCellShapes.RingSplitApplies(_cellShape);
+
+        /// <summary>
         /// The shape-parameter field's label as the pane should show it —
         /// Circle's dot size as a percent of cell pitch (the dot diameter).
         /// </summary>
@@ -752,6 +778,22 @@ namespace SolidWorksQrAddIn.Core.Interaction
         }
 
         /// <summary>
+        /// Sets the ring-split option (spec #51, ticket #54) and re-validates
+        /// the whole request: under the Square cell shape the emitted set is
+        /// opened at every island-bearing void so no doubly-nested contour
+        /// survives, and the picture renders that same result. Below error
+        /// correction M the request fails INVALID naming the EccLevel field —
+        /// never silently bumped. Under Circle the flag stores verbatim but
+        /// is inert (dots emit no contours). Applies to future creates only;
+        /// existing sketches are never mutated.
+        /// </summary>
+        public QrSketchResult SetRingSplit(bool ringSplit)
+        {
+            _ringSplit = ringSplit;
+            return Regenerate();
+        }
+
+        /// <summary>
         /// The request the CURRENT inputs describe — the one the generator
         /// and the create command both consume, so a create can never encode
         /// different settings than the preview showed. Under Circle growth
@@ -764,6 +806,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
             {
                 EccLevel = _eccLevel,
                 Invert = _invert,
+                RingSplit = _ringSplit,
                 CellShape = _cellShape,
                 CellShapeParameter = _shapeParameterFraction ?? 0.0,
             };
@@ -896,6 +939,19 @@ namespace SolidWorksQrAddIn.Core.Interaction
             if (info.CellShape == QrCellShape.Circle)
                 lines.Add(new QrInfoLine("Dots", info.InstanceCount.ToString(
                     CultureInfo.InvariantCulture)));
+            // The ring-split cost report rides the info section only while
+            // the option is in force — Square shape plus the flag set, the
+            // same conditional-row rule the Dots row follows under Circle:
+            // opened voids and dropped cells make the treatment's price
+            // visible rather than silent. Ticket #53's finder channel width
+            // joins this row when the channel surface lands.
+            if (_ringSplit && info.CellShape == QrCellShape.Square)
+                lines.Add(new QrInfoLine(
+                    "Ring split",
+                    info.OpenedSiteCount +
+                    (info.OpenedSiteCount == 1 ? " void opened · " : " voids opened · ") +
+                    info.DroppedCellCount +
+                    (info.DroppedCellCount == 1 ? " cell dropped" : " cells dropped")));
             return lines;
         }
 
