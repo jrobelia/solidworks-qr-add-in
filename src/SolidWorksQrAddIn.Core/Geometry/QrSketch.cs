@@ -69,7 +69,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             double finalSizeMm, double minEdgeMm, double minLightGapMm,
             int contourCount, int segmentCount, bool inverted = false,
             QrCellShape cellShape = QrCellShape.Square,
-            double cellShapeParameter = 0.0, int instanceCount = 0)
+            double cellShapeParameter = 0.0, int instanceCount = 0,
+            int openedSiteCount = 0, int droppedCellCount = 0)
         {
             Version = version;
             CellCount = cellCount;
@@ -86,6 +87,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             CellShape = cellShape;
             CellShapeParameter = cellShapeParameter;
             InstanceCount = instanceCount;
+            OpenedSiteCount = openedSiteCount;
+            DroppedCellCount = droppedCellCount;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -152,6 +155,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// meaningful (contour/segment counts describe the square output).
         /// </summary>
         public int InstanceCount { get; }
+
+        /// <summary>
+        /// Island-bearing voids the ring split opened (spec #51, ticket #52)
+        /// — 0 when the option is off or nothing nested.
+        /// </summary>
+        public int OpenedSiteCount { get; }
+
+        /// <summary>
+        /// Emitted cells the ring split dropped to open those voids — 0 when
+        /// the option is off or nothing nested.
+        /// </summary>
+        public int DroppedCellCount { get; }
     }
 
     /// <summary>
