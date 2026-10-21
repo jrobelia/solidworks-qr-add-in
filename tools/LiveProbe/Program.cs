@@ -335,14 +335,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                 string sketchAName = "";
                 if (sketchA != null)
                 {
-                    VerifyNativeSketch(sketchA, expectedA, "A");
-                    CheckOutline(sketchA, 25.0, "native outline measures the entered 25 mm (default size)");
+                    VerifyXsettingsBlock(sketchA, expectedA, "A");
+                    CheckBlockOutline(sketchA, 25.0,
+                        "the QR outline measures the entered 25 mm (default size)");
                     sketchAName = createA.Split(' ')[1];
 
                     string again = probe.CreateQrFromWindowProbe();
                     Check(again.StartsWith("ERROR") && again.Contains("already"),
                         "create blocked while sketch A is being edited", again);
-                    Check(((object[])sketchA.GetSketchSegments()).Length == expectedA.Info.SegmentCount,
+                    Check(BlockSketchUnchanged(sketchA, expectedA, "A"),
                         "blocked create left the open sketch unchanged");
 
                     mgr.InsertSketch(false); // engineer exits the sketch
@@ -411,9 +412,9 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(sketchC != null, "custom-size sketch remains open for manual editing");
                 if (sketchC != null)
                 {
-                    VerifyNativeSketch(sketchC, expectedA8, "C(40mm,8%)");
-                    CheckOutline(sketchC, 40.0,
-                        "native outline measures the entered 40 mm — not 25");
+                    VerifyXsettingsBlock(sketchC, expectedA8, "C(40mm,8%)");
+                    CheckBlockOutline(sketchC, 40.0,
+                        "the QR outline measures the entered 40 mm — not 25");
                 }
 
                 // Editing inputs while a sketch is open must not resize or
@@ -422,9 +423,9 @@ namespace SolidWorksQrAddIn.LiveProbe
                 probe.SetQrGrowthProbe("12");
                 if (sketchC != null)
                 {
-                    Check(((object[])sketchC.GetSketchSegments()).Length == expectedA8.Info.SegmentCount,
+                    Check(BlockSketchUnchanged(sketchC, expectedA8, "C"),
                         "editing the inputs did not touch the open sketch");
-                    CheckOutline(sketchC, 40.0, "open sketch keeps its 40 mm outline after input edits");
+                    CheckBlockOutline(sketchC, 40.0, "open sketch keeps its 40 mm outline after input edits");
                 }
                 mgr.InsertSketch(false); // engineer exits the custom-size sketch
                 Check(mgr.ActiveSketch == null, "custom-size sketch exits edit mode cleanly");
@@ -442,11 +443,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                 {
                     var featA2 = FindSketchFeature(doc!, sketchAName);
                     var skA2 = featA2?.GetSpecificFeature2() as ISketch;
-                    Check(skA2 != null &&
-                          ((object[])skA2.GetSketchSegments()).Length == expectedA.Info.SegmentCount,
+                    Check(skA2 != null && BlockSketchUnchanged(skA2, expectedA, "A"),
                         "earlier sketch unchanged after the size/growth edits");
                     if (skA2 != null)
-                        CheckOutline(skA2, 25.0, "earlier sketch keeps its 25 mm outline");
+                        CheckBlockOutline(skA2, 25.0, "earlier sketch keeps its 25 mm outline");
                 }
 
                 // ================= payload B: second sketch, first unchanged =================
@@ -467,7 +467,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var sketchB = mgr.ActiveSketch as ISketch;
                 if (sketchB != null)
                 {
-                    VerifyNativeSketch(sketchB, expectedB, "B");
+                    VerifyXsettingsBlock(sketchB, expectedB, "B");
                     mgr.InsertSketch(false);
                 }
 
@@ -475,10 +475,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                 {
                     var featA = FindSketchFeature(doc, sketchAName);
                     var skA = featA?.GetSpecificFeature2() as ISketch;
-                    Check(skA != null &&
-                          ((object[])skA.GetSketchSegments()).Length == expectedA.Info.SegmentCount,
-                        "first sketch remains unchanged after the second create",
-                        $"segments={((object[]?)skA?.GetSketchSegments())?.Length} expected={expectedA.Info.SegmentCount}");
+                    Check(skA != null && BlockSketchUnchanged(skA, expectedA, "A"),
+                        "first sketch remains unchanged after the second create");
                 }
 
                 // ================= ticket 5: supports & coordinate convention =================
@@ -707,7 +705,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     var sketchObj = mgr.ActiveSketch as ISketch;
                     Check(create.StartsWith("OK"), $"perf {tag}: create succeeds", create);
                     if (sketchObj != null)
-                        CheckOutline(sketchObj, sizeMm, $"perf {tag}: outline measures the used size");
+                        CheckBlockOutline(sketchObj, sizeMm, $"perf {tag}: outline measures the used size");
                     Console.WriteLine($"PERF payload={tag} create_ms={t0.Elapsed.TotalMilliseconds:F0} " +
                         $"(incl. gen_ms={genMs:F1} — native insert ≈ " +
                         $"{t0.Elapsed.TotalMilliseconds - genMs:F0} ms)");
@@ -3097,20 +3095,53 @@ namespace SolidWorksQrAddIn.LiveProbe
         }
 
         /// <summary>
-        /// Full ticket-5 verification of a committed-or-open QR sketch on a
-        /// support: module-identical contours, entered size centred at the
-        /// sketch origin, sketch->model mapping places every endpoint ON the
-        /// support plane, and the sketch reports the selected entity as its
-        /// reference. Run while the sketch is still the active (open) one.
+        /// Full ticket-5 verification of an open QR sketch on a support: the
+        /// block census proves the module-identical content (instance count,
+        /// Scale, origin, def edges 1:1, real-size construction squares) and
+        /// the outline measures the entered size; the instance is then
+        /// exploded so the real host-space entities can be checked — every
+        /// endpoint ON the support plane via the sketch->model frame, the
+        /// contour/region census — and the sketch reports the selected
+        /// entity as its reference. The def reports an offset frame
+        /// (consexp), so raw def coordinates are never read: only lengths
+        /// and extents pre-explode. Run while the sketch is still the
+        /// active (open) one.
         /// </summary>
         private static void VerifySketchOnSupport(
-            ISldWorks sw, ISketch sketch, QrSketch expected, string tag,
+            ISldWorks sw, ISketchManager mgr, ISketch sketch, QrSketch expected, string tag,
             SupportFrame support, string createResult)
         {
-            VerifyNativeSketch(sketch, expected, tag,
-                faceSupport: support.EntitySelType == (int)swSelectType_e.swSelFACES);
-            CheckOutline(sketch, 25.0, $"native outline measures the entered 25 mm on {tag}");
+            VerifyXsettingsBlock(sketch, expected, tag);
+            CheckBlockOutline(sketch, 25.0, $"the QR outline measures the entered 25 mm on {tag}");
             Check(createResult.StartsWith("OK"), $"Create Sketch succeeded on {tag}", createResult);
+
+            // Post-block the host sketch carries no enumerable segments and
+            // the def's own frame is offset — explode the instance to
+            // materialise the real host-space geometry the endpoint and
+            // region checks read, the same route used on committed sketches.
+            var inst = sketch.GetSketchBlockInstanceCount() == 1
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            bool exploded = false;
+            try { mgr.ExplodeSketchBlockInstance((SketchBlockInstance)inst!); exploded = true; }
+            catch (Exception ex) { Console.WriteLine($"#   {tag}: explode threw {ex.GetType().Name}"); }
+            Check(exploded, $"the block explodes into real host-space geometry on {tag}");
+            if (!exploded) return;
+
+            ExplodedSketchCensus(sketch, expected, tag);
+
+            // Face supports add a region for the face's own boundary on top
+            // of the QR contours (the pre-block floor, now on the exploded
+            // sketch: 28 regions for 27 contours).
+            bool faceSupport = support.EntitySelType == (int)swSelectType_e.swSelFACES;
+            int minRegions = expected.Info.ContourCount + (faceSupport ? 1 : 0);
+            bool regionsOk = faceSupport
+                ? sketch.GetSketchRegionCount() >= minRegions
+                : sketch.GetSketchRegionCount() == expected.Info.ContourCount;
+            Check(regionsOk,
+                $"native region count = contour count" +
+                    $"{(faceSupport ? " + face-boundary regions" : "")} ({tag})",
+                $"native={sketch.GetSketchRegionCount()} floor={minRegions} " +
+                    $"(contours={expected.Info.ContourCount})");
 
             // Every endpoint, mapped sketch->model, must lie on the support plane.
             var mu = sw.IGetMathUtility();
@@ -3122,19 +3153,17 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var origin = MapPoint(mu, s2m, 0, 0, 0);
                 var xAx = Sub(MapPoint(mu, s2m, 1, 0, 0), origin);
                 var yAx = Sub(MapPoint(mu, s2m, 0, 1, 0), origin);
-                foreach (var so in (object[])sketch.GetSketchSegments())
+                foreach (var s in SketchLineSpans(sketch))
                 {
-                    if (!(so is ISketchLine l)) continue;
-                    foreach (var po in new object?[] { l.GetStartPoint2(), l.GetEndPoint2() })
+                    foreach (var (px, py) in new[] { (s.X1, s.Y1), (s.X2, s.Y2) })
                     {
-                        if (!(po is ISketchPoint p)) continue;
-                        var m = MapPoint(mu, s2m, p.X, p.Y, p.Z);
+                        var m = MapPoint(mu, s2m, px, py, 0.0);
                         maxOffPlane = Math.Max(maxOffPlane,
                             Math.Abs(Dot(Sub(m, support.Root), support.Normal)));
                         // in-plane coords must recover the sketch coords exactly
                         var rel = Sub(m, origin);
-                        maxInPlaneErr = Math.Max(maxInPlaneErr, Math.Abs(Dot(rel, xAx) - p.X));
-                        maxInPlaneErr = Math.Max(maxInPlaneErr, Math.Abs(Dot(rel, yAx) - p.Y));
+                        maxInPlaneErr = Math.Max(maxInPlaneErr, Math.Abs(Dot(rel, xAx) - px));
+                        maxInPlaneErr = Math.Max(maxInPlaneErr, Math.Abs(Dot(rel, yAx) - py));
                     }
                 }
             }
@@ -3238,7 +3267,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(skR != null, "QR sketch on rotated plane left open for editing");
                 if (skR != null)
                 {
-                    VerifySketchOnSupport(sw, skR, expectedA, angled.Label, angled, cr);
+                    VerifySketchOnSupport(sw, mgr, skR, expectedA, angled.Label, angled, cr);
                     mgr.InsertSketch(false);
                 }
             }
@@ -3280,7 +3309,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(skT != null, "QR sketch on Top Plane left open for editing");
                 if (skT != null)
                 {
-                    VerifySketchOnSupport(sw, skT, expectedA, tpFrame.Label, tpFrame, ct);
+                    VerifySketchOnSupport(sw, mgr, skT, expectedA, tpFrame.Label, tpFrame, ct);
                     mgr.InsertSketch(false);
                 }
             }
@@ -3309,7 +3338,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(skF != null, $"QR sketch on planar {pick.Item1} face left open for editing");
                 if (skF != null)
                 {
-                    VerifySketchOnSupport(sw, skF, expectedA, frame.Label, frame, cf);
+                    VerifySketchOnSupport(sw, mgr, skF, expectedA, frame.Label, frame, cf);
                     mgr.InsertSketch(false); // engineer exits before feature use
                 }
 
@@ -3872,7 +3901,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // Boss-Extrude the QR material regions (2 mm).
             doc.ClearSelection2(true);
-            Check(SelectQrMaterialRegions(sw, doc, qrSketchName, expected),
+            Check(SelectQrMaterialRegions(sw, doc, ext, mgr, qrSketchName, expected),
                 $"QR material regions selectable for the boss ({tag})");
             var fm = (IFeatureManager)doc.FeatureManager;
             var boss = fm.FeatureExtrusion3(
@@ -3885,7 +3914,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
             // Shallow Cut-Extrude the QR material regions (1 mm).
             doc.ClearSelection2(true);
-            Check(SelectQrMaterialRegions(sw, doc, qrSketchName, expected),
+            Check(SelectQrMaterialRegions(sw, doc, ext, mgr, qrSketchName, expected),
                 $"QR material regions re-selectable for the cut ({tag})");
             var cut = fm.FeatureCut4(
                 true, false, true, (int)swEndConditions_e.swEndCondBlind, 0,
@@ -3930,96 +3959,76 @@ namespace SolidWorksQrAddIn.LiveProbe
             Math.Abs(a.minX - b.minX) < tol && Math.Abs(a.maxX - b.maxX) < tol &&
             Math.Abs(a.minY - b.minY) < tol && Math.Abs(a.maxY - b.maxY) < tol;
 
-        /// <summary>Overall outline bounds of a native sketch (sketch-space metres).</summary>
-        private static (double minX, double maxX, double minY, double maxY) SketchOutline(
-            ISketch sketch)
+        /// <summary>
+        /// The post-block QR invariants: exactly one instance at Scale 1 in
+        /// the sketch, zero enumerable host segments, and the definition
+        /// carrying the material segments plus eight square edges. Returns
+        /// whether the sketch bears the expected block — works on open and
+        /// committed sketches.
+        /// </summary>
+        private static bool TryQrBlockCensus(
+            ISketch sketch, QrSketch expected, string tag, out string diag)
         {
-            double minX = double.MaxValue, maxX = double.MinValue;
-            double minY = double.MaxValue, maxY = double.MinValue;
-            foreach (var so in (object[])sketch.GetSketchSegments())
-            {
-                if (so is ISketchLine line)
-                {
-                    var p1 = (ISketchPoint)line.GetStartPoint2();
-                    var p2 = (ISketchPoint)line.GetEndPoint2();
-                    minX = Math.Min(minX, Math.Min(p1.X, p2.X));
-                    maxX = Math.Max(maxX, Math.Max(p1.X, p2.X));
-                    minY = Math.Min(minY, Math.Min(p1.Y, p2.Y));
-                    maxY = Math.Max(maxY, Math.Max(p1.Y, p2.Y));
-                }
-            }
-            return (minX, maxX, minY, maxY);
+            int inst = sketch.GetSketchBlockInstanceCount();
+            int hostSegs = SketchLineSpans(sketch).Count;
+            var blk = inst > 0 ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            var defSketch = (blk?.Definition as ISketchBlockDefinition)?.GetSketch() as ISketch;
+            int defSegs = defSketch == null ? -1 : SketchLineSpans(defSketch).Count;
+            diag = $"inst={inst} hostSegs={hostSegs} " +
+                $"defSegs={defSegs} expected={expected.Info.SegmentCount}+8 ({tag})";
+            return inst == 1 && hostSegs == 0 &&
+                   defSegs == expected.Info.SegmentCount + 8;
         }
 
         /// <summary>
-        /// The native grown QR outline must measure the entered size on both
-        /// axes, within the declared tolerance (1e-6 mm). The size is the
-        /// final grown outline width — margin excluded.
+        /// A sketch that is supposed to be left behind by a refused create
+        /// (or retained across a second create) must still be the untouched
+        /// QR block — the pre-block verifier read host-space segments that no
+        /// longer exist; the block census is the equivalent evidence.
         /// </summary>
-        private static void CheckOutline(ISketch sketch, double expectedMm, string name)
+        private static bool BlockSketchUnchanged(
+            ISketch sketch, QrSketch expected, string tag)
         {
-            var o = SketchOutline(sketch);
-            double half = expectedMm / 2.0 / 1000.0;
+            bool ok = false;
+            string diag = "unreadable";
+            try { ok = TryQrBlockCensus(sketch, expected, tag, out diag); }
+            catch (Exception ex) { diag = ex.GetType().Name; }
+            Console.WriteLine($"#   retained sketch '{tag}' census: {diag}");
+            return ok;
+        }
+
+        /// <summary>
+        /// The QR's material extent inside the block definition must measure
+        /// the entered size on both axes, within the declared tolerance
+        /// (1e-6 mm). Definition coordinates are def-space — the def sketch
+        /// reports an offset frame — so only the SPAN (frame-independent) is
+        /// measured, never absolute positions.
+        /// </summary>
+        private static void CheckBlockOutline(
+            ISketch sketch, double expectedMm, string name)
+        {
+            var inst = sketch.GetSketchBlockInstanceCount() == 1
+                ? sketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+            var defSketch = inst != null
+                ? (inst.Definition as ISketchBlockDefinition)?.GetSketch() as ISketch : null;
+            var defLines = defSketch != null
+                ? SketchLineSpans(defSketch)
+                : new List<SegSpan>();
+            double mnX = double.MaxValue, mxX = double.MinValue;
+            double mnY = double.MaxValue, mxY = double.MinValue;
+            foreach (var s in defLines.Where(s => !s.Construction))
+            {
+                mnX = Math.Min(mnX, Math.Min(s.X1, s.X2));
+                mxX = Math.Max(mxX, Math.Max(s.X1, s.X2));
+                mnY = Math.Min(mnY, Math.Min(s.Y1, s.Y2));
+                mxY = Math.Max(mxY, Math.Max(s.Y1, s.Y2));
+            }
             const double tol = 1e-9; // metres == the declared 1e-6 mm tolerance
-            Check(Math.Abs(o.maxX - half) <= tol && Math.Abs(o.minX + half) <= tol &&
-                  Math.Abs(o.maxY - half) <= tol && Math.Abs(o.minY + half) <= tol,
+            double w = mxX - mnX, h = mxY - mnY;
+            Check(Math.Abs(w - expectedMm / 1000.0) <= tol &&
+                  Math.Abs(h - expectedMm / 1000.0) <= tol,
                 name,
-                $"x [{o.minX * 1000:F4}, {o.maxX * 1000:F4}]  " +
-                $"y [{o.minY * 1000:F4}, {o.maxY * 1000:F4}] mm — expected ±{expectedMm / 2.0} mm");
-        }
-
-        /// <summary>
-        /// Native sketch must reproduce the module's contour set 1:1.
-        /// On a planar-FACE support SolidWorks additionally reports one region
-        /// for the face's own boundary (verified live: 28 regions for 27
-        /// contours) — pass faceSupport=true there.
-        /// </summary>
-        private static void VerifyNativeSketch(ISketch sketch, QrSketch expected, string tag,
-            bool faceSupport = false)
-        {
-            var segs = (object[])sketch.GetSketchSegments();
-            Check(segs.Length == expected.Info.SegmentCount,
-                $"native segment count matches the module's contour edges ({tag})",
-                $"native={segs.Length} expected={expected.Info.SegmentCount}");
-            Check(sketch.GetSketchContourCount() == expected.Info.ContourCount,
-                $"native contour count matches incl. holes+islands ({tag})",
-                $"native={sketch.GetSketchContourCount()} expected={expected.Info.ContourCount}");
-            // SolidWorks exposes ONE sketch region per contour (a hole's
-            // interior is a region too) — plus, on a face support, at least
-            // one region for the enclosing face boundary; if the QR overflows
-            // the face the boundary clips it into still more regions (the
-            // thin side face measured 42 live), so the floor is what matters.
-            int minRegions = expected.Info.ContourCount + (faceSupport ? 1 : 0);
-            bool regionsOk = faceSupport
-                ? sketch.GetSketchRegionCount() >= minRegions
-                : sketch.GetSketchRegionCount() == expected.Info.ContourCount;
-            Check(regionsOk,
-                $"native region count = contour count" +
-                    $"{(faceSupport ? " + face-boundary regions" : "")} ({tag})",
-                $"native={sketch.GetSketchRegionCount()} floor={minRegions} " +
-                    $"(contours={expected.Info.ContourCount})");
-
-            const double tol = 1e-9; // metres — tighter than SW's own tolerance
-            var native = ((object[])sketch.GetSketchContours()).Cast<ISketchContour>().ToList();
-            var nativeBoxes = native.Select(NativeBBox).ToList();
-            var used = new bool[nativeBoxes.Count];
-            int matched = 0;
-            foreach (var mc in expected.Contours)
-            {
-                var mb = ModuleBBox(mc);
-                int hit = -1;
-                for (var i = 0; i < nativeBoxes.Count; i++)
-                    if (!used[i] && BBoxEquals(mb, nativeBoxes[i], tol)) { hit = i; break; }
-                if (hit >= 0) { used[hit] = true; matched++; }
-            }
-            Check(matched == expected.Contours.Count && native.Count == expected.Contours.Count,
-                $"every generated contour exists natively with a matching bounding box ({tag})",
-                $"matched={matched} native={native.Count} expected={expected.Contours.Count}");
-
-            var nested = expected.Regions.Where(rg => rg.Holes.Any(h => h.Islands.Count > 0)).ToList();
-            Check(nested.Count >= 1,
-                $"finder-style ring/hole/island nestings present ({tag})",
-                $"nested regions={nested.Count}");
+                $"span {w * 1000:F4} × {h * 1000:F4} mm — expected {expectedMm} mm");
         }
 
         // ---------------- feature use on a backing plate ----------------
@@ -4044,11 +4053,39 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// regions are skipped so a Boss/Cut-Extrude reproduces the QR pattern.
         /// </summary>
         private static bool SelectQrMaterialRegions(ISldWorks sw, IModelDoc2 doc,
-            string qrSketchName, QrSketch expected)
+            IModelDocExtension ext, ISketchManager mgr, string qrSketchName,
+            QrSketch expected)
         {
             var sketchFeature = FindSketchFeature(doc, qrSketchName);
             if (sketchFeature == null) return false;
             var sketch = sketchFeature.GetSpecificFeature2() as ISketch;
+            if (sketch == null) return false;
+
+            // Post-block the QR rides a block instance whose internals are not
+            // host sketch regions — the user route is to explode the block,
+            // then extrude the material contours. Do the same: re-enter the
+            // committed sketch, explode the instance, exit, then read regions.
+            try
+            {
+                if (sketch.GetSketchBlockInstanceCount() > 0)
+                {
+                    doc.ClearSelection2(true);
+                    if (!ext.SelectByID2(qrSketchName, "SKETCH", 0, 0, 0, false, 0, null,
+                            (int)swSelectOption_e.swSelectOptionDefault))
+                        return false;
+                    mgr.InsertSketch(true);
+                    var editSketch = mgr.ActiveSketch as ISketch;
+                    var inst = editSketch != null && editSketch.GetSketchBlockInstanceCount() > 0
+                        ? editSketch.IGetSketchBlockInstances(0) as ISketchBlockInstance : null;
+                    if (inst != null)
+                        mgr.ExplodeSketchBlockInstance((SketchBlockInstance)inst);
+                    mgr.InsertSketch(false);
+                    doc.ClearSelection2(true);
+                    sketch = sketchFeature.GetSpecificFeature2() as ISketch;
+                    if (sketch == null) return false;
+                }
+            }
+            catch { }
             if (sketch == null) return false;
 
             var regions = sketch.GetSketchRegions() as object[];
@@ -6950,6 +6987,21 @@ namespace SolidWorksQrAddIn.LiveProbe
             Check(bk.GetSketchBlockInstanceCount() == 0,
                 $"explode removes the block instance ({tag})");
 
+            ExplodedSketchCensus(bk, expected, tag);
+            mgr.InsertSketch(false);
+            doc.ClearSelection2(true);
+        }
+
+        /// <summary>
+        /// Census of an exploded QR sketch (still open): the exploded HOST
+        /// lines match the module 1:1 in real sketch coordinates — material
+        /// segment count, the two construction squares flagged, and every
+        /// material contour matching a module contour's bounding box exactly
+        /// (positions, not just lengths). Shared by the committed-sketch
+        /// route above and the open-sketch support verification.
+        /// </summary>
+        private static void ExplodedSketchCensus(ISketch bk, QrSketch expected, string tag)
+        {
             var rawAll = SketchLineSpans(bk);
             var raw = rawAll.Where(s => !s.Construction).ToList();
             Check(raw.Count == expected.Info.SegmentCount,
@@ -6985,8 +7037,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                 $"every exploded contour matches a module contour bbox 1:1 ({tag})",
                 $"matched={matched} nativeMaterial={materialNative.Count} " +
                 $"nativeTotal={nativeAll.Count} expected={expected.Contours.Count}");
-            mgr.InsertSketch(false);
-            doc.ClearSelection2(true);
         }
 
         /// <summary>A contour counts as material when any of its segments is non-construction.</summary>
