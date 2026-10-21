@@ -206,7 +206,7 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#44 part-property source gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
 ```
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
@@ -258,6 +258,22 @@ mutate — and it prints its module-side expectations (composed payload, rung
 table, accepted size) before that refusal so a blocked run still shows what
 the live half would check. Gate results are recorded in
 `docs/XSETTINGS-GATES.md`.
+
+The `swprops` mode (ticket #46) is the spec-21 SW Properties end-to-end
+live gate. The harness itself writes the fixture — document-level,
+configuration-specific, empty and whitespace-only properties via
+`CustomPropertyManager.Add3` on TWO configurations of the same part (plus a
+second document with its own values) — then drives the pane path
+(`SetQrContentTypeProbe`/`SetQrPresetFieldProbe`/`WindowStateProbe`'s
+`viewTemplateNames`/`viewResolved` echoes/`CreateQrFromWindowProbe`) and
+proves each created sketch encodes exactly the resolved literal by the
+module-identical route (block census + exploded 1:1 contour match).
+Configuration and document switches must re-resolve the names, the Resolved
+row and the preview; a missing or empty `$PRP` reference must refuse the
+create before any host mutation; the no-document case must report NODOC.
+Like `xsettings` it **refuses to run while any `SLDWORKS.exe` process
+exists** and prints its fixture plan before that refusal. Gate results are
+recorded in `docs/SWPROPS-GATES.md`.
 
 The `units` mode uses a session-free instance and checks the native document
 watcher plus the actual pane's rendered size label, input, and cell-size value.
