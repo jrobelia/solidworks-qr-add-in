@@ -243,5 +243,27 @@ namespace SolidWorksQrAddIn.Core
         /// or "ERROR ...".
         /// </summary>
         string SetPatternDimProbe(string dimensionName, double valueM);
+
+        // ---------------- part-property source (ticket-#44 probes) ----------------
+
+        /// <summary>
+        /// Enumerates the resolvable property names of the active part and
+        /// its active configuration through the add-in's real
+        /// part-property source — the names a "$PRP:"name"" reference could
+        /// resolve to, configuration-store names first, each listed once.
+        /// Returns "SWPROPS kind=part doc='&lt;title&gt;' config='&lt;cfg&gt;'
+        /// names=&lt;n&gt; '&lt;name&gt;' ..." or "SWPROPS kind=&lt;kind&gt;
+        /// names=0" when the active document is not a part.
+        /// </summary>
+        string SwPropertiesProbe();
+
+        /// <summary>
+        /// Resolves one property reference by name against the active part's
+        /// active configuration — the verdict is always named, never a
+        /// silent empty string:
+        /// "SWPROP '&lt;name&gt;' RESOLVED '&lt;value&gt;'" / "EMPTY" /
+        /// "MISSING" / "NODOC".
+        /// </summary>
+        string SwPropertyResolveProbe(string name);
     }
 }
