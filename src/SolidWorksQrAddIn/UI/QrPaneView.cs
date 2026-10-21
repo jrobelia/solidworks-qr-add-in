@@ -139,6 +139,13 @@ namespace SolidWorksQrAddIn.UI
         private readonly Dictionary<string, Control> _presetInputs =
             new Dictionary<string, Control>();
         private readonly HashSet<string> _dirtyPresetFields = new HashSet<string>();
+        // Template-kind chrome (spec #21): the insert-property dropdown and
+        // the read-only Resolved row, keyed by the field they decorate —
+        // both refresh from session surfaces on every pull.
+        private readonly Dictionary<string, ComboBox> _insertDropdowns =
+            new Dictionary<string, ComboBox>();
+        private readonly Dictionary<string, TextBox> _resolvedRows =
+            new Dictionary<string, TextBox>();
         private string? _shownPresetId;
 
         /// <param name="session">Session state the view renders and drives.</param>
@@ -522,6 +529,8 @@ namespace SolidWorksQrAddIn.UI
             _presetFieldsPanel.Children.Clear();
             _presetInputs.Clear();
             _dirtyPresetFields.Clear();
+            _insertDropdowns.Clear();
+            _resolvedRows.Clear();
             _shownPresetId = _session.ContentPresetId;
             var preset = _session.CurrentPreset;
             bool wasSuppressing = _suppressFieldEvents;
@@ -583,7 +592,8 @@ namespace SolidWorksQrAddIn.UI
                 default:
                 {
                     var box = new TextBox { ToolTip = field.Hint };
-                    if (field.Kind == PayloadFieldKind.MultilineText)
+                    if (field.Kind == PayloadFieldKind.MultilineText ||
+                        field.Kind == PayloadFieldKind.Template)
                     {
                         box.AcceptsReturn = true;
                         box.TextWrapping = TextWrapping.Wrap;
@@ -606,8 +616,137 @@ namespace SolidWorksQrAddIn.UI
                 ToolTip = field.Required ? "Required" : null,
                 Margin = new Thickness(0, 8, 0, 4),
             });
-            row.Children.Add(input);
+            if (field.Kind == PayloadFieldKind.Template)
+            {
+                // The sw-props composite (spec #21, prototype variant A):
+                // the insert-property dropdown ABOVE the multiline
+                // template box, the read-only Resolved row BELOW it.
+                row.Children.Add(BuildTemplateInsertDropdown(field.Key, (TextBox)input));
+                row.Children.Add(input);
+                row.Children.Add(BuildTemplateResolvedRow(field.Key));
+            }
+            else
+            {
+                row.Children.Add(input);
+            }
             return row;
+        }
+
+        /// <summary>
+        /// The insert-property dropdown above a template box: a placeholder
+        /// item plus every resolvable property name of the active part
+        /// (<see cref="QrSketchSession.SwPropertyNames"/>). A pick inserts
+        /// the <c>$PRP:"name"</c> token at the template's caret — replacing
+        /// any selection — and resets the dropdown to its placeholder:
+        /// pick-and-it-inserts, no Insert button (the settled prototype
+        /// interaction).
+        /// </summary>
+        private ComboBox BuildTemplateInsertDropdown(string fieldKey, TextBox templateBox)
+        {
+            var combo = new ComboBox
+            {
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MinWidth = 220,
+                Margin = new Thickness(0, 0, 0, 4),
+                ToolTip = "Insert a property of the active part as a " +
+                          "$PRP:\"name\" reference at the template's caret.",
+            };
+            PopulateInsertDropdown(combo);
+            combo.SelectionChanged += (_, __) =>
+            {
+                if (_suppressFieldEvents)
+                    return;
+                if (!(combo.SelectedItem is ComboBoxItem item) || !(item.Tag is string name))
+                {
+                    combo.SelectedIndex = 0;   // the placeholder is never a pick
+                    return;
+                }
+                templateBox.SelectedText = "$PRP:\"" + name + "\"";
+                templateBox.Focus();
+                combo.SelectedIndex = 0;
+            };
+            _insertDropdowns[fieldKey] = combo;
+            return combo;
+        }
+
+        /// <summary>
+        /// (Re)fills one insert dropdown: the placeholder plus the session's
+        /// current property names — called on build and every refresh so a
+        /// document/configuration switch can never leave a stale part's
+        /// names. Skipped while the dropdown is open — a rebuild would
+        /// collapse the engineer's in-progress pick.
+        /// </summary>
+        private void PopulateInsertDropdown(ComboBox combo)
+        {
+            if (combo.IsDropDownOpen)
+                return;
+            var names = _session.SwPropertyNames;
+            combo.Items.Clear();
+            combo.Items.Add(new ComboBoxItem
+            {
+                Content = names.Count == 0
+                    ? "(no part properties to insert)"
+                    : "(insert part property…)",
+            });
+            foreach (var name in names)
+                combo.Items.Add(new ComboBoxItem { Content = name, Tag = name });
+            combo.SelectedIndex = 0;
+            combo.IsEnabled = names.Count > 0;
+        }
+
+        /// <summary>
+        /// The read-only Resolved row under a template box — the literal the
+        /// QR encodes after <c>$PRP</c> resolution, or the ERR: reason it
+        /// cannot. A read-only box (not a label) so the literal is
+        /// selectable/copyable.
+        /// </summary>
+        private FrameworkElement BuildTemplateResolvedRow(string fieldKey)
+        {
+            var row = new StackPanel();
+            row.Children.Add(new TextBlock
+            {
+                Text = "Resolved:",
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 4, 0, 4),
+            });
+            var resolvedBox = new TextBox
+            {
+                IsReadOnly = true,
+                IsTabStop = false,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 56,
+                ToolTip = "The literal payload after resolving every " +
+                          "$PRP:\"name\" reference against the active part — " +
+                          "what the QR encodes.",
+            };
+            _resolvedRows[fieldKey] = resolvedBox;
+            row.Children.Add(resolvedBox);
+            return row;
+        }
+
+        /// <summary>
+        /// Re-pulls the template-field chrome on every view refresh: the
+        /// insert dropdown's names (the live part's resolvable properties)
+        /// and the Resolved row — green on a resolved literal, red while
+        /// the template's own resolution error is in force.
+        /// </summary>
+        private void RefreshTemplateRows()
+        {
+            var preview = _session.ResolvedTemplatePreview;
+            var error = _session.PresetFieldError;
+            foreach (var combo in _insertDropdowns.Values)
+                PopulateInsertDropdown(combo);
+            foreach (var pair in _resolvedRows)
+            {
+                // Only an error naming THIS field turns its row red — a
+                // field-level failure elsewhere is none of its business.
+                bool failed = error != null &&
+                    (error.FieldKey == null ||
+                     string.Equals(error.FieldKey, pair.Key, StringComparison.Ordinal));
+                pair.Value.Text = preview ?? string.Empty;
+                pair.Value.Foreground = failed ? Brushes.DarkRed : Brushes.DarkGreen;
+            }
         }
 
         /// <summary>
@@ -796,6 +935,7 @@ namespace SolidWorksQrAddIn.UI
             _shapeParamLabel.Visibility = paramShown;
             _shapeParamBox.Visibility = paramShown;
             FlagPresetFieldError();
+            RefreshTemplateRows();
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
             RebuildInfoRows();
             ShowStatus(_session.StatusText, isError: !_session.HasValidRequest);
@@ -868,11 +1008,18 @@ namespace SolidWorksQrAddIn.UI
                 var cell = labels.FirstOrDefault(x => Grid.GetColumn(x) == 0 && x.Text == "Cell size");
                 string cellText = cell == null ? string.Empty : labels.First(
                     x => Grid.GetColumn(x) == 1 && Grid.GetRow(x) == Grid.GetRow(cell)).Text;
+                // Template-kind echoes for the sw-props gates (#46): -1
+                // marks "no template field in force" — distinct from 0
+                // names on a live template field.
+                var insertCombo = _insertDropdowns.Values.FirstOrDefault();
+                var resolvedBox = _resolvedRows.Values.FirstOrDefault();
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
                        $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
                        $"viewShape={_shapeCombo.SelectedValue} viewParam={_shapeParamBox.Text} " +
                        $"viewGrowthVisible={_growthBox.Visibility == Visibility.Visible} " +
-                       $"viewParamVisible={_shapeParamBox.Visibility == Visibility.Visible}";
+                       $"viewParamVisible={_shapeParamBox.Visibility == Visibility.Visible} " +
+                       $"viewTemplateNames={(insertCombo == null ? -1 : insertCombo.Items.Count - 1)} " +
+                       $"viewResolved={(resolvedBox?.Text ?? string.Empty)}";
             }
         }
 

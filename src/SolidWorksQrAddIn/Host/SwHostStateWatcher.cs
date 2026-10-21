@@ -8,7 +8,10 @@ namespace SolidWorksQrAddIn.Host
     /// <see cref="IHostStateWatcher"/> over SolidWorks notify events: the
     /// application's <c>ActiveDocChangeNotify</c> (a document switch can
     /// mean a different length unit) plus the active document's
-    /// <c>UnitsChangeNotify</c> (a unit edit lands behind the pane's back).
+    /// <c>UnitsChangeNotify</c> (a unit edit lands behind the pane's back)
+    /// and — on parts — <c>ActiveConfigChangePostNotify</c> and the
+    /// custom-property add/change/delete notifications: the inputs a
+    /// payload template's <c>$PRP</c> resolution depends on (spec #21).
     /// The event carries no payload — subscribers re-capture the state they
     /// care about through the normal host seam. Best-effort: a missed or
     /// unhookable event only ever leaves a stale display string, never a
@@ -48,36 +51,53 @@ namespace SolidWorksQrAddIn.Host
             }
         }
 
-        /// <summary>Move the per-document unit hook onto the active document.</summary>
+        /// <summary>Move the per-document hooks onto the active document.</summary>
         private void HookDoc(ModelDoc2? doc)
         {
-            try { HookUnits(_watchedDoc, attach: false); }
+            try { HookDocEvents(_watchedDoc, attach: false); }
             catch { /* a dead document must not trap unhooking */ }
             _watchedDoc = doc;
             try
             {
                 if (doc != null)
-                    HookUnits(doc, attach: true);
+                    HookDocEvents(doc, attach: true);
             }
             catch (Exception ex)
             {
-                Diag.Log($"document unit watch skipped: {ex.Message}");
+                Diag.Log($"document watch skipped: {ex.Message}");
                 _watchedDoc = null;
             }
         }
 
         /// <summary>
-        /// Attach or detach the document's UnitsChangeNotify — the event is
-        /// declared per document coclass (PartDoc / AssemblyDoc /
-        /// DrawingDoc), so the hook follows the document's actual kind.
+        /// Attach or detach the document's change notifications — the unit
+        /// edit on every document kind plus, for parts, the configuration
+        /// switch and custom-property edits a <c>$PRP</c> resolution
+        /// re-runs on (spec #21). Events are declared per document coclass
+        /// (PartDoc / AssemblyDoc / DrawingDoc), so the hook follows the
+        /// document's actual kind.
         /// </summary>
-        private void HookUnits(ModelDoc2? doc, bool attach)
+        private void HookDocEvents(ModelDoc2? doc, bool attach)
         {
             switch (doc)
             {
                 case PartDoc part:
-                    if (attach) part.UnitsChangeNotify += OnUnitsChanged;
-                    else part.UnitsChangeNotify -= OnUnitsChanged;
+                    if (attach)
+                    {
+                        part.UnitsChangeNotify += OnUnitsChanged;
+                        part.ActiveConfigChangePostNotify += OnActiveConfigChanged;
+                        part.AddCustomPropertyNotify += OnPartPropertyChange;
+                        part.ChangeCustomPropertyNotify += OnPartPropertyEdit;
+                        part.DeleteCustomPropertyNotify += OnPartPropertyChange;
+                    }
+                    else
+                    {
+                        part.UnitsChangeNotify -= OnUnitsChanged;
+                        part.ActiveConfigChangePostNotify -= OnActiveConfigChanged;
+                        part.AddCustomPropertyNotify -= OnPartPropertyChange;
+                        part.ChangeCustomPropertyNotify -= OnPartPropertyEdit;
+                        part.DeleteCustomPropertyNotify -= OnPartPropertyChange;
+                    }
                     break;
                 case AssemblyDoc asmb:
                     if (attach) asmb.UnitsChangeNotify += OnUnitsChanged;
@@ -101,6 +121,28 @@ namespace SolidWorksQrAddIn.Host
         }
 
         private int OnUnitsChanged()
+        {
+            try { Changed?.Invoke(); } catch { }
+            return 0;
+        }
+
+        /// <summary>The part's active configuration switched — the resolution inputs changed.</summary>
+        private int OnActiveConfigChanged()
+        {
+            try { Changed?.Invoke(); } catch { }
+            return 0;
+        }
+
+        /// <summary>A custom property appeared or disappeared on the watched part.</summary>
+        private int OnPartPropertyChange(string propName, string configuration, string value, int valueType)
+        {
+            try { Changed?.Invoke(); } catch { }
+            return 0;
+        }
+
+        /// <summary>A custom property's value was edited on the watched part.</summary>
+        private int OnPartPropertyEdit(
+            string propName, string configuration, string oldValue, string newValue, int valueType)
         {
             try { Changed?.Invoke(); } catch { }
             return 0;

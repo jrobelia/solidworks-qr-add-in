@@ -159,11 +159,15 @@ namespace SolidWorksQrAddIn
                 // The host provider doubles as the session's document-unit
                 // source — the cell-size readout re-asks a FRESH host for its
                 // length unit on every regeneration (never a cached doc).
-                // The watcher pushes the CHANGE: a document switch or a
-                // length-unit edit re-formats the readout and info lines
-                // without any field edit.
+                // The watcher pushes the CHANGE: a document switch, a
+                // length-unit edit, a configuration switch or a property
+                // edit re-formats the readout and info lines — and
+                // re-resolves a SW Properties template — without any field
+                // edit. The property provider is a fresh source per read,
+                // the same never-cached rule.
                 _hostWatcher = new SwHostStateWatcher(_sw);
-                _session = new QrSketchSession(CreateQrWindow, CreateSketchHost, _hostWatcher);
+                _session = new QrSketchSession(
+                    CreateQrWindow, CreateSketchHost, _hostWatcher, CreatePartPropertySource);
 
                 _pane = new QrTaskPaneControl(
                     _session, CreateSketchHost,
@@ -329,6 +333,18 @@ namespace SolidWorksQrAddIn
             if (_sw == null || !_connected)
                 throw new SketchHostException(NotConnectedMessage);
             return new SolidWorksSketchHost(_sw);
+        }
+
+        /// <summary>
+        /// Fresh property source per resolution — the same never-cached
+        /// rule as the create host: a SW Properties template re-resolves
+        /// against the live part's stores, never a stale capture.
+        /// </summary>
+        private IPartPropertySource CreatePartPropertySource()
+        {
+            if (_sw == null || !_connected)
+                throw new SketchHostException(NotConnectedMessage);
+            return new SwPartPropertySource(_sw);
         }
 
         // ---------------- COM registration ----------------

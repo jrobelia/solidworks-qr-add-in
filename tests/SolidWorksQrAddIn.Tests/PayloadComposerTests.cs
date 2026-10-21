@@ -27,14 +27,16 @@ namespace SolidWorksQrAddIn.Tests
         // ---------------- descriptor contract (the pane's field model) ----------------
 
         [Fact]
-        public void Presets_declare_the_eight_phase_one_presets_in_order()
+        public void Presets_declare_the_content_type_presets_in_order()
         {
-            // Spec #11 phase-1 list: Raw first — it is the default content
-            // type and today's single content box.
+            // Spec #11 phase-1 list plus spec #21's SW Properties: Raw
+            // first — it is the default content type and today's single
+            // content box.
             var ids = PayloadComposer.Presets.Select(p => p.Id).ToArray();
 
             Assert.Equal(
-                new[] { "raw", "url", "wifi", "contact", "mail", "sms", "phone", "geo" },
+                new[] { "raw", "url", "wifi", "contact", "mail", "sms", "phone", "geo",
+                        "swprops" },
                 ids);
             Assert.Equal("raw", PayloadComposer.DefaultPresetId);
         }
@@ -63,6 +65,42 @@ namespace SolidWorksQrAddIn.Tests
                 var optionValues = field.Options.Select(o => o.Value).ToArray();
                 Assert.Contains(field.DefaultValue, optionValues);
             }
+        }
+
+        // ---------------- SW Properties (spec #21, ticket #45) ----------------
+
+        [Fact]
+        public void Swprops_declares_a_single_template_kind_field()
+        {
+            var preset = PayloadComposer.Presets.Single(p => p.Id == "swprops");
+
+            Assert.Equal("SW Properties", preset.DisplayName);
+            var field = Assert.Single(preset.Fields);
+            Assert.Equal("template", field.Key);
+            Assert.Equal(PayloadFieldKind.Template, field.Kind);
+            Assert.False(field.Required);
+        }
+
+        [Fact]
+        public void Swprops_composes_the_template_verbatim_for_session_resolution()
+        {
+            // The composer is host-free by contract: $PRP tokens pass
+            // through untouched — resolving them against the live part is
+            // the session's job, not the composer's.
+            var result = PayloadComposer.Compose("swprops",
+                Fields(("template", "PART-$PRP:\"PartNo\"\nsecond line")));
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal("PART-$PRP:\"PartNo\"\nsecond line", result.Content);
+        }
+
+        [Fact]
+        public void Swprops_composes_an_absent_template_as_empty_for_downstream_validation()
+        {
+            var result = PayloadComposer.Compose("swprops", null);
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal(string.Empty, result.Content);
         }
 
         // ---------------- Raw ----------------
