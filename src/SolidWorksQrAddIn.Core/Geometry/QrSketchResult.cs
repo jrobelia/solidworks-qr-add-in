@@ -44,6 +44,13 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// insertion floor (docs/INSERTION-GUARD.md).</summary>
         InvalidShapeParameter,
 
+        /// <summary>The request's error-correction level is below what the
+        /// selected output treatment requires — the ring split (spec #51)
+        /// drops emitted cells, and the correction budget at M or higher is
+        /// what absorbs them; the refusal names the EccLevel field, it is
+        /// never silently bumped.</summary>
+        InvalidEccLevel,
+
         /// <summary>The generated contours would deliver more sketch segments
         /// than the recorded <see cref="QrInsertionGuard.MaxSegmentCount"/>
         /// budget — the sketch-edit-responsiveness bound measured live on
