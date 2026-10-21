@@ -34,7 +34,7 @@ namespace SolidWorksQrAddIn.Host
         public PartPropertySnapshot CaptureProperties()
         {
             var doc = _sw.IActiveDoc2 as IModelDoc2;
-            var kind = KindOf(doc);
+            var kind = HostDocumentKinds.Of(doc);
             if (doc == null || kind != HostDocumentKind.Part)
                 return new PartPropertySnapshot(kind, TitleOf(doc), null,
                     Array.Empty<string>());
@@ -48,7 +48,7 @@ namespace SolidWorksQrAddIn.Host
         public PartPropertyResolution Resolve(string name)
         {
             var doc = _sw.IActiveDoc2 as IModelDoc2;
-            if (doc == null || KindOf(doc) != HostDocumentKind.Part)
+            if (doc == null || HostDocumentKinds.Of(doc) != HostDocumentKind.Part)
                 return PartPropertyResolution.NoDocument(name ?? "");
             var configuration = ActiveConfigurationName(doc);
             return PartPropertyResolver.Resolve(name ?? "",
@@ -56,23 +56,6 @@ namespace SolidWorksQrAddIn.Host
         }
 
         // ---------------- host reads, each individually best-effort ----------------
-
-        private static HostDocumentKind KindOf(IModelDoc2? doc)
-        {
-            if (doc == null)
-                return HostDocumentKind.None;
-            try
-            {
-                return doc.GetType() switch
-                {
-                    (int)swDocumentTypes_e.swDocPART => HostDocumentKind.Part,
-                    (int)swDocumentTypes_e.swDocASSEMBLY => HostDocumentKind.Assembly,
-                    (int)swDocumentTypes_e.swDocDRAWING => HostDocumentKind.Drawing,
-                    _ => HostDocumentKind.Unknown,
-                };
-            }
-            catch { return HostDocumentKind.Unknown; }
-        }
 
         private static string? TitleOf(IModelDoc2? doc)
         {

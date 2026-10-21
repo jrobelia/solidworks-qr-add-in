@@ -124,17 +124,21 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   task-pane tab) and session→view sync of probe-driven edits via the
   `IQrSketchWindow` seam.
 - **Payload composer** (`PayloadComposerTests`, spec #11/ticket #26): the
-  eight phase-1 presets in dropdown order with unique field keys and
-  declared choice defaults, plus byte-exact payload literals per preset —
+  nine content-type presets in dropdown order — the eight spec-11 types
+  plus spec-21's SW Properties — with unique field keys and declared
+  choice defaults, plus byte-exact payload literals per preset —
   Raw passthrough (whitespace/line breaks verbatim; empty composes for
   downstream validation), URL scheme defaulting, WIFI: escaping, the
   hidden-network flag, the open-network password drop, required
   ssid/password, tel:/sms:/mailto: URIs behind dialable-only number and
   e-mail shape checks, the contact card in vCard 3.0/4.0/2.1 and MeCard
-  with the at-least-one-name rule, and geo:/Google-Maps links accepting
-  comma decimals inside their coordinate ranges. Failures are data, not
-  throws: every rejection returns an error naming the bad field (missing
-  required, invalid choice/boolean, unknown preset id).
+  with the at-least-one-name rule, geo:/Google-Maps links accepting
+  comma decimals inside their coordinate ranges, and the SW Properties
+  template field composing verbatim — `$PRP` tokens pass through for the
+  session to resolve; the host-free composer never expands them.
+  Failures are data, not throws: every rejection returns an error naming
+  the bad field (missing required, invalid choice/boolean, unknown
+  preset id).
 - **Content-type presets** (`QrContentPresetTests`, ticket #27 — the session
   seam): picking a type exposes its field descriptors; field edits compose
   the literal payload into the content box verbatim (picture + info lines
@@ -146,6 +150,25 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   Raw keeping the composed text as free content, undeclared field keys and
   unknown preset ids refused with the selection kept, create inserting the
   composed payload's geometry, and preset edits syncing the open window.
+- **SW Properties** (spec #21 — `PartPropertySourceTests`,
+  `SwPropertyTemplateTests`, `SwPropsPresetTests`): the property-source
+  seam enumerates and resolves against the document-level and
+  active-configuration stores under SolidWorks' own precedence —
+  configuration shadows document, the merged name list is deduplicated
+  with configuration names first, whitespace values resolve verbatim,
+  present-but-empty is distinct from missing, and no-document is its own
+  verdict. The payload-template resolver substitutes every
+  `$PRP:"name"` reference — unique names in first-appearance order, a
+  repeated name resolving once but replacing everywhere, a resolved VALUE
+  that itself contains `$PRP` text staying literal — while unquoted and
+  bare `$PRP` forms stay text and malformed remnants (an empty or
+  unclosed name) fail openly naming the token. At the session seam the
+  `swprops` preset exposes the Template-kind field; every field edit and
+  host-change event re-resolves the content, the Resolved preview and
+  the insert-name list (a property that vanished behind the UI's back
+  turns the request INVALID naming it); create re-resolves against the
+  live store and refuses a missing or empty reference before any host
+  mutation; and `$PRP` text under every other preset stays literal.
 - **Size & growth** (`QrSizeGrowthTests`): several sizes/growths on one
   payload — exact grown bounds within the declared 1e-6 mm tolerance, uniform
   two-direction scaling, preserved ring→hole→island nesting, finite overlap

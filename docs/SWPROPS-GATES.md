@@ -8,15 +8,17 @@ harness can spawn its own session-free invisible instance, plus a deployed
 and the `viewTemplateNames`/`viewResolved` pane echoes from tickets
 #44/#45).
 
-## Status — ALL 128 CHECKS PASSED (exit 0)
+## Status — ALL 129 CHECKS PASSED (exit 0)
 
 Ran live against the deployed build
 (`%LOCALAPPDATA%\SolidWorksQrAddIn\SolidWorksQrAddIn.dll`,
-sha256 `9438cec0…`, the Release build of this branch — hash-verified
-identical to `src\SolidWorksQrAddIn\bin\x64\Release\net48`) on
+the Release build of this branch's review-fix commit) on
 SolidWorks 2023 SP5 (revision 31.5.0, invisible spawned instance,
 Windows NT 6.2.9200.0), 2026-10-21, with no prior `SLDWORKS.exe`
-running and none left behind. Final line `ALL CHECKS PASSED`.
+running and none left behind. Final line `ALL CHECKS PASSED` —
+129 checks including gate 9's new destroy-notification check (the
+original 128-check run of the #46 build passed on the same baseline,
+sha256 `9438cec0…`).
 
 The fixture the harness writes into a session-free part (via
 `CustomPropertyManager.Add3`, `swCustomInfoText`,
@@ -54,7 +56,7 @@ module-identical checks.
 | 6 | Configuration switch re-resolves | PASS — `ShowConfiguration2("QrCfgB")` fired `ActiveConfigChangePostNotify` (harness-side watcher counted the event); enumerate reports `config='QrCfgB'` with the new 8-name set (cfgA-only `QrCfgProp` gone, `QrCfgOnlyB` present); `Revision`→`REV-B`, `QrShared`→`cfg-B-level`; `viewResolved=PART-PN-0042-REV-B`, dropdown re-enumerated, preview re-rendered (`22c77464…`); second create `OK Sketch2` verified module-identical against literalB — positions, not just counts, so a stale same-length payload cannot pass |
 | 7 | Document switch re-resolves | PASS — `NewDocument` fired `ActiveDocChangeNotify`; `doc='Part2'` with its own 3 names, no fixture-part names leak; `PartNo`→`PN-7777`; `viewResolved=PART-PN-7777-D1`, preview `36117d63…`; reactivating the fixture fired another notification and restored `viewResolved=PART-PN-0042-REV-B` + its preview |
 | 8 | Missing/empty reference refused before mutation | PASS — `$PRP:"QrNoSuchProp"` → `INVALID InvalidPayload` naming the reference; Resolved row carries `ERR:` reason; `NO-PICTURE`; create `ERROR` naming `QrNoSuchProp` with the feature tree (`[Sketch1, Sketch2]`) and sketch-edit state untouched. `$PRP:"QrEmpty"` → the distinct empty verdict ("resolves to an empty value … cannot be encoded"), refused identically. The valid template then restores `VALID` |
-| 9 | No document | PASS — resolve → `NODOC`; enumerate → `SWPROPS kind=None names=0`; `viewTemplateNames=0`; Resolved row explains "needs an active part document to resolve against" |
+| 9 | No document | PASS — the last document's `CloseDoc` fires `DestroyNotify2` on the watched document (harness watcher counted 2 `Changed` events: the synchronous destroy plus the settle re-notification); resolve → `NODOC`; enumerate → `SWPROPS kind=None names=0`; `viewTemplateNames=0`; Resolved row explains "needs an active part document to resolve against" — **event-driven, no field-write fallback needed** |
 
 ## Re-run
 
@@ -76,21 +78,25 @@ a blocked run still shows what the live half would check.
 ## Headless evidence (ran green)
 
 - `dotnet build SolidWorksQrAddIn.sln` — **clean, 0 warnings, 0 errors**.
-- `dotnet test tests\SolidWorksQrAddIn.Tests` — **639 passed, 0 failed**
-  (baseline 639; this ticket adds no headless tests — the gates are the
-  live coverage).
+- `dotnet test tests\SolidWorksQrAddIn.Tests` — **641 passed, 0 failed**
+  (the review-fix build adds two `SwPropertyTemplateTests` cases to the
+  #46 baseline of 639).
 
 ## Limitations
 
-- One `LIMIT` line in gate 9: after the fixture document was closed, the
-  host-event re-resolution of the pane template did not land within the
-  3 s window (the Resolved row still showed `PART-PN-0042-REV-B`), so the
-  harness forced the pane path through a template field rewrite — the
-  same `ComposePreset` route a user edit takes — which produced the
-  expected `ERR:` verdict. The doc/config-switch re-resolutions in gates
-  6–7 **did** land event-driven (the harness watcher counted each
-  notification), so the limitation is specific to the no-document
-  transition headlessly.
+- None observed in this run. The gate-9 `LIMIT` recorded on the #46 build
+  — last-document close left the Resolved row stale because no
+  `ActiveDocChangeNotify` fires for that transition — is **resolved**:
+  the rev-31 `DPartDocEvents.DestroyNotify2` (also on `DAssemblyDocEvents`
+  /`DDrawingDocEvents`) **does** fire headlessly on `CloseDoc`, and is now
+  hooked in `SwHostStateWatcher`. Two honest subtleties were verified
+  live: the synchronous `DestroyNotify2` callback still observes the dying
+  document through `IActiveDoc2` (the immediate re-resolution re-reads
+  pre-close state), and `DSldWorksEvents.FileCloseNotify` never fires
+  headlessly for `CloseDoc` — so the watcher arms a one-shot ~400 ms
+  settle re-notification after the destroy, whose re-read observes the
+  true post-close active document (none) and lands the `ERR:` verdict
+  event-driven inside the 3 s window.
 - `SwPropertiesProbe`/`SwPropertyResolveProbe` answered through the
   `IDispatch` late-bound path (`GetAddInObject` returns `__ComObject`,
   not the `IAddInProbe` RCW) — the same dispatch the interactive pane

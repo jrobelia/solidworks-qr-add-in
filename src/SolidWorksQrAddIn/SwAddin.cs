@@ -159,9 +159,9 @@ namespace SolidWorksQrAddIn
                 // The host provider doubles as the session's document-unit
                 // source — the cell-size readout re-asks a FRESH host for its
                 // length unit on every regeneration (never a cached doc).
-                // The watcher pushes the CHANGE: a document switch, a
-                // length-unit edit, a configuration switch or a property
-                // edit re-formats the readout and info lines — and
+                // The watcher pushes the CHANGE: a document switch or
+                // close, a length-unit edit, a configuration switch or a
+                // property edit re-formats the readout and info lines — and
                 // re-resolves a SW Properties template — without any field
                 // edit. The property provider is a fresh source per read,
                 // the same never-cached rule.

@@ -172,8 +172,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// a later read failure retains the last known unit.
         /// </param>
         /// <param name="hostWatcher">
-        /// Optional host-state change source (active-document switch, length
-        /// unit edit, configuration switch, property edit). Each
+        /// Optional host-state change source (active-document switch or
+        /// close, length unit edit, configuration switch, property edit).
+        /// Each
         /// <see cref="IHostStateWatcher.Changed"/> event re-formats the
         /// unit-dependent readouts — and, while a Template-kind preset is
         /// selected, re-resolves the template against the live part — so

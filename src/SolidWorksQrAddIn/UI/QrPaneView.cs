@@ -661,7 +661,7 @@ namespace SolidWorksQrAddIn.UI
                     combo.SelectedIndex = 0;   // the placeholder is never a pick
                     return;
                 }
-                templateBox.SelectedText = "$PRP:\"" + name + "\"";
+                templateBox.SelectedText = SwPropertyTemplate.ReferenceFor(name);
                 templateBox.Focus();
                 combo.SelectedIndex = 0;
             };
@@ -739,11 +739,12 @@ namespace SolidWorksQrAddIn.UI
                 PopulateInsertDropdown(combo);
             foreach (var pair in _resolvedRows)
             {
-                // Only an error naming THIS field turns its row red — a
-                // field-level failure elsewhere is none of its business.
+                // Only an error naming THIS field turns its row red — the
+                // same rule FlagPresetFieldError applies to the inputs: a
+                // keyless error flags nothing, and a field-level failure
+                // elsewhere is none of this row's business.
                 bool failed = error != null &&
-                    (error.FieldKey == null ||
-                     string.Equals(error.FieldKey, pair.Key, StringComparison.Ordinal));
+                    string.Equals(error.FieldKey, pair.Key, StringComparison.Ordinal);
                 pair.Value.Text = preview ?? string.Empty;
                 pair.Value.Foreground = failed ? Brushes.DarkRed : Brushes.DarkGreen;
             }

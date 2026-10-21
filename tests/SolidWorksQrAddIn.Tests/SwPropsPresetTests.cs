@@ -23,17 +23,16 @@ namespace SolidWorksQrAddIn.Tests
     {
         private static (QrSketchSession session, FakePartPropertySource props,
             TestHostStateWatcher watcher) NewSession(
-            TestSketchHost? host = null, FakePartPropertySource? props = null,
-            bool withWatcher = true)
+            TestSketchHost? host = null, FakePartPropertySource? props = null)
         {
             var partProps = props ?? new FakePartPropertySource();
-            var watcher = withWatcher ? new TestHostStateWatcher() : null;
+            var watcher = new TestHostStateWatcher();
             var session = new QrSketchSession(
                 () => new FakeQrWindow(),
                 host == null ? (System.Func<ISketchHost>?)null : () => host,
                 watcher,
                 () => partProps);
-            return (session, partProps, watcher!);
+            return (session, partProps, watcher);
         }
 
         /// <summary>A session without a property provider — the degraded path.</summary>

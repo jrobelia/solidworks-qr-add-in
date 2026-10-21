@@ -130,6 +130,35 @@ namespace SolidWorksQrAddIn.Tests
         }
 
         [Fact]
+        public void A_value_that_looks_like_a_reference_substitutes_verbatim()
+        {
+            // The malformed-remnant guard scans the TEMPLATE — a resolved
+            // VALUE carrying "$PRP:" text is literal payload content the
+            // author never typed, never a token that failed to substitute.
+            var source = PartSource();
+            source.DocumentProperties["Code"] = "uses $PRP:\"x\" literally";
+
+            var result = SwPropertyTemplate.Resolve("code=$PRP:\"Code\"", source);
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal("code=uses $PRP:\"x\" literally", result.Content);
+        }
+
+        [Fact]
+        public void A_value_with_an_unterminated_token_fragment_stays_literal()
+        {
+            // The harsher variant: the value's own $PRP text is malformed —
+            // it still is not a template token, so nothing may flag it.
+            var source = PartSource();
+            source.DocumentProperties["Code"] = "dangling $PRP:\"x";
+
+            var result = SwPropertyTemplate.Resolve("code=$PRP:\"Code\"", source);
+
+            Assert.True(result.Succeeded, result.Error?.Message);
+            Assert.Equal("code=dangling $PRP:\"x", result.Content);
+        }
+
+        [Fact]
         public void A_configuration_property_shadows_the_document_one()
         {
             var source = PartSource();

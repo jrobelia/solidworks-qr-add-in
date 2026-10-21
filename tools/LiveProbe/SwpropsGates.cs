@@ -219,21 +219,24 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"invisible spawned instance, {System.Environment.OSVersion}");
 
                 var probe = TryGetProbe(sw);
-                if (!ProbeHasSwpropsSurface(probe))
+                bool hasSurface = ProbeHasSwpropsSurface(probe);
+                if (!hasSurface)
                 {
                     try { sw.UnloadAddIn(dllPath); } catch { }
                     int loadResult = sw.LoadAddIn(dllPath);
                     Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
                     probe = TryGetProbe(sw);
+                    hasSurface = ProbeHasSwpropsSurface(probe);
                 }
-                Check(ProbeHasSwpropsSurface(probe),
+                Check(hasSurface,
                     "GetAddInObject returns the probe interface with the swprops surface");
-                if (probe == null || !ProbeHasSwpropsSurface(probe)) return 1;
+                if (probe == null || !hasSurface) return 1;
 
                 // A harness-side watcher counts the host notifications the
                 // add-in's own watcher consumes — the event-driven evidence
-                // for the doc/config-switch gates (the `units` precedent:
-                // LoadFrom the deployed add-in, hook its Changed event).
+                // for the doc/config-switch and doc-destroy gates (the
+                // `units` precedent: LoadFrom the deployed add-in, hook its
+                // Changed event).
                 int hostEvents = 0;
                 try
                 {
@@ -358,11 +361,12 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"got [{string.Join(", ", names)}]");
                 // SolidWorks' precedence: the configuration store's names
                 // precede every document-only name in the merged list.
-                int lastCfg = LastIndexOfAny(names, cfg1Fixtures.Select(f => f.Name));
-                int firstDocOnly = FirstIndexOfAny(names,
+                int lastCfg = IndexOfAny(names, cfg1Fixtures.Select(f => f.Name), last: true);
+                int firstDocOnly = IndexOfAny(names,
                     docFixtures.Select(f => f.Name)
                         .Where(n => !cfg1Fixtures.Any(
-                            c => string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase))));
+                            c => string.Equals(c.Name, n, StringComparison.OrdinalIgnoreCase))),
+                    last: false);
                 Check(firstDocOnly < 0 || lastCfg < firstDocOnly,
                     "configuration names precede document-only names",
                     $"lastCfg@{lastCfg} firstDocOnly@{firstDocOnly} — [{string.Join(", ", names)}]");
@@ -615,8 +619,14 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 // ================= GATE 9 — no document =================
                 Console.WriteLine("# ---- gate 9: no document ----");
+                int evClose = hostEvents;
                 try { sw.CloseDoc(titleA); } catch { }
                 doc = null;
+                Thread.Sleep(400);   // let the post-destroy notify land
+                Check(hostEvents > evClose,
+                    "the last document's close fires a host notification (DestroyNotify2 — " +
+                    "no ActiveDocChangeNotify exists for this transition)",
+                    $"events={hostEvents - evClose}");
                 CheckResolve(probe, "QrDocProp", "SWPROP 'QrDocProp' NODOC",
                     "with no open document every reference is NODOC");
                 var emptyList = probe.SwPropertiesProbe();
@@ -750,29 +760,22 @@ namespace SolidWorksQrAddIn.LiveProbe
             }
         }
 
-        private static int LastIndexOfAny(IReadOnlyList<string> hay, IEnumerable<string> needles)
+        /// <summary>
+        /// Index of the first (or, with <paramref name="last"/>, the last)
+        /// hay entry matching any needle, ordinal-ignore-case — -1 when
+        /// none matches.
+        /// </summary>
+        private static int IndexOfAny(
+            IReadOnlyList<string> hay, IEnumerable<string> needles, bool last)
         {
+            var set = new HashSet<string>(needles, StringComparer.OrdinalIgnoreCase);
             int hit = -1;
-            foreach (var n in needles)
-            {
-                int i = -1;
-                for (int k = 0; k < hay.Count; k++)
-                    if (string.Equals(hay[k], n, StringComparison.OrdinalIgnoreCase)) i = k;
-                if (i > hit) hit = i;
-            }
-            return hit;
-        }
-
-        private static int FirstIndexOfAny(IReadOnlyList<string> hay, IEnumerable<string> needles)
-        {
-            int hit = -1;
-            foreach (var n in needles)
-            {
-                int i = -1;
-                for (int k = 0; k < hay.Count && i < 0; k++)
-                    if (string.Equals(hay[k], n, StringComparison.OrdinalIgnoreCase)) i = k;
-                if (i >= 0 && (hit < 0 || i < hit)) hit = i;
-            }
+            for (int k = 0; k < hay.Count; k++)
+                if (set.Contains(hay[k]))
+                {
+                    hit = k;
+                    if (!last) break;
+                }
             return hit;
         }
 

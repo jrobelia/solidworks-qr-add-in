@@ -29,10 +29,22 @@ namespace SolidWorksQrAddIn.Core.Payload
         private static readonly Regex ReferencePattern =
             new Regex(@"\$PRP:""([^""]+)""", RegexOptions.Compiled);
 
-        // After substitution a $PRP:" remnant can only be a malformed token
-        // (empty or unclosed name) — captured to name it in the error.
+        // On the template with every valid reference removed, a $PRP:"
+        // remnant can only be a malformed token (empty or unclosed name) —
+        // captured to name it in the error.
         private static readonly Regex RemnantPattern =
             new Regex(@"\$PRP:""[^""]*""?", RegexOptions.Compiled);
+
+        /// <summary>
+        /// The reference token for a property name — <c>$PRP:"name"</c>, the
+        /// same quoted grammar <see cref="ReferencePattern"/> tokenizes.
+        /// Surfaces that INSERT a reference (the pane's property dropdown)
+        /// build it here so the token syntax is authored once. A name
+        /// containing a double quote is not representable — the grammar
+        /// excludes it; the token it produces can never round-trip.
+        /// </summary>
+        public static string ReferenceFor(string name) =>
+            "$PRP:\"" + (name ?? throw new System.ArgumentNullException(nameof(name))) + "\"";
 
         /// <summary>
         /// Resolves <paramref name="template"/> against
@@ -62,9 +74,16 @@ namespace SolidWorksQrAddIn.Core.Payload
                 if (seen.Add(name))
                     names.Add(name);
             }
+
+            // The malformed-token guard scans the TEMPLATE with its valid
+            // references stripped — deliberately never the resolved output:
+            // a property VALUE that happens to contain "$PRP:" text is
+            // literal content the author never typed (the QR may encode it
+            // verbatim), not a token that failed to substitute.
+            var sansReferences = ReferencePattern.Replace(text, string.Empty);
             if (names.Count == 0)
             {
-                var remnant = RemnantPattern.Match(text);
+                var remnant = RemnantPattern.Match(sansReferences);
                 return remnant.Success
                     ? Malformed(remnant.Value)
                     : PayloadComposeResult.Ok(text);
@@ -73,7 +92,7 @@ namespace SolidWorksQrAddIn.Core.Payload
             var resolved = text;
             foreach (var name in names)
             {
-                var token = "$PRP:\"" + name + "\"";
+                var token = ReferenceFor(name);
                 var resolution = source?.Resolve(name)
                                  ?? PartPropertyResolution.NoDocument(name);
                 switch (resolution.Kind)
@@ -98,7 +117,7 @@ namespace SolidWorksQrAddIn.Core.Payload
                 }
             }
 
-            var leftover = RemnantPattern.Match(resolved);
+            var leftover = RemnantPattern.Match(sansReferences);
             return leftover.Success
                 ? Malformed(leftover.Value)
                 : PayloadComposeResult.Ok(resolved);
