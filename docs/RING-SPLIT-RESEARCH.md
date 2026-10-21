@@ -255,6 +255,26 @@ should stay inside, but finder damage degrades *detection*, not codewords
 ("Claiming the notch preserves scanner readability" is out of scope);
 record measured widths so QA can judge.
 
+**The two routes cost differently here, and this is the honest
+trade.** A hairline contour-notch (~4 % of one module) is nearly
+invisible to a scanner — the cell still reads dark under the sampling
+grid, so even a finder-ring cut barely registers. The grid-space bridge
+flips a whole module: on a data-area site that's an ordinary ECC-
+correctable module error (nearly free at M level), but on a finder ring
+it's a *structural* flip at a signature-bearing position — real cost, and
+unavoidable since the all-or-nothing rule forces a channel through every
+nested site. Per-site cost is bounded (one module per 1-cell band
+regardless of code size — a v1 matrix pays the same ~4 cells total as a
+v10), but for small codes the finders dominate more of the matrix and the
+relative damage is highest exactly where it hurts most. Mitigations:
+place the channel at a ring **corner** — off the horizontal/vertical
+centre-lines the detection runs sample — and remember the feature is
+opt-in: an engineer choosing extrudability accepts a readability margin
+trade, and marking workflows often weight permanence over scan margin.
+Whether that trade is acceptable, or whether the finder sites justify the
+harder hairline route, is a product call the spike's width measurements
+should inform.
+
 **Invert.** The same rule applies to whatever the emitted polarity
 produces: under invert the *light* cells emit, so the ring sites move
 (finder centres become non-emitting holes *without* islands — no notch —
