@@ -70,7 +70,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int contourCount, int segmentCount, bool inverted = false,
             QrCellShape cellShape = QrCellShape.Square,
             double cellShapeParameter = 0.0, int instanceCount = 0,
-            int openedSiteCount = 0, int droppedCellCount = 0)
+            int openedSiteCount = 0, int droppedCellCount = 0,
+            double finderChannelWidthMm = 0.0)
         {
             Version = version;
             CellCount = cellCount;
@@ -89,6 +90,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             InstanceCount = instanceCount;
             OpenedSiteCount = openedSiteCount;
             DroppedCellCount = droppedCellCount;
+            FinderChannelWidthMm = finderChannelWidthMm;
         }
 
         /// <summary>QR version the encoder chose (1..40; 0 for a fixture matrix).</summary>
@@ -167,6 +169,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// the option is off or nothing nested.
         /// </summary>
         public int DroppedCellCount { get; }
+
+        /// <summary>
+        /// The thin channel width the ring split cut through the three finder
+        /// rings (spec #51, ticket #53), in mm — derived from the integer-grid
+        /// feature floor and the recorded insertion floor, never user-entered.
+        /// 0 when the option is off or no finder ring needed opening.
+        /// </summary>
+        public double FinderChannelWidthMm { get; }
     }
 
     /// <summary>

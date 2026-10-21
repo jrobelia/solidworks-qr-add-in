@@ -1,18 +1,31 @@
+using System;
 using System.Collections.Generic;
+using Clipper2Lib;
 
 namespace SolidWorksQrAddIn.Core.Geometry
 {
     /// <summary>
-    /// The ring-split cell-drop pass (spec #51, ticket #52): on the emitted
-    /// set AFTER polarity selection, open every island-bearing void — an
-    /// enclosed component of un-emitted cells holding emitted islands, the
-    /// grown union's ring → hole → island nesting that SolidWorks' profile
-    /// solver refuses as "doubly nested" — by dropping the minimal
-    /// module-aligned path of emitted cells that joins the void to
-    /// exterior-connected space, before the union pass. The finder rings
-    /// are ordinary sites here — the thin-channel upgrade is ticket #53.
-    /// Square-shape only; under Circle the flag is inert and the pass
-    /// never runs (dots emit no contours).
+    /// The ring-split pass (spec #51): on the emitted set AFTER polarity
+    /// selection, open every island-bearing void — an enclosed component of
+    /// un-emitted cells holding emitted islands, the grown union's
+    /// ring → hole → island nesting that SolidWorks' profile solver refuses
+    /// as "doubly nested" — before the union pass. The treatment is hybrid
+    /// (the live-proven route of docs/RING-SPLIT-RESEARCH.md §6):
+    ///
+    ///   * The three finder rings — regular, repeatable geometry at fixed
+    ///     matrix locations — stop paying whole modules (ticket #53): a
+    ///     thin axis-aligned channel rectangle is subtracted from the grown
+    ///     subject at a corner locus of the ring band (off the
+    ///     horizontal/vertical centre-lines the finder detection runs
+    ///     sample), spanning the band's outer and inner boundaries so the
+    ///     ring's hole joins the surrounding void. The channel is sub-cell —
+    ///     it cannot exist on the cell mask — so the pass returns the
+    ///     channel rectangles for the caller to Difference out of the
+    ///     grown subject, and claims the void by cell-set identity so the
+    ///     mask-side iteration does not loop on it forever.
+    ///   * Every other island-bearing site, at any depth, opens by
+    ///     dropping the minimal module-aligned path of emitted cells that
+    ///     joins the void to exterior-connected space (ticket #52).
     ///
     /// Cell topology mirrors the grown union exactly (g &lt; U/2): emitted
     /// cells are 8-connected material — grown rects bridge diagonal
@@ -22,64 +35,122 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// The exterior is the un-emitted flood from the working-matrix border;
     /// under invert the border itself emits, so a channel may instead
     /// terminate on a border cell — dropping it vents the void past the
-    /// field edge (the field is clipped at the matrix square).
+    /// field edge (the field is clipped at the matrix square) — and the
+    /// finder channel vents the same way, a slot through the field to the
+    /// matrix edge.
+    ///
+    /// Square-shape only; under Circle the flag is inert and the pass
+    /// never runs (dots emit no contours).
     /// </summary>
     internal static class QrRingSplitter
     {
         /// <summary>
-        /// Drops emitted cells in <paramref name="emit"/> (mutated in place)
-        /// until no enclosed void bears an island, iterating the
-        /// detect→drop loop — a channel may legitimately span several cells
-        /// through stacked bands. Returns null on success; a named
-        /// <see cref="QrSketchErrorKind.InvalidGeometry"/> failure when a
-        /// site cannot be opened or the loop does not converge —
-        /// all-or-nothing: a partially opened QR is never delivered.
+        /// The thin finder-channel width in grid units — the larger of the
+        /// integer-grid feature floor (<see cref="QrInsertionGuard.MinGridFeatureUnits"/>)
+        /// and the recorded insertion floor
+        /// (<see cref="QrInsertionGuard.MinInsertableFeatureMm"/>) expressed
+        /// in units at <paramref name="mmPerUnit"/>. Derived from grid
+        /// constants and the insertion floor only — never user-entered.
         /// </summary>
-        public static QrSketchResult? OpenIslandBearingVoids(
-            bool[,] emit, out int openedSites, out int droppedCells) =>
-            OpenIslandBearingVoids(
-                emit, emit.GetLength(0) * emit.GetLength(1),
-                out openedSites, out droppedCells);
+        internal static long FinderChannelWidthUnits(double mmPerUnit) =>
+            Math.Max(QrInsertionGuard.MinGridFeatureUnits,
+                (long)Math.Ceiling(QrInsertionGuard.MinInsertableFeatureMm / mmPerUnit));
 
         /// <summary>
-        /// <paramref name="maxPasses"/> bounds the detect→drop loop (the
-        /// cell count normally — every pass drops ≥1 emitted cell). The
-        /// bound-overshoot refusal cannot be produced by a real matrix —
-        /// every finite site is openable — it is internal for the suite.
+        /// Opens island-bearing voids in <paramref name="emit"/> (mutated in
+        /// place for the cell drops) until none remain, iterating the
+        /// detect→treat loop: finder-ring voids are claimed by thin channel
+        /// rectangles appended to <paramref name="finderChannels"/> (grid
+        /// coordinates of the grown subject's space, for a Difference pass
+        /// before the union); every other site drops the minimal cell path —
+        /// a channel may legitimately span several cells through stacked
+        /// bands. <paramref name="growthUnits"/> is the per-side growth g;
+        /// <paramref name="channelWidthUnits"/> the derived channel width
+        /// (<see cref="FinderChannelWidthUnits"/>). Returns null on success;
+        /// a named <see cref="QrSketchErrorKind.InvalidGeometry"/> failure
+        /// when a site cannot be opened, no channel locus clears, or the loop
+        /// does not converge — all-or-nothing: a partially opened QR is never
+        /// delivered.
+        /// </summary>
+        public static QrSketchResult? OpenIslandBearingVoids(
+            bool[,] emit, long growthUnits, long channelWidthUnits,
+            out int openedSites, out int droppedCells, out Paths64 finderChannels) =>
+            OpenIslandBearingVoids(
+                emit, growthUnits, channelWidthUnits,
+                emit.GetLength(0) * emit.GetLength(1) + 8,
+                out openedSites, out droppedCells, out finderChannels);
+
+        /// <summary>
+        /// <paramref name="maxPasses"/> bounds the detect→treat loop (the
+        /// cell count normally — every pass drops ≥1 emitted cell, plus the
+        /// ≤3 finder channels). The bound-overshoot refusal cannot be
+        /// produced by a real matrix — every finite site is openable — it
+        /// is internal for the suite.
         /// </summary>
         internal static QrSketchResult? OpenIslandBearingVoids(
-            bool[,] emit, int maxPasses, out int openedSites, out int droppedCells)
+            bool[,] emit, long growthUnits, long channelWidthUnits, int maxPasses,
+            out int openedSites, out int droppedCells, out Paths64 finderChannels)
         {
             openedSites = 0;
             droppedCells = 0;
+            finderChannels = new Paths64();
             int m = emit.GetLength(0);
+            // Finder voids already claimed by a thin channel: the channel is
+            // sub-cell, so the mask goes on reporting the void as
+            // island-bearing — claim it by cell-set identity and let the
+            // post-union tree check prove the opening. A void that later
+            // MERGES into a larger void loses the identity and falls back
+            // under the ordinary cell-drop rule.
+            var claimed = new List<HashSet<int>>();
             for (var pass = 0; pass < maxPasses; pass++)
             {
                 var nesting = Analyze(emit);
-                if (nesting.IslandBearing.Count == 0)
-                    return null;
+                var pending = new List<int>();
                 foreach (int voidId in nesting.IslandBearing)
+                    if (!claimed.Exists(s => s.SetEquals(nesting.VoidCells[voidId])))
+                        pending.Add(voidId);
+                if (pending.Count == 0)
+                    return null;
+                foreach (int voidId in pending)
                 {
-                    var drops = FindChannel(emit, nesting.VoidCells[voidId]);
-                    if (drops == null)
-                        return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
-                            "Ring split found an island-bearing void it cannot open — no " +
-                            "module-aligned cell path joins it to exterior-connected " +
-                            "space. The request is refused rather than partially opened.");
-                    openedSites++;
-                    foreach (int cell in drops)
+                    var voidCells = nesting.VoidCells[voidId];
+                    var site = MatchFinderVoid(voidCells, m);
+                    if (site != null)
                     {
-                        int row = cell / m, col = cell % m;
-                        if (emit[row, col])
+                        var channel = TryPlaceFinderChannel(
+                            emit, voidCells, site, growthUnits, channelWidthUnits);
+                        if (channel == null)
+                            return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
+                                "Ring split found a finder ring it cannot open — no " +
+                                "corner-locus channel clears the surrounding contours " +
+                                "(islands, deeper bands, disjoint neighbours). The " +
+                                "request is refused rather than partially opened.");
+                        finderChannels.Add(channel);
+                        claimed.Add(new HashSet<int>(voidCells));
+                    }
+                    else
+                    {
+                        var drops = FindChannel(emit, voidCells);
+                        if (drops == null)
+                            return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
+                                "Ring split found an island-bearing void it cannot open — no " +
+                                "module-aligned cell path joins it to exterior-connected " +
+                                "space. The request is refused rather than partially opened.");
+                        foreach (int cell in drops)
                         {
-                            emit[row, col] = false;
-                            droppedCells++;
+                            int row = cell / m, col = cell % m;
+                            if (emit[row, col])
+                            {
+                                emit[row, col] = false;
+                                droppedCells++;
+                            }
                         }
                     }
+                    openedSites++;
                 }
             }
             return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
-                "Ring split could not open every island-bearing void — the cell-drop " +
+                "Ring split could not open every island-bearing void — the treatment " +
                 "pass did not converge. The request is refused rather than partially opened.");
         }
 
@@ -364,6 +435,288 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 else
                     deque.AddLast(nr * m + nc);
             }
+        }
+
+        // ----- ticket #53: the thin finder channels -----
+
+        /// <summary>
+        /// A matched finder site: the 7×7 window origin (working-matrix
+        /// cells), the window corner nearest the matrix corner, and which
+        /// channel shape the void's position calls for — <b>Band</b>: the
+        /// void sits at the inner-ring positions (normal polarity: the
+        /// light ring inside the dark band), so the channel crosses the
+        /// emitted band ring to the void beyond; <b>Vent</b>: the void IS
+        /// the window's edge ring (invert: the dark finder ring, enclosed
+        /// by the emitting field), so the channel slots through the field
+        /// to the matrix edge — the same "vent past the field edge" move a
+        /// border-cell drop makes.
+        /// </summary>
+        private sealed class FinderSite
+        {
+            public int R0, C0, CornerR, CornerC;
+            public bool Vent;
+        }
+
+        /// <summary>
+        /// The finder-ring test: the island-bearing void's cells sit wholly
+        /// within one of the three fixed 7×7 finder windows — at its inner
+        /// ring positions (Band) or its edge ring positions (Vent). Any
+        /// other shape or position is not the regular ring and falls to
+        /// the cell-drop rule. Windows may coincide on tiny fixtures; the
+        /// claimed-set dedupe keeps the same void single-treated.
+        /// </summary>
+        private static FinderSite? MatchFinderVoid(List<int> voidCells, int m)
+        {
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            var origins = new[] { (q, q), (q, m - q - 7), (m - q - 7, q) };
+            foreach (var (r0, c0) in origins)
+            {
+                if (r0 < 0 || c0 < 0 || r0 + 7 > m || c0 + 7 > m)
+                    continue;
+                var allInner = true;
+                var allEdge = true;
+                foreach (int cell in voidCells)
+                {
+                    int r = cell / m - r0, c = cell % m - c0;
+                    if (r < 1 || r > 5 || c < 1 || c > 5 ||
+                        (r != 1 && r != 5 && c != 1 && c != 5))
+                        allInner = false;
+                    if (r < 0 || r > 6 || c < 0 || c > 6 ||
+                        (r != 0 && r != 6 && c != 0 && c != 6))
+                        allEdge = false;
+                }
+                if (!allInner && !allEdge)
+                    continue;
+                return new FinderSite
+                {
+                    R0 = r0,
+                    C0 = c0,
+                    CornerR = r0 < m / 2 ? r0 : r0 + 6,
+                    CornerC = c0 < m / 2 ? c0 : c0 + 6,
+                    Vent = allEdge,
+                };
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Picks a channel rectangle for a matched finder site: every
+        /// candidate is an axis-aligned channel at a corner locus — one
+        /// cell in from a ring corner, off the detection runs' centre-lines —
+        /// whose ends land at void-cell centres (inside the un-emitted free
+        /// core, so caps and walls can never touch a contour: the grown
+        /// grid keeps material ≥ g from cell borders and the width sits
+        /// strictly inside the core). A candidate clears when the inner end
+        /// lands in the void being opened, the channel crosses emitted band
+        /// material, and — Band style — the outer end lands in a different
+        /// void. The fallback order prefers the corner nearest the matrix
+        /// corner, then the next. Null when nothing clears.
+        /// </summary>
+        private static Path64? TryPlaceFinderChannel(
+            bool[,] emit, List<int> voidCells, FinderSite site, long g, long w)
+        {
+            int m = emit.GetLength(0);
+            long u = QrInsertionGuard.GridUnitsPerCell;
+
+            // Width feasibility: the channel plus a ≥w sliver margin on each
+            // side must fit inside one cell's free core (u−2g), so no wall
+            // ever grazes a grown edge (Clipper noise is ±1 unit, the floor
+            // is 10 — a coincident wall would be a validator violation).
+            if (u - 2 * g < 3 * w)
+                return null;
+
+            var voidSet = new HashSet<int>(voidCells);
+            foreach (var cand in Candidates(site, m, w))
+            {
+                // The inner tip must land inside THIS void; the channel must
+                // span emitted band material (Band style); the outer tip must
+                // land in a DIFFERENT void (never re-enter the one being
+                // opened). Between the verified cells the corridor keeps ≥w
+                // from any neighbour's grown edge (w < u−2g above), and the
+                // grown grid keeps material ≥g off every cell border — so a
+                // clearing candidate clears ALL contours: islands, deeper
+                // bands and disjoint neighbours alike.
+                if (!voidSet.Contains(cand.TipInR * m + cand.TipInC))
+                    continue;
+                if (cand.BandR >= 0 &&
+                    (!InBounds(cand.BandR, cand.BandC, m) || !emit[cand.BandR, cand.BandC]))
+                    continue;
+                if (cand.TipOutR >= 0 &&
+                    (!InBounds(cand.TipOutR, cand.TipOutC, m) ||
+                     emit[cand.TipOutR, cand.TipOutC] ||
+                     voidSet.Contains(cand.TipOutR * m + cand.TipOutC)))
+                    continue;
+                return cand.Rect;
+            }
+            return null;
+        }
+
+        private static bool InBounds(int r, int c, int m) =>
+            r >= 0 && c >= 0 && r < m && c < m;
+
+        /// <summary>
+        /// One corner-locus candidate, in fallback order (<see cref="Order"/>
+        /// = <see cref="Dist1"/>, then <see cref="Dist2"/>, then the listed
+        /// sequence): the channel axis runs through
+        /// <see cref="BandR"/>/<see cref="BandC"/> (the band cell it must
+        /// span — negative for a Vent candidate, which crosses the field to
+        /// the matrix edge instead of a band); <see cref="TipInR"/>/
+        /// <see cref="TipInC"/> is the void cell the inner end must land in;
+        /// <see cref="TipOutR"/>/<see cref="TipOutC"/> the void cell the
+        /// outer end must land in (negative = past the matrix edge).
+        /// </summary>
+        private sealed class ChannelCandidate
+        {
+            public int BandR = -1, BandC = -1, TipInR, TipInC, TipOutR = -1, TipOutC = -1;
+            public int Dist1, Dist2, Order;
+            public Path64 Rect = new Path64();
+        }
+
+        /// <summary>
+        /// Enumerates the locus candidates in fallback order. Band sites:
+        /// the eight arm-end cuts — each of the four arms, one cell in from
+        /// either adjacent corner — ordered by the band cell's distance to
+        /// the window corner nearest the matrix corner. Vent sites: a slot
+        /// from a void arm cell to the matrix edge, directions ordered by
+        /// edge distance, each direction's two arm-end loci ordered by
+        /// distance to that corner. The order is fully deterministic.
+        /// </summary>
+        private static List<ChannelCandidate> Candidates(FinderSite site, int m, long w)
+        {
+            long u = QrInsertionGuard.GridUnitsPerCell;
+            var list = new List<ChannelCandidate>();
+            int r0 = site.R0, c0 = site.C0;
+            int cornerR = site.CornerR, cornerC = site.CornerC;
+            var seq = 0;
+            if (!site.Vent)
+            {
+                // The eight band cuts: for the top/bottom arms the channel
+                // runs vertically at the second/sixth column; for the
+                // left/right arms horizontally at the second/sixth row.
+                foreach (int cb in new[] { c0 + 1, c0 + 5 })
+                {
+                    list.Add(BandCand(r0, cb, r0 + 1, cb, r0 - 1, cb, true));
+                    list.Add(BandCand(r0 + 6, cb, r0 + 5, cb, r0 + 7, cb, true));
+                }
+                foreach (int rb in new[] { r0 + 1, r0 + 5 })
+                {
+                    list.Add(BandCand(rb, c0, rb, c0 + 1, rb, c0 - 1, false));
+                    list.Add(BandCand(rb, c0 + 6, rb, c0 + 5, rb, c0 + 7, false));
+                }
+            }
+            else
+            {
+                // Vent candidates: a slot from the void's arm cell to the
+                // matrix edge, its end landing a half-cell past the border
+                // so the slot vents past the field edge like a dropped
+                // border cell does.
+                foreach (var (dr, dc) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
+                {
+                    int edgeDist = dr < 0 ? r0 : dr > 0 ? m - r0 - 7
+                                 : dc < 0 ? c0 : m - c0 - 7;
+                    foreach (int k in new[] { 1, 5 })
+                    {
+                        int tipR = dr != 0 ? (dr < 0 ? r0 : r0 + 6) : r0 + k;
+                        int tipC = dc != 0 ? (dc < 0 ? c0 : c0 + 6) : c0 + k;
+                        long axis, lo, hi;
+                        bool vertical = dr != 0;
+                        if (vertical)
+                        {
+                            axis = (long)tipC * u + u / 2;
+                            lo = dr < 0 ? -u / 2 : (long)tipR * u + u / 2;
+                            hi = dr < 0 ? (long)tipR * u + u / 2 : (long)m * u + u / 2;
+                        }
+                        else
+                        {
+                            axis = (long)tipR * u + u / 2;
+                            lo = dc < 0 ? -u / 2 : (long)tipC * u + u / 2;
+                            hi = dc < 0 ? (long)tipC * u + u / 2 : (long)m * u + u / 2;
+                        }
+                        list.Add(new ChannelCandidate
+                        {
+                            TipInR = tipR,
+                            TipInC = tipC,
+                            Dist1 = edgeDist,
+                            Dist2 = Dist(tipR, tipC, cornerR, cornerC),
+                            Order = seq++,
+                            Rect = ChannelRect(vertical, axis, lo, hi, w),
+                        });
+                    }
+                }
+            }
+            list.Sort((a, b) =>
+                a.Dist1 != b.Dist1 ? a.Dist1 - b.Dist1 :
+                a.Dist2 != b.Dist2 ? a.Dist2 - b.Dist2 : a.Order - b.Order);
+            return list;
+
+            ChannelCandidate BandCand(
+                int bandR, int bandC, int inR, int inC, int outR, int outC,
+                bool vertical)
+            {
+                long lo, hi, axis;
+                if (vertical)
+                {
+                    axis = (long)bandC * u + u / 2;
+                    lo = Math.Min(outR, inR) * u + u / 2;
+                    hi = Math.Max(outR, inR) * u + u / 2;
+                }
+                else
+                {
+                    axis = (long)bandR * u + u / 2;
+                    lo = Math.Min(outC, inC) * u + u / 2;
+                    hi = Math.Max(outC, inC) * u + u / 2;
+                }
+                return new ChannelCandidate
+                {
+                    BandR = bandR,
+                    BandC = bandC,
+                    TipInR = inR,
+                    TipInC = inC,
+                    TipOutR = outR,
+                    TipOutC = outC,
+                    Dist1 = Dist(bandR, bandC, cornerR, cornerC),
+                    Dist2 = 0,
+                    Order = seq++,
+                    Rect = ChannelRect(vertical, axis, lo, hi, w),
+                };
+            }
+        }
+
+        private static int Dist(int r, int c, int rr, int cc) =>
+            Math.Abs(r - rr) + Math.Abs(c - cc);
+
+        /// <summary>
+        /// The channel rectangle <paramref name="w"/> units wide:
+        /// <paramref name="vertical"/> channels run along the axis (a cell
+        /// column centre-line), horizontal along a row centre-line.
+        /// <paramref name="lo"/>/<paramref name="hi"/> are the two tip
+        /// ordinates — void-cell centres, or a half-cell past the matrix
+        /// edge for a vent slot — so each end lands in void free core and
+        /// can never graze a contour.
+        /// </summary>
+        private static Path64 ChannelRect(bool vertical, long axis, long lo, long hi, long w)
+        {
+            long half = w / 2;
+            long x0, y0, x1, y1;
+            if (vertical)
+            {
+                x0 = axis - half;
+                x1 = x0 + w;
+                y0 = lo;
+                y1 = hi;
+            }
+            else
+            {
+                y0 = axis - half;
+                y1 = y0 + w;
+                x0 = lo;
+                x1 = hi;
+            }
+            return new Path64(4)
+            {
+                new Point64(x0, y0), new Point64(x1, y0),
+                new Point64(x1, y1), new Point64(x0, y1),
+            };
         }
     }
 }

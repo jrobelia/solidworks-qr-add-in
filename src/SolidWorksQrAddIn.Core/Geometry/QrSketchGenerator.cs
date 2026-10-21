@@ -130,7 +130,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <see cref="Generate"/>; <paramref name="cellShape"/> and
         /// <paramref name="cellShapeParameter"/> pick the per-cell primitive
         /// exactly like <see cref="QrSketchRequest.CellShape"/>;
-        /// <paramref name="ringSplit"/> applies the cell-drop treatment like
+        /// <paramref name="ringSplit"/> applies the hybrid treatment like
         /// <see cref="QrSketchRequest.RingSplit"/> (the fixture seam has no
         /// error-correction level — the ECC gate lives on the request).
         /// </summary>
@@ -165,9 +165,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// picks the primitive: Square runs the grown-cell union/clip/
         /// validate/convert contour pipeline below; Circle branches away
         /// before any contour machinery into <see cref="BuildCirclePlan"/>.
-        /// <paramref name="ringSplit"/> (spec #51, ticket #52) drops the
-        /// minimal module-aligned cell paths opening every island-bearing
-        /// void before the union — Square-shape only, inert under Circle.
+        /// <paramref name="ringSplit"/> (spec #51, tickets #52/#53) opens
+        /// every island-bearing void before the union — the finder rings by
+        /// a thin corner-locus channel subtracted from the grown subject,
+        /// every other site by a minimal module-aligned cell drop —
+        /// Square-shape only, inert under Circle.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
@@ -239,17 +241,23 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 for (var col = 0; col < m; col++)
                     emit[row, col] = matrix[row, col] != invert;
 
-            // Spec #51, ticket #52 — the opt-in ring split, on the emitted
-            // set after the polarity select (invert rides the same path):
-            // drop the minimal module-aligned cell path joining every
-            // island-bearing void to exterior-connected space, before the
-            // union pass, so no ring → hole → island nesting survives.
+            // Spec #51 — the opt-in ring split, on the emitted set after the
+            // polarity select (invert rides the same path). The three finder
+            // rings open by thin finite-width channel rectangles subtracted
+            // from the grown subject below (ticket #53); every other
+            // island-bearing void drops the minimal module-aligned cell path
+            // joining it to exterior-connected space (ticket #52) — before
+            // the union pass, so no ring → hole → island nesting survives.
             var openedSites = 0;
             var droppedCells = 0;
+            var channelWidthUnits = 0L;
+            Paths64? finderChannels = null;
             if (ringSplit)
             {
+                channelWidthUnits = QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
                 var splitError = QrRingSplitter.OpenIslandBearingVoids(
-                    emit, out openedSites, out droppedCells);
+                    emit, g, channelWidthUnits,
+                    out openedSites, out droppedCells, out finderChannels);
                 if (splitError != null)
                     return splitError;
             }
@@ -277,6 +285,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     invert
                         ? "The cell matrix contains no light cells; nothing would be sketched."
                         : "The cell matrix contains no dark cells; nothing would be sketched.");
+
+            // The finder channels ride the same union pass: NonZero fills
+            // the overlapping grown rects, so subtracting the channel
+            // rectangles here removes them from the merged material — the
+            // grown subject minus the thin corridors, still in grid space,
+            // before the matrix-square clip below (the second Clipper-hook
+            // shape of docs/RING-SPLIT-RESEARCH.md §4).
+            if (finderChannels != null && finderChannels.Count > 0)
+            {
+                subject = Clipper.Difference(subject, finderChannels, FillRule.NonZero);
+            }
 
             // ADR 0002: all geometry is clipped to the working-matrix square
             // [0, M·U] — a guaranteed no-op in normal mode (grown dark cells
@@ -386,7 +405,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 segmentCount: segmentCount,
                 inverted: invert,
                 openedSiteCount: openedSites,
-                droppedCellCount: droppedCells);
+                droppedCellCount: droppedCells,
+                finderChannelWidthMm: finderChannels != null && finderChannels.Count > 0
+                    ? channelWidthUnits * mmPerUnit
+                    : 0.0);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction
