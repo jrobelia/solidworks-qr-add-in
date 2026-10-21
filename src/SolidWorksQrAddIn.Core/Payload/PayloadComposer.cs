@@ -121,6 +121,15 @@ namespace SolidWorksQrAddIn.Core.Payload
                         ("geo", "geo: URI"),
                         ("googleMaps", "Google Maps link"))),
             }),
+            new PayloadPresetDescriptor("swprops", "SW Properties", new[]
+            {
+                // Spec #21: a template field — literal text plus $PRP:"name"
+                // references. The composer stays host-free: it passes the
+                // template through verbatim and the SESSION resolves it
+                // against the live part (see SwPropertyTemplate).
+                Field("template", "Template", PayloadFieldKind.Template,
+                    hint: "Text plus $PRP:\"name\" tokens — resolved against the active part."),
+            }),
         };
 
         /// <summary>
@@ -252,6 +261,10 @@ namespace SolidWorksQrAddIn.Core.Payload
                         return ComposeContact(preset, values);
                     case "geo":
                         return ComposeGeo(preset, values);
+                    case "swprops":
+                        // Host-free by contract: the template passes through
+                        // verbatim — $PRP resolution is the session's job.
+                        return PayloadComposeResult.Ok(values["template"] ?? string.Empty);
                     default:
                         return PayloadComposeResult.Fail(
                             PayloadComposeErrorKind.GeneratorFailure, null,

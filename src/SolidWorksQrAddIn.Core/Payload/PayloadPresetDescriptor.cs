@@ -28,6 +28,17 @@ namespace SolidWorksQrAddIn.Core.Payload
 
         /// <summary>On/off flag; the field value is "true" or "false".</summary>
         Boolean,
+
+        /// <summary>
+        /// A payload template (spec #21): multi-line text mixing literal
+        /// characters with <c>$PRP:"name"</c> property references, entered
+        /// verbatim like <see cref="MultilineText"/>. The pane renders the
+        /// template composite — an insert-property dropdown above the
+        /// multiline box and a read-only resolved readout below it; the
+        /// field value is the template text, resolution into the encoded
+        /// literal happens in the session, never in the composer.
+        /// </summary>
+        Template,
     }
 
     /// <summary>One selectable value of a <see cref="PayloadFieldKind.Choice"/> field.</summary>
