@@ -13,7 +13,7 @@ namespace SolidWorksQrAddIn.Tests
     /// <summary>
     /// Tickets #52/#53/#54 — the opt-in ring split. #52 built the
     /// request→result seam: with the flag on under the Square cell shape,
-    /// the emitted set loses every island-bearing void — un-emitted cells
+    /// the emitted set loses every island-bearing hole — un-emitted cells
     /// flooded from the working-matrix border mark the exterior-connected
     /// void, and a minimal module-aligned cell path dropped through each
     /// enclosing band joins the hole's void to that flood — iterated to
@@ -40,7 +40,7 @@ namespace SolidWorksQrAddIn.Tests
         private static bool[,] FinderCells()
         {
             // The 7×7 finder pattern: dark ring, light ring, dark centre —
-            // one island-bearing void (the light ring) in one band.
+            // one island-bearing hole (the light ring) in one band.
             var cells = new bool[7, 7];
             for (var r = 0; r < 7; r++)
                 for (var c = 0; c < 7; c++)
@@ -54,7 +54,7 @@ namespace SolidWorksQrAddIn.Tests
         private static bool[,] NestedBandsCells()
         {
             // Stacked bands: dark border ring / light void / dark ring-island /
-            // light void / dark block-island — two island-bearing voids at
+            // light void / dark block-island — two island-bearing holes at
             // different depths, so a channel legitimately spans several cells.
             var cells = new bool[11, 11];
             for (var r = 0; r < 11; r++)
@@ -123,59 +123,23 @@ namespace SolidWorksQrAddIn.Tests
         /// the channel width apart (its end tips land in void free core, so
         /// they leave no caps). A mouth is the midpoint of a pair of facing
         /// wall-ends — where the channel pierces the band's outer and inner
-        /// boundaries — so its position pins the locus.
+        /// boundaries — so its position pins the locus. The wall-pair scan
+        /// is production's <see cref="QrChannelGaps.Find"/> — the same
+        /// routine the live gate measures channels with.
         /// </summary>
         private static List<SketchPoint2> ChannelMouths(QrSketch sketch)
         {
             double gapM = sketch.Info.FinderChannelWidthMm / 1000.0;
             var mouths = new List<SketchPoint2>();
             foreach (var region in sketch.Regions)
-            {
-                var edges = region.Boundary.Edges.ToList();
-                for (var i = 0; i < edges.Count; i++)
-                    for (var j = i + 1; j < edges.Count; j++)
+                foreach (var gap in QrChannelGaps.Find(
+                             region.Boundary.Edges, maxGapM: gapM * 2.0))
+                    if (System.Math.Abs(gap.GapM - gapM) < 1e-9)
                     {
-                        var a = edges[i];
-                        var b = edges[j];
-                        double ax = System.Math.Abs(a.End.X - a.Start.X);
-                        double ay = System.Math.Abs(a.End.Y - a.Start.Y);
-                        double bx = System.Math.Abs(b.End.X - b.Start.X);
-                        double by = System.Math.Abs(b.End.Y - b.Start.Y);
-                        if (ay < 1e-12 && by < 1e-12 &&
-                            SameExtent(a.Start.X, a.End.X, b.Start.X, b.End.X) &&
-                            System.Math.Abs(
-                                System.Math.Abs(a.Start.Y - b.Start.Y) - gapM) < 1e-9)
-                        {
-                            // Horizontal walls (the channel runs left-right):
-                            // mouths centred on each x end.
-                            double midY = (a.Start.Y + b.Start.Y) / 2.0;
-                            mouths.Add(new SketchPoint2(
-                                System.Math.Min(a.Start.X, a.End.X), midY));
-                            mouths.Add(new SketchPoint2(
-                                System.Math.Max(a.Start.X, a.End.X), midY));
-                        }
-                        else if (ax < 1e-12 && bx < 1e-12 &&
-                                 SameExtent(a.Start.Y, a.End.Y, b.Start.Y, b.End.Y) &&
-                                 System.Math.Abs(
-                                     System.Math.Abs(a.Start.X - b.Start.X) - gapM) < 1e-9)
-                        {
-                            // Vertical walls (the channel runs top-bottom):
-                            // mouths centred on each y end.
-                            double midX = (a.Start.X + b.Start.X) / 2.0;
-                            mouths.Add(new SketchPoint2(
-                                midX, System.Math.Min(a.Start.Y, a.End.Y)));
-                            mouths.Add(new SketchPoint2(
-                                midX, System.Math.Max(a.Start.Y, a.End.Y)));
-                        }
+                        mouths.Add(gap.MouthA);
+                        mouths.Add(gap.MouthB);
                     }
-            }
             return mouths;
-
-            static bool SameExtent(double a0, double a1, double b0, double b1) =>
-                System.Math.Abs(
-                    System.Math.Min(a0, a1) - System.Math.Min(b0, b1)) < 1e-9 &&
-                System.Math.Abs(
-                    System.Math.Max(a0, a1) - System.Math.Max(b0, b1)) < 1e-9;
         }
 
         /// <summary>
@@ -302,7 +266,7 @@ namespace SolidWorksQrAddIn.Tests
             emit[3, 5] = true;   // blocks the top-left cut's outer tip
             emit[5, 3] = true;   // blocks the left-top cut's outer tip
 
-            var failure = QrRingSplitter.OpenIslandBearingVoids(
+            var failure = QrRingSplitter.OpenIslandBearingHoles(
                 emit, growthUnits: 300, channelWidthUnits: 142,
                 out int openedSites, out int droppedCells,
                 out Clipper2Lib.Paths64 channels);
@@ -339,15 +303,14 @@ namespace SolidWorksQrAddIn.Tests
                        (11, 5), (11, 9), (5, 11), (9, 11) })
                 emit[r, c] = true;
 
-            var failure = QrRingSplitter.OpenIslandBearingVoids(
+            var failure = QrRingSplitter.OpenIslandBearingHoles(
                 emit, growthUnits: 300, channelWidthUnits: 142,
                 out int openedSites, out int droppedCells,
                 out Clipper2Lib.Paths64 channels);
 
             Assert.NotNull(failure);
-            Assert.False(failure!.Succeeded);
-            Assert.Equal(QrSketchErrorKind.InvalidGeometry, failure.Error!.Kind);
-            Assert.Contains("channel", failure.Error.Message);
+            Assert.Equal(QrSketchErrorKind.InvalidGeometry, failure!.Kind);
+            Assert.Contains("channel", failure.Message);
             Assert.Equal(0, openedSites);
             Assert.Equal(0, droppedCells);
             Assert.Empty(channels);
@@ -371,7 +334,7 @@ namespace SolidWorksQrAddIn.Tests
         {
             var plain = QrSketchGenerator.GenerateFromCells(
                 NestedBandsCells(), SizeMm, Growth).Sketch!;
-            // Two island-bearing voids: the outer light ring bears the dark
+            // Two island-bearing holes: the outer light ring bears the dark
             // ring-island; that island's own hole bears the centre block.
             Assert.Equal(2, IslandBearingHoles(plain.Regions));
 
@@ -397,7 +360,7 @@ namespace SolidWorksQrAddIn.Tests
             var plain = QrSketchGenerator.Generate(
                 new QrSketchRequest(PayloadA, SizeMm, Growth)).Sketch!;
             int expectedSites = IslandBearingHoles(plain.Regions);
-            // The v1 payload's island-bearing voids are exactly its three
+            // The v1 payload's island-bearing holes are exactly its three
             // finder rings — with #53 each opens by a thin channel, so no
             // emitted cell drops at all on this payload.
             Assert.Equal(3, expectedSites);
@@ -505,7 +468,7 @@ namespace SolidWorksQrAddIn.Tests
         public void The_inverted_finder_ring_vents_to_the_field_edge_by_channel()
         {
             // Under invert the emitted band at the finder site is the LIGHT
-            // inner ring and the island-bearing void is the dark ring itself:
+            // inner ring and the island-bearing hole is the dark ring itself:
             // the channel slots through the surrounding field to the matrix
             // edge rather than paying whole field cells.
             var split = QrSketchGenerator.GenerateFromCells(
@@ -607,18 +570,66 @@ namespace SolidWorksQrAddIn.Tests
             // partially opened mask.
             var emit = (bool[,])NestedBandsCells().Clone();
 
-            var failure = QrRingSplitter.OpenIslandBearingVoids(
+            var failure = QrRingSplitter.OpenIslandBearingHoles(
                 emit, growthUnits: 0, channelWidthUnits: 0, maxPasses: 0,
                 out int openedSites, out int droppedCells,
                 out Clipper2Lib.Paths64 channels);
 
             Assert.NotNull(failure);
-            Assert.False(failure!.Succeeded);
-            Assert.Equal(QrSketchErrorKind.InvalidGeometry, failure.Error!.Kind);
-            Assert.Contains("island-bearing", failure.Error.Message);
+            Assert.Equal(QrSketchErrorKind.InvalidGeometry, failure!.Kind);
+            Assert.Contains("island-bearing", failure.Message);
             Assert.Equal(0, openedSites);
             Assert.Equal(0, droppedCells);
             Assert.Empty(channels);
+        }
+
+        [Fact]
+        public void The_post_union_guard_refuses_a_residual_island_bearing_hole()
+        {
+            // A claimed finder channel is sub-cell — the mask marks the void
+            // opened by identity while the union keeps what the channel
+            // actually cut, so a diverged claim is exactly what the
+            // post-union all-or-nothing check exists for. This fixture
+            // builds the divergence: emitted cells outside the data area
+            // (the internal seam takes the whole working matrix — a
+            // data-cells fixture cannot emit in the quiet zone) block every
+            // outward locus AND fuse the finder band into the enclosing
+            // band, so the void around the finder stops looking
+            // island-bearing mask-side. The only clearing locus then lands
+            // the channel in that enclosed pocket: the mask converges —
+            // the pocket is claimed-opened, the enclosing void gets its
+            // cell drop — while the union retains the ring → hole → island
+            // inside a promoted island's own hole (the finder site nested
+            // three bands deep in the fixture). The guard must refuse
+            // rather than deliver it.
+            var emit = new bool[19, 19];
+            for (var r = 0; r < 19; r++)
+                for (var c = 0; c < 19; c++)
+                {
+                    int ring = System.Math.Max(System.Math.Abs(r - 9), System.Math.Abs(c - 9));
+                    if (ring == 9 || ring == 7)
+                        emit[r, c] = true;
+                }
+            var finder = FinderCells();
+            for (var r = 0; r < 7; r++)
+                for (var c = 0; c < 7; c++)
+                    emit[r + 4, c + 4] = finder[r, c];
+            // Blocked loci at the four outward channel tips — they also
+            // bridge the finder band into the enclosing band.
+            emit[3, 5] = true;
+            emit[3, 9] = true;
+            emit[5, 3] = true;
+            emit[9, 3] = true;
+
+            var result = QrSketchGenerator.GenerateFromWorkingMatrix(
+                emit, dataCells: 11, sizeMm: 60.0,
+                growthFractionPerSide: Growth, ringSplit: true);
+
+            Assert.False(result.Succeeded, "the union retains a residual island-bearing hole");
+            Assert.Equal(QrSketchErrorKind.InvalidGeometry, result.Error!.Kind);
+            // The splitter converged mask-side — the refusal is the
+            // post-union all-or-nothing check, not the treatment loop.
+            Assert.Contains("unioned contours", result.Error.Message);
         }
 
         [Fact]
@@ -627,7 +638,7 @@ namespace SolidWorksQrAddIn.Tests
             // An 11×11 field (19-cell working matrix, so the three finder
             // windows are distinct): a canonical finder at the TL window
             // PLUS a 5×5 nested mini-ring in the data area — dark ring /
-            // light void / dark dot. Its void is island-bearing but sits
+            // light void / dark dot. Its hole is island-bearing but sits
             // off every finder window, so it keeps paying a module-aligned
             // cell drop while the finder site pays only the thin channel.
             var cells = new bool[11, 11];
@@ -908,10 +919,19 @@ namespace SolidWorksQrAddIn.Tests
 
             var info = session.CurrentResult!.Sketch!.Info;
             var row = InfoValue(session, "Ring split");
-            Assert.Contains(info.OpenedSiteCount + " void", row);
+            Assert.Contains(info.OpenedSiteCount + " site", row);
             Assert.Contains("opened", row);
             Assert.Contains(info.DroppedCellCount + " cell", row);
             Assert.Contains("dropped", row);
+
+            // The v1 payload's three finder rings all open by thin channel,
+            // so the derived finder-channel width joins the row.
+            Assert.True(info.FinderChannelWidthMm > 0.0);
+            Assert.Contains("finder channel ", row);
+            Assert.Contains(
+                info.FinderChannelWidthMm.ToString(
+                    "G4", System.Globalization.CultureInfo.InvariantCulture) + " mm",
+                row);
         }
 
         [Fact]

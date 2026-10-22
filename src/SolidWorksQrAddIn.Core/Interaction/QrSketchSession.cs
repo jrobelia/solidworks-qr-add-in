@@ -262,7 +262,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>
         /// The ring-split option in force (spec #51, ticket #54): when set
         /// under the Square cell shape, the generator opens every
-        /// island-bearing void — a thin module-aligned channel dropped
+        /// island-bearing hole — a thin module-aligned channel dropped
         /// through each enclosing band joins its void to exterior-connected
         /// space, so no ring → hole → island nesting survives for
         /// SolidWorks' automatic profile selection to refuse. Default off;
@@ -780,7 +780,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>
         /// Sets the ring-split option (spec #51, ticket #54) and re-validates
         /// the whole request: under the Square cell shape the emitted set is
-        /// opened at every island-bearing void so no doubly-nested contour
+        /// opened at every island-bearing hole so no doubly-nested contour
         /// survives, and the picture renders that same result. Below error
         /// correction M the request fails INVALID naming the EccLevel field —
         /// never silently bumped. Under Circle the flag stores verbatim but
@@ -940,18 +940,21 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 lines.Add(new QrInfoLine("Dots", info.InstanceCount.ToString(
                     CultureInfo.InvariantCulture)));
             // The ring-split cost report rides the info section only while
-            // the option is in force — Square shape plus the flag set, the
-            // same conditional-row rule the Dots row follows under Circle:
-            // opened voids and dropped cells make the treatment's price
-            // visible rather than silent. Ticket #53's finder channel width
-            // joins this row when the channel surface lands.
-            if (_ringSplit && info.CellShape == QrCellShape.Square)
-                lines.Add(new QrInfoLine(
-                    "Ring split",
-                    info.OpenedSiteCount +
-                    (info.OpenedSiteCount == 1 ? " void opened · " : " voids opened · ") +
+            // the option is in force — the flag set under the shape it
+            // applies to, the same conditional-row rule the Dots row
+            // follows under Circle: opened sites and dropped cells make the
+            // treatment's price visible rather than silent, and the finder
+            // channel's derived width joins when a channel was cut.
+            if (_ringSplit && QrCellShapes.RingSplitApplies(info.CellShape))
+            {
+                var ringSplit = info.OpenedSiteCount +
+                    (info.OpenedSiteCount == 1 ? " site opened · " : " sites opened · ") +
                     info.DroppedCellCount +
-                    (info.DroppedCellCount == 1 ? " cell dropped" : " cells dropped")));
+                    (info.DroppedCellCount == 1 ? " cell dropped" : " cells dropped");
+                if (info.FinderChannelWidthMm > 0.0)
+                    ringSplit += " · finder channel " + FormatMm(info.FinderChannelWidthMm);
+                lines.Add(new QrInfoLine("Ring split", ringSplit));
+            }
             return lines;
         }
 

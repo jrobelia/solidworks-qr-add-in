@@ -6,10 +6,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
 {
     /// <summary>
     /// The ring-split pass (spec #51): on the emitted set AFTER polarity
-    /// selection, open every island-bearing void — an enclosed component of
-    /// un-emitted cells holding emitted islands, the grown union's
-    /// ring → hole → island nesting that SolidWorks' profile solver refuses
-    /// as "doubly nested" — before the union pass. The treatment is hybrid
+    /// selection, open every island-bearing hole — an enclosed component of
+    /// un-emitted cells (a void component, below) holding emitted islands,
+    /// the grown union's ring → hole → island nesting that SolidWorks'
+    /// profile solver refuses as "doubly nested" — before the union pass.
+    /// The treatment is hybrid
     /// (the live-proven route of docs/RING-SPLIT-RESEARCH.md §6):
     ///
     ///   * The three finder rings — regular, repeatable geometry at fixed
@@ -57,7 +58,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 (long)Math.Ceiling(QrInsertionGuard.MinInsertableFeatureMm / mmPerUnit));
 
         /// <summary>
-        /// Opens island-bearing voids in <paramref name="emit"/> (mutated in
+        /// Opens island-bearing holes in <paramref name="emit"/> (mutated in
         /// place for the cell drops) until none remain, iterating the
         /// detect→treat loop: finder-ring voids are claimed by thin channel
         /// rectangles appended to <paramref name="finderChannels"/> (grid
@@ -67,27 +68,27 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// bands. <paramref name="growthUnits"/> is the per-side growth g;
         /// <paramref name="channelWidthUnits"/> the derived channel width
         /// (<see cref="FinderChannelWidthUnits"/>). Returns null on success;
-        /// a named <see cref="QrSketchErrorKind.InvalidGeometry"/> failure
+        /// a named <see cref="QrSketchErrorKind.InvalidGeometry"/> error
         /// when a site cannot be opened, no channel locus clears, or the loop
         /// does not converge — all-or-nothing: a partially opened QR is never
         /// delivered.
         /// </summary>
-        public static QrSketchResult? OpenIslandBearingVoids(
+        public static QrSketchError? OpenIslandBearingHoles(
             bool[,] emit, long growthUnits, long channelWidthUnits,
             out int openedSites, out int droppedCells, out Paths64 finderChannels) =>
-            OpenIslandBearingVoids(
+            OpenIslandBearingHoles(
                 emit, growthUnits, channelWidthUnits,
                 emit.GetLength(0) * emit.GetLength(1) + 8,
                 out openedSites, out droppedCells, out finderChannels);
 
         /// <summary>
         /// <paramref name="maxPasses"/> bounds the detect→treat loop (the
-        /// cell count normally — every pass drops ≥1 emitted cell, plus the
-        /// ≤3 finder channels). The bound-overshoot refusal cannot be
-        /// produced by a real matrix — every finite site is openable — it
-        /// is internal for the suite.
+        /// caller passes cells + 8 — every pass drops ≥1 emitted cell, plus
+        /// a small margin over the ≤3 finder-channel claims). The
+        /// bound-overshoot refusal cannot be produced by a real matrix —
+        /// every finite site is openable — it is internal for the suite.
         /// </summary>
-        internal static QrSketchResult? OpenIslandBearingVoids(
+        internal static QrSketchError? OpenIslandBearingHoles(
             bool[,] emit, long growthUnits, long channelWidthUnits, int maxPasses,
             out int openedSites, out int droppedCells, out Paths64 finderChannels)
         {
@@ -96,7 +97,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             finderChannels = new Paths64();
             int m = emit.GetLength(0);
             // Finder voids already claimed by a thin channel: the channel is
-            // sub-cell, so the mask goes on reporting the void as
+            // sub-cell, so the mask goes on reporting the site as
             // island-bearing — claim it by cell-set identity and let the
             // post-union tree check prove the opening. A void that later
             // MERGES into a larger void loses the identity and falls back
@@ -120,7 +121,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                         var channel = TryPlaceFinderChannel(
                             emit, voidCells, site, growthUnits, channelWidthUnits);
                         if (channel == null)
-                            return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
+                            return new QrSketchError(QrSketchErrorKind.InvalidGeometry,
                                 "Ring split found a finder ring it cannot open — no " +
                                 "corner-locus channel clears the surrounding contours " +
                                 "(islands, deeper bands, disjoint neighbours). The " +
@@ -132,8 +133,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     {
                         var drops = FindChannel(emit, voidCells);
                         if (drops == null)
-                            return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
-                                "Ring split found an island-bearing void it cannot open — no " +
+                            return new QrSketchError(QrSketchErrorKind.InvalidGeometry,
+                                "Ring split found an island-bearing hole it cannot open — no " +
                                 "module-aligned cell path joins it to exterior-connected " +
                                 "space. The request is refused rather than partially opened.");
                         foreach (int cell in drops)
@@ -149,10 +150,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     openedSites++;
                 }
             }
-            return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
-                "Ring split could not open every island-bearing void — the treatment " +
+            return new QrSketchError(QrSketchErrorKind.InvalidGeometry,
+                "Ring split could not open every island-bearing hole — the treatment " +
                 "pass did not converge. The request is refused rather than partially opened.");
         }
+
+        // Component-labelling sentinels: a grid entry holds a component id
+        // once labelled; before that −2 marks an unvisited cell of the kind
+        // being labelled and −1 a cell of the OPPOSITE kind (emitted while
+        // labelling void components, un-emitted while labelling emitted).
+        private const int NotComponent = -1;
+        private const int Unvisited = -2;
 
         /// <summary>
         /// The nesting structure of the mask: void components are
@@ -176,15 +184,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
             for (var r = 0; r < m; r++)
                 for (var c = 0; c < m; c++)
                 {
-                    voidOf[r, c] = emit[r, c] ? -1 : -2;
-                    emitOf[r, c] = emit[r, c] ? -2 : -1;
+                    voidOf[r, c] = emit[r, c] ? NotComponent : Unvisited;
+                    emitOf[r, c] = emit[r, c] ? Unvisited : NotComponent;
                 }
 
             var voidCells = new List<List<int>> { new List<int>() };
             var queue = new Queue<int>();
             for (var r = 0; r < m; r++)
                 for (var c = 0; c < m; c++)
-                    if ((r == 0 || c == 0 || r == m - 1 || c == m - 1) && voidOf[r, c] == -2)
+                    if ((r == 0 || c == 0 || r == m - 1 || c == m - 1) && voidOf[r, c] == Unvisited)
                     {
                         voidOf[r, c] = 0;
                         queue.Enqueue(r * m + c);
@@ -192,7 +200,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             FloodVoid(voidOf, 0, voidCells[0], queue);
             for (var r = 0; r < m; r++)
                 for (var c = 0; c < m; c++)
-                    if (voidOf[r, c] == -2)
+                    if (voidOf[r, c] == Unvisited)
                     {
                         var cells = new List<int>();
                         voidCells.Add(cells);
@@ -204,7 +212,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             var emitCount = 0;
             for (var r = 0; r < m; r++)
                 for (var c = 0; c < m; c++)
-                    if (emitOf[r, c] == -2)
+                    if (emitOf[r, c] == Unvisited)
                     {
                         emitOf[r, c] = emitCount;
                         queue.Enqueue(r * m + c);
@@ -218,7 +226,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                                     if (dr == 0 && dc == 0) continue;
                                     int nr = cr + dr, nc = cc + dc;
                                     if (nr < 0 || nc < 0 || nr >= m || nc >= m) continue;
-                                    if (emitOf[nr, nc] != -2) continue;
+                                    if (emitOf[nr, nc] != Unvisited) continue;
                                     emitOf[nr, nc] = emitCount;
                                     queue.Enqueue(nr * m + nc);
                                 }
@@ -308,7 +316,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
             void TryEnqueue(int r, int c)
             {
                 if (r < 0 || c < 0 || r >= m || c >= m) return;
-                if (voidOf[r, c] != -2) return;
+                if (voidOf[r, c] != Unvisited) return;
                 voidOf[r, c] = id;
                 queue.Enqueue(r * m + c);
             }
@@ -453,12 +461,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// </summary>
         private sealed class FinderSite
         {
-            public int R0, C0, CornerR, CornerC;
+            /// <summary>The 7×7 window's origin row/column (working-matrix cells).</summary>
+            public int WindowR0, WindowC0;
+            /// <summary>The window corner nearest the matrix corner — the preferred locus.</summary>
+            public int CornerR, CornerC;
+            /// <summary>Vent = edge-ring void under invert; Band = inner-ring void.</summary>
             public bool Vent;
         }
 
         /// <summary>
-        /// The finder-ring test: the island-bearing void's cells sit wholly
+        /// The finder-ring test: the island-bearing hole's cells sit wholly
         /// within one of the three fixed 7×7 finder windows — at its inner
         /// ring positions (Band) or its edge ring positions (Vent). Any
         /// other shape or position is not the regular ring and falls to
@@ -489,8 +501,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     continue;
                 return new FinderSite
                 {
-                    R0 = r0,
-                    C0 = c0,
+                    WindowR0 = r0,
+                    WindowC0 = c0,
                     CornerR = r0 < m / 2 ? r0 : r0 + 6,
                     CornerC = c0 < m / 2 ? c0 : c0 + 6,
                     Vent = allEdge,
@@ -556,8 +568,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// One corner-locus candidate, in fallback order (<see cref="Order"/>
-        /// = <see cref="Dist1"/>, then <see cref="Dist2"/>, then the listed
-        /// sequence): the channel axis runs through
+        /// = <see cref="OrderingDist"/>, then <see cref="TiebreakDist"/>,
+        /// then the listed sequence): the channel axis runs through
         /// <see cref="BandR"/>/<see cref="BandC"/> (the band cell it must
         /// span — negative for a Vent candidate, which crosses the field to
         /// the matrix edge instead of a band); <see cref="TipInR"/>/
@@ -568,7 +580,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
         private sealed class ChannelCandidate
         {
             public int BandR = -1, BandC = -1, TipInR, TipInC, TipOutR = -1, TipOutC = -1;
-            public int Dist1, Dist2, Order;
+
+            /// <summary>
+            /// The primary fallback-ordering distance: a Band candidate's
+            /// band-cell distance to the window corner nearest the matrix
+            /// corner (the preferred locus wins); a Vent candidate's distance
+            /// from its slot's exit edge.
+            /// </summary>
+            public int OrderingDist;
+
+            /// <summary>
+            /// The secondary fallback-ordering distance: a Vent candidate's
+            /// tip-cell distance to the preferred window corner; zero for a
+            /// Band candidate (no tiebreak — the locus is fully pinned).
+            /// </summary>
+            public int TiebreakDist;
+
+            /// <summary>Listed-sequence position — the last ordering key.</summary>
+            public int Order;
             public Path64 Rect = new Path64();
         }
 
@@ -585,7 +614,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
         {
             long u = QrInsertionGuard.GridUnitsPerCell;
             var list = new List<ChannelCandidate>();
-            int r0 = site.R0, c0 = site.C0;
+            int r0 = site.WindowR0, c0 = site.WindowC0;
             int cornerR = site.CornerR, cornerC = site.CornerC;
             var seq = 0;
             if (!site.Vent)
@@ -636,8 +665,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                         {
                             TipInR = tipR,
                             TipInC = tipC,
-                            Dist1 = edgeDist,
-                            Dist2 = Dist(tipR, tipC, cornerR, cornerC),
+                            OrderingDist = edgeDist,
+                            TiebreakDist = Dist(tipR, tipC, cornerR, cornerC),
                             Order = seq++,
                             Rect = ChannelRect(vertical, axis, lo, hi, w),
                         });
@@ -645,8 +674,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 }
             }
             list.Sort((a, b) =>
-                a.Dist1 != b.Dist1 ? a.Dist1 - b.Dist1 :
-                a.Dist2 != b.Dist2 ? a.Dist2 - b.Dist2 : a.Order - b.Order);
+                a.OrderingDist != b.OrderingDist ? a.OrderingDist - b.OrderingDist :
+                a.TiebreakDist != b.TiebreakDist ? a.TiebreakDist - b.TiebreakDist : a.Order - b.Order);
             return list;
 
             ChannelCandidate BandCand(
@@ -674,8 +703,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     TipInC = inC,
                     TipOutR = outR,
                     TipOutC = outC,
-                    Dist1 = Dist(bandR, bandC, cornerR, cornerC),
-                    Dist2 = 0,
+                    OrderingDist = Dist(bandR, bandC, cornerR, cornerC),
+                    TiebreakDist = 0,
                     Order = seq++,
                     Rect = ChannelRect(vertical, axis, lo, hi, w),
                 };
