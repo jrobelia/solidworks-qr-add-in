@@ -190,6 +190,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "swprops", StringComparison.OrdinalIgnoreCase))
                 return SwpropsMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "ringsplit", StringComparison.OrdinalIgnoreCase))
+                return RingsplitMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
