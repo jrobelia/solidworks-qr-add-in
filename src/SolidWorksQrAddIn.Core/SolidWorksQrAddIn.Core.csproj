@@ -26,7 +26,7 @@
 
   <ItemGroup>
     <!-- Pinned per spec: QR cell matrix (MIT) + integer polygon union (BSL-1.0). -->
-    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="QRCoder" Version="1.8.1" />
     <PackageReference Include="Clipper2" Version="2.0.0" />
   </ItemGroup>
 
