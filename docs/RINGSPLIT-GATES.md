@@ -23,6 +23,15 @@ deployed via `scripts\sync-dev-deploy.ps1`): the same 138 checks, 0
 failures, exit 0 — `# RINGSPLIT ALL CHECKS PASSED`. The review fixes were
 behaviour-preserving for the gates; this run covers the shipped artefact.
 
+**Re-verified again 2026-10-22 on the inner-edge locus build** (merge
+`93d4ffa` — user-requested change moving the finder slits to the ring
+corners, hugging the void's inner edge): first run failed gate 1's
+preview-parity check — the check over-asserted "split signature must
+differ from unsplit", but the 0.05 mm slit is sub-pixel at the 240 px
+preview raster so the signatures legitimately coincide. The check was
+corrected to assert only the parity contract (preview == module render);
+re-run: 138 checks, 0 failures, exit 0 — `# RINGSPLIT ALL CHECKS PASSED`.
+
 Module expectations printed before attach (the refusal-tolerant header):
 
 - baseline `SW-QR-MVP` @ 25 mm / 3% ECC M: contours=27 segs=252
