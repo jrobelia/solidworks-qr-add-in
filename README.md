@@ -4,10 +4,11 @@ Generates a **native SolidWorks sketch** of a QR code from text or a URL —
 real contour geometry on a selected plane or planar face, ready to extrude,
 emboss, or engrave. No image tracing, no imported bitmaps.
 
-![QR sketch preview](docs/images/qr-square.png)
+![QR sketch in a SolidWorks session — grown contours in the graphics area,
+live preview in the QR Sketch task pane](docs/images/ui-fullwindow-40mm-square-url.png)
 
-*(Images below are the add-in's own preview renders — the same grown contour
-geometry the sketch gets, pixel-for-pixel.)*
+*(The QR images below are the add-in's own preview renders — the same grown
+contour geometry the sketch gets, pixel-for-pixel.)*
 
 ## Features
 
@@ -37,6 +38,7 @@ geometry the sketch gets, pixel-for-pixel.)*
 | **Finder slit, zoomed** — a ~0.05 mm channel at the ring corner, hugging the inner edge, opens the nested ring: | ![finder slit close-up](docs/images/qr-ringsplit-zoom.png) |
 | **Inverted polarity** — light cells emit; egress vents through the quiet zone by the same thin channel: | ![inverted QR](docs/images/qr-inverted.png) |
 | **Circle shape** — true-dot modules for marking/engraving: | ![circle-mode QR](docs/images/qr-circle.png) |
+| **Extruded** — boss extrusions straight off the sketches, square (left) and circle (right): | ![extruded QR plates](docs/images/extrude-iso-low-angle.png) |
 
 ## Square vs. circle
 
