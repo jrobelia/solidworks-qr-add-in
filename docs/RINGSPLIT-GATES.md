@@ -18,6 +18,11 @@ test and was restored with the installed folder's
 `GetAddInObject` then resolved the add-in after `LoadAddIn` and answered
 through the IDispatch fallback.
 
+**Re-verified 2026-10-22 on the post-review-fix build** (merge `c0152dd`,
+deployed via `scripts\sync-dev-deploy.ps1`): the same 138 checks, 0
+failures, exit 0 — `# RINGSPLIT ALL CHECKS PASSED`. The review fixes were
+behaviour-preserving for the gates; this run covers the shipped artefact.
+
 Module expectations printed before attach (the refusal-tolerant header):
 
 - baseline `SW-QR-MVP` @ 25 mm / 3% ECC M: contours=27 segs=252
