@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The headless suite builds SolidWorksQrAddIn.Core + Tests only —
       # neither references SolidWorks interop, so no SolidWorks install is
