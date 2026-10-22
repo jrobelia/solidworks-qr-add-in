@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using SolidWorksQrAddIn.Core;
@@ -56,6 +57,15 @@ namespace SolidWorksQrAddIn.LiveProbe
             /// <summary>Printed as `# {SummaryPass}` when a hosted run ends clean.</summary>
             public string SummaryPass { get; set; } = "";
             /// <summary>
+            /// The complete summary line given (failures, limitations) —
+            /// null means the default `# {SummaryPass}` /
+            /// `# {failures} check(s) failed`. Migrated gates use it where
+            /// their legacy summary text differed from the default shape
+            /// (e.g. swprops prints with no `# ` prefix, circles appends the
+            /// limitation tally).
+            /// </summary>
+            public Func<int, int, string>? SummaryLine { get; set; }
+            /// <summary>
             /// Prints the module-side expectations BEFORE the occupied-seat
             /// refusal — a blocked run still shows what the live half would
             /// check. Returning false aborts before any SolidWorks contact
@@ -69,6 +79,31 @@ namespace SolidWorksQrAddIn.LiveProbe
             /// `swprops` and `ringsplit` re-acquire a stale registered build.
             /// </summary>
             public Func<IAddInProbe?, bool>? ProbeSurface { get; set; }
+            /// <summary>
+            /// Invoked with the session handle and the FIRST
+            /// <c>TryGetProbe</c> result, before the capability predicate
+            /// decides whether to reload — the point a migrated gate's own
+            /// probe-discovery check lands (the default suite reports
+            /// "add-in discovery state queried" there) and the slot each
+            /// gate's session banner prints at its legacy position — ahead
+            /// of every reload/capability line, right where the legacy
+            /// bodies printed the SolidWorks revision.
+            /// </summary>
+            public Action<ISldWorks, IAddInProbe?>? ProbeFirstTry { get; set; }
+            /// <summary>
+            /// The Check detail for the probe-acquisition verdict — null
+            /// means "null"/"obtained"; a gate whose legacy check carried no
+            /// detail returns "" to suppress it.
+            /// </summary>
+            public Func<IAddInProbe?, string>? ProbeCheckDetail { get; set; }
+            /// <summary>
+            /// The paths <c>UnloadAddIn</c> is tried on before a
+            /// capability-miss reload, given the deploy dir's dll — null
+            /// means just that dll. `xsettings` adds the per-user and
+            /// Program Files registered copies a stale auto-load could have
+            /// answered from.
+            /// </summary>
+            public Func<string, IEnumerable<string>>? UnloadCandidates { get; set; }
             /// <summary>The Check name for the probe-acquisition verdict.</summary>
             public string ProbeCheckName { get; set; } =
                 "GetAddInObject returns the probe interface";
@@ -210,7 +245,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // AddInsStartup flag, registration, license seat) with it.
                 if (Process.GetProcessesByName("SLDWORKS").Length != 0)
                 {
-                    Console.WriteLine($"# FATAL: the {mode.Name} " +
+                    string label = mode.Name.Length > 0 ? mode.Name : "default suite";
+                    Console.WriteLine($"# FATAL: the {label} " +
                         $"{CategoryNoun(mode.Category)} requires SolidWorks closed — " +
                         "a SLDWORKS.exe process is already running. Refusing to " +
                         "attach; the probe never mutates or kills an occupied seat.");
@@ -237,27 +273,36 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                     // Probe acquisition — an auto-loaded answering build may
                     // be stale, so the capability predicate decides; a
-                    // failure retries through unload + LoadAddIn.
+                    // failure retries through unload + LoadAddIn. The
+                    // ProbeFirstTry hook keeps a gate's own discovery check
+                    // at its legacy position (before the retry decides).
                     var probe = TryGetProbe(sw);
+                    mode.ProbeFirstTry?.Invoke(sw, probe);
                     if (!mode.SurfaceOk(probe))
                     {
-                        try { sw.UnloadAddIn(dllPath); } catch { }
+                        var stale = mode.UnloadCandidates?.Invoke(dllPath)
+                                    ?? new[] { dllPath };
+                        foreach (var p in stale)
+                            try { sw.UnloadAddIn(p); } catch { }
                         int loadResult = sw.LoadAddIn(dllPath);
                         Check(loadResult == 0, "LoadAddIn",
                             $"returned {loadResult} for {dllPath}");
                         probe = TryGetProbe(sw);
                     }
-                    Check(mode.SurfaceOk(probe), mode.ProbeCheckName,
-                        probe == null ? "null" : "obtained");
-                    if (probe == null || !mode.SurfaceOk(probe)) return 1;
+                    bool surfaceOk = mode.SurfaceOk(probe);
+                    Check(surfaceOk, mode.ProbeCheckName,
+                        mode.ProbeCheckDetail?.Invoke(probe)
+                            ?? (probe == null ? "null" : "obtained"));
+                    if (probe == null || !surfaceOk) return 1;
 
                     var session = new LiveSession(sw, probe, deployDir, dllPath);
                     int gateExit = mode.Run!(session);
                     if (gateExit != 0) return gateExit;
 
-                    Console.WriteLine(_failures == 0
-                        ? $"# {mode.SummaryPass}"
-                        : $"# {_failures} check(s) failed");
+                    Console.WriteLine(mode.SummaryLine?.Invoke(_failures, _limitations)
+                        ?? (_failures == 0
+                            ? $"# {mode.SummaryPass}"
+                            : $"# {_failures} check(s) failed"));
                     return _failures == 0 ? 0 : 1;
                 }
                 catch (Exception ex)
@@ -287,23 +332,47 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         // ============================ the registry ============================
 
+        // The hosted gate instances — one per migrated gate, carrying the
+        // expectations→run state each gate's own file declares (#62). Field
+        // order matters: the gates initialize before DefaultMode/Modes so
+        // the registry's method groups bind to live instances.
+        private static readonly DefaultSuiteGate _defaultGate = new DefaultSuiteGate();
+        private static readonly PerfGate _perfGate = new PerfGate();
+        private static readonly XsettingsGate _xsettingsGate = new XsettingsGate();
+        private static readonly CirclesGate _circlesGate = new CirclesGate();
+        private static readonly SwpropsGate _swpropsGate = new SwpropsGate();
+        private static readonly RingsplitGate _ringsplitGate = new RingsplitGate();
+        private static readonly CircleDiagGate _circlediagGate = new CircleDiagGate();
+
+        /// <summary>
+        /// The unnamed default-suite row — list-visible only; it runs when
+        /// no verb matches (FindMode never returns an empty-named row).
+        /// </summary>
+        private static readonly LiveMode DefaultMode = new LiveMode
+        {
+            Category = GateCategory.Gate,
+            Summary = "the retained tickets-2–6 suite — runs when no mode " +
+                "name matches",
+            SummaryLine = (f, l) => f == 0
+                ? "# ALL CHECKS PASSED"
+                : $"# {f} CHECK(S) FAILED",
+            Expectations = _defaultGate.Expectations,
+            // The legacy discovery check sits between the first TryGetProbe
+            // and the LoadAddIn retry — ProbeFirstTry is exactly that point.
+            ProbeFirstTry = _defaultGate.DiscoveryCheck,
+            ProbeCheckName = "GetAddInObject returns the add-in's probe interface",
+            Run = _defaultGate.Run,
+        };
+
         /// <summary>
         /// Main's dispatch table — every live mode exactly once. Hosted rows
         /// run the GateHost ceremony; legacy rows dispatch to the unmigrated
-        /// `*Main` bodies. Migrating a mode is flipping its row from
-        /// LegacyMain to Expectations/ProbeSurface/Run (#62, #63).
+        /// `*Main` bodies (after #62 only the three spikes remain legacy —
+        /// they are #63's job).
         /// </summary>
         private static readonly LiveMode[] Modes =
         {
-            // The unnamed default suite — list-visible only; it runs when no
-            // verb matches (FindMode never returns an empty-named row).
-            new LiveMode
-            {
-                Category = GateCategory.Gate,
-                Summary = "the retained tickets-2–6 suite — runs when no mode " +
-                    "name matches",
-                LegacyMain = DefaultMain,
-            },
+            DefaultMode,
 
             // ---- hosted gates ----
             new LiveMode
@@ -320,42 +389,91 @@ namespace SolidWorksQrAddIn.LiveProbe
                 },
                 Run = CircleDimsRun,
             },
-
-            // ---- legacy gates (unmigrated bodies) ----
             new LiveMode
             {
                 Name = "circles",
                 Category = GateCategory.Gate,
                 Summary = "ticket-#42 circle-pattern live gates",
-                LegacyMain = CircleGatesMain,
+                SummaryLine = (f, l) => f == 0
+                    ? (l == 0 ? "# CIRCLES ALL PASSED"
+                        : $"# CIRCLES PASSED with {l} limitation(s)")
+                    : $"# {f} check(s) failed" +
+                      (l > 0 ? $" ({l} limitation(s))" : ""),
+                Expectations = _circlesGate.Expectations,
+                Run = _circlesGate.Run,
             },
             new LiveMode
             {
                 Name = "xsettings",
                 Category = GateCategory.Gate,
                 Summary = "spec-11 extended-settings live gates",
-                LegacyMain = XsettingsMain,
+                SummaryPass = "XSETTINGS ALL CHECKS PASSED",
+                Expectations = _xsettingsGate.Expectations,
+                ProbeSurface = ProbeHasExtendedSettings,
+                ProbeFirstTry = _xsettingsGate.RevisionBanner,
+                // The legacy check carried no detail.
+                ProbeCheckDetail = _ => "",
+                // A stale registered build can auto-answer — unload every
+                // candidate path before the reload, the legacy three-path list.
+                UnloadCandidates = dll => new[]
+                {
+                    dll,
+                    Path.Combine(System.Environment.GetFolderPath(
+                            System.Environment.SpecialFolder.LocalApplicationData),
+                        "SolidWorksQrAddIn", "SolidWorksQrAddIn.dll"),
+                    @"C:\Program Files\SolidWorks QR Add-In\SolidWorksQrAddIn.dll",
+                },
+                ProbeCheckName = "the answering build exposes the spec-11 " +
+                    "probe surface (preset=/ecc=/invert= in WindowStateProbe)",
+                Run = _xsettingsGate.Run,
             },
             new LiveMode
             {
                 Name = "swprops",
                 Category = GateCategory.Gate,
                 Summary = "ticket-#46 SW Properties end-to-end live gates",
-                LegacyMain = SwpropsMain,
+                // The legacy summary line prints with no `# ` prefix.
+                SummaryLine = (f, l) => f == 0
+                    ? "ALL CHECKS PASSED"
+                    : $"{f} CHECK(S) FAILED",
+                Expectations = _swpropsGate.Expectations,
+                ProbeFirstTry = _swpropsGate.SessionBanner,
+                ProbeSurface = ProbeHasSwpropsSurface,
+                ProbeCheckName = "GetAddInObject returns the probe interface " +
+                    "with the swprops surface",
+                ProbeCheckDetail = _ => "",
+                Run = _swpropsGate.Run,
             },
             new LiveMode
             {
                 Name = "ringsplit",
                 Category = GateCategory.Gate,
                 Summary = "ticket-#55 open-nested-rings live gates",
-                LegacyMain = RingsplitMain,
+                SummaryPass = "RINGSPLIT ALL CHECKS PASSED",
+                Expectations = _ringsplitGate.Expectations,
+                ProbeFirstTry = _ringsplitGate.SessionBanner,
+                ProbeSurface = ProbeHasRingSplitSurface,
+                // The legacy check carried no detail.
+                ProbeCheckDetail = _ => "",
+                ProbeCheckName = "the answering build exposes the spec-51 " +
+                    "probe surface (ringsplit= in WindowStateProbe)",
+                Run = _ringsplitGate.Run,
             },
             new LiveMode
             {
                 Name = "units",
                 Category = GateCategory.Gate,
                 Summary = "native unit-watcher + rendered-pane checks",
-                LegacyMain = UnitsMain,
+                SummaryLine = (f, l) => f == 0
+                    ? "# UNITS ALL PASSED"
+                    : $"# {f} unit check(s) failed",
+                ProbeCheckName = "installed add-in probe available",
+                ProbeCheckDetail = p => p == null
+                    ? "Install the current build and pass its registered " +
+                      "folder; a different DLL path does not override COM " +
+                      "CodeBase."
+                    : "obtained",
+                Run = UnitsRun,
             },
 
             // ---- spikes / diagnostics (evidence harnesses) ----
@@ -364,7 +482,12 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Name = "perf",
                 Category = GateCategory.Spike,
                 Summary = "generation + native-insertion timings",
-                LegacyMain = PerfMain,
+                SummaryLine = (f, l) => f == 0
+                    ? "# PERF DONE"
+                    : $"# {f} perf check(s) failed",
+                Expectations = _perfGate.Expectations,
+                ProbeFirstTry = _perfGate.RevisionBanner,
+                Run = _perfGate.Run,
             },
             new LiveMode
             {
@@ -392,7 +515,9 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Name = "circlediag",
                 Category = GateCategory.Diagnostic,
                 Summary = "circle-pipeline raw-evidence driver",
-                LegacyMain = CircleDiagMain,
+                SummaryPass = "circlediag done",
+                Expectations = _circlediagGate.Expectations,
+                Run = _circlediagGate.Run,
             },
         };
 

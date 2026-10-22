@@ -60,13 +60,30 @@ namespace SolidWorksQrAddIn.LiveProbe
             Console.WriteLine($"LIMIT  {name}{(detail.Length > 0 ? "  — " + detail : "")}");
         }
 
-        private static int CircleGatesMain(string[] args)
+        /// <summary>
+        /// The `circles` gate state across the expectations→run hand-off
+        /// (#62): the circle plans at both polarities, the density-rung
+        /// picks, and the invariant culture the gate bodies format through.
+        /// The legacy CircleGatesMain split at the ceremony seams — every
+        /// check line, print and gate ordering below is its body verbatim;
+        /// the launch/probe/teardown ceremony and the occupied-seat refusal
+        /// are the GateHost's uniform policy now.
+        /// </summary>
+        private sealed class CirclesGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            private QrCirclePlan _plan = null!, _planInv = null!;
+            private (string tag, string content, bool invert, int cells, int dots)
+                _under, _over;
+            private System.Globalization.CultureInfo _inv =
+                System.Globalization.CultureInfo.InvariantCulture;
+
+            /// <summary>
+            /// The module-side expectations + the density rung table —
+            /// printed ahead of the occupied-seat refusal exactly as the
+            /// legacy head printed them.
+            /// </summary>
+            public bool Expectations()
+            {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
 
             // ================= module-side expectations =================
@@ -77,10 +94,11 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 Console.WriteLine("# FATAL: module-side circle plan for the gate payload failed: " +
                     (gate.Error?.Message ?? gateInv.Error?.Message ?? "?"));
-                return 1;
+                return false;
             }
             var plan = gate.Sketch.CirclePlan!;
             var planInv = gateInv.Sketch.CirclePlan!;
+            _plan = plan; _planInv = planInv; _inv = inv;
             Console.WriteLine("# ticket-#42 circle-pattern live gates (spec #13)");
             Console.WriteLine($"# payload '{PayloadA}' @25mm ECC=M dot=90% -> N={plan.DataCells} " +
                 $"M={plan.CellsPerSide} pitch={plan.PitchM * 1000:F4}mm " +
@@ -125,43 +143,28 @@ namespace SolidWorksQrAddIn.LiveProbe
             Console.WriteLine(over.content != null
                 ? $"# over-bound rung: {over.tag} dots={over.dots}"
                 : "# over-bound rung: none below v20 — checked on the refuse path only");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: the circle gates require SolidWorks " +
-                    "closed — a SLDWORKS.exe process is already running. Refusing to " +
-                    "attach; the probe never mutates or kills an occupied seat.");
-                return 1;
+            _under = under; _over = over;
+            return true;
             }
 
-            ISldWorks? sw = null;
+            /// <summary>
+            /// The check sequence the legacy body ran after the ceremony —
+            /// gates 1–10 verbatim, driven against the session the host
+            /// hands over.
+            /// </summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var plan = _plan;
+            var planInv = _planInv;
+            var under = _under;
+            var over = _over;
+            var inv = _inv;
             try
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-
-                var probe = TryGetProbe(sw);
-                if (probe == null)
-                {
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
-                    probe = TryGetProbe(sw);
-                }
-                Check(probe != null, "GetAddInObject returns the probe interface",
-                    probe == null ? "null" : "obtained");
-                if (probe == null) return 1;
-
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
                 Check(File.Exists(template), "default part template exists", template);
                 if (!File.Exists(template)) return 1;
 
@@ -468,21 +471,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                 CircleGate10_Square(sw, probe, template);
 
                 try { sw.UnloadAddIn(dllPath); } catch { }
-                Console.WriteLine(_failures == 0
-                    ? (_limitations == 0 ? "# CIRCLES ALL PASSED"
-                        : $"# CIRCLES PASSED with {_limitations} limitation(s)")
-                    : $"# {_failures} check(s) failed" +
-                      (_limitations > 0 ? $" ({_limitations} limitation(s))" : ""));
-                return _failures == 0 ? 0 : 1;
+                // The host prints the pass/limitation/failure summary
+                // (SummaryLine) and derives the exit code from the tallies.
+                return 0;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
                 return 1;
             }
-            finally
-            {
-                TeardownSpawned(sw);
             }
         }
 
@@ -1472,58 +1469,45 @@ namespace SolidWorksQrAddIn.LiveProbe
         // block-sketch segment surface. Session-free instance only, same
         // refusal discipline as `circles`.
 
-        private static int CircleDiagMain(string[] args)
+        /// <summary>
+        /// The `circlediag` diagnostic (#62 — filed under diagnostics in
+        /// the registry): module-side plan + the D1–D6 raw-evidence dumps,
+        /// run against the hosted session. The legacy CircleDiagMain split
+        /// at the ceremony seams; its evidence prints are verbatim.
+        /// </summary>
+        private sealed class CircleDiagGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            private QrCirclePlan _plan = null!, _planInv = null!;
 
+            /// <summary>The module-side circle plan + emitted census line.</summary>
+            public bool Expectations()
+            {
             var gate = GateCircleVerdict(PayloadA, 25.0, invert: false);
             var gateInv = GateCircleVerdict(PayloadA, 25.0, invert: true);
             if (!gate.Succeeded || !gateInv.Succeeded ||
                 gate.Sketch!.CirclePlan == null || gateInv.Sketch!.CirclePlan == null)
             {
                 Console.WriteLine("# FATAL: module-side circle plan failed");
-                return 1;
+                return false;
             }
             var plan = gate.Sketch.CirclePlan!;
             var planInv = gateInv.Sketch.CirclePlan!;
+            _plan = plan; _planInv = planInv;
             Console.WriteLine($"# circlediag: emitted={plan.EmittedCount} " +
                 $"skipped={plan.SkippedCount} invEmitted={planInv.EmittedCount}");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: a SLDWORKS.exe process is already running — refusing.");
-                return 1;
+            return true;
             }
 
-            ISldWorks? sw = null;
+            /// <summary>The D1–D6 evidence dumps, verbatim.</summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var plan = _plan;
             try
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Console.WriteLine("# FATAL: launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-                var probe = TryGetProbe(sw);
-                if (probe == null)
-                {
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Console.WriteLine($"# LoadAddIn -> {loadResult}");
-                    probe = TryGetProbe(sw);
-                }
-                if (probe == null) { Console.WriteLine("# FATAL: no probe"); return 1; }
-
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
 
                 // ============ D1: probe verdict shapes ============
                 Console.WriteLine("# ---- D1: session probe verdict shapes ----");
@@ -1765,7 +1749,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 try { sw.CloseDoc(docB.GetTitle()); } catch { }
                 try { sw.UnloadAddIn(dllPath); } catch { }
-                Console.WriteLine("# circlediag done");
+                // The host prints `# circlediag done` (SummaryPass).
                 return 0;
             }
             catch (Exception ex)
@@ -1773,9 +1757,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
                 return 1;
             }
-            finally
-            {
-                TeardownSpawned(sw);
             }
         }
 

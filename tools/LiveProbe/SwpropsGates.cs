@@ -80,14 +80,37 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// <summary>The second configuration the switch gate activates — it shadows 'Revision' with a different value.</summary>
         private const string SwpropsConfigB = "QrCfgB";
 
-        private static int SwpropsMain(string[] args)
+        /// <summary>
+        /// The `swprops` gate state across the expectations→run hand-off
+        /// (#62): the property fixture plan, the merged name sets, the
+        /// module-side resolved literals and their sketches/signatures.
+        /// The legacy SwpropsMain split at the ceremony seams — every check
+        /// line, print and gate ordering below is its body verbatim; the
+        /// launch/probe/teardown ceremony, the occupied-seat refusal and
+        /// the swprops-surface reload are the GateHost's uniform policy.
+        /// </summary>
+        private sealed class SwpropsGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            private List<PropFixture> _docFixtures = null!, _cfg1Fixtures = null!,
+                _cfgBFixtures = null!, _docBFixtures = null!;
+            private List<string> _namesCfg1 = null!, _namesCfgB = null!,
+                _namesDocB = null!;
+            private QrSketch _sketchA = null!, _sketchB = null!, _sketchDocB = null!;
+            private string _sigA = "", _sigB = "", _sigDocB = "";
+            private const string gateTemplate = "PART-$PRP:\"PartNo\"-$PRP:\"Revision\"";
+            private const string missingTemplate = "BAD-$PRP:\"QrNoSuchProp\"-BAD";
+            private const string emptyTemplate = "BLANK-$PRP:\"QrEmpty\"-BLANK";
+            private const string literalA = "PART-PN-0042-REV-A";
+            private const string literalB = "PART-PN-0042-REV-B";
+            private const string literalDocB = "PART-PN-7777-D1";
 
+            /// <summary>
+            /// The fixture plan + module-side literal expectations — printed
+            /// ahead of the occupied-seat refusal exactly as the legacy head
+            /// printed them.
+            /// </summary>
+            public bool Expectations()
+            {
             // ================= module-side fixture plan =================
             // cfgA = the part template's seed configuration (named live);
             // SwpropsConfigB is added by the fixture. Document-level values
@@ -125,10 +148,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                 new PropFixture { Name = "QrDocBOnly", Value = "B-ONLY" },
             };
 
-            const string gateTemplate = "PART-$PRP:\"PartNo\"-$PRP:\"Revision\"";
-            const string missingTemplate = "BAD-$PRP:\"QrNoSuchProp\"-BAD";
-            const string emptyTemplate = "BLANK-$PRP:\"QrEmpty\"-BLANK";
-
             // The merged resolvable sets — config store first, deduplicated,
             // the seam's own precedence (PartPropertyResolver.MergeNames).
             var namesCfg1 = cfg1Fixtures.Select(f => f.Name)
@@ -137,9 +156,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 .Union(docFixtures.Select(f => f.Name), StringComparer.OrdinalIgnoreCase).ToList();
             var namesDocB = docBFixtures.Select(f => f.Name).ToList();
 
-            const string literalA = "PART-PN-0042-REV-A";
-            const string literalB = "PART-PN-0042-REV-B";
-            const string literalDocB = "PART-PN-7777-D1";
+            // The resolved literals live on the gate class (consts above).
 
             // The module's own expectation per resolved literal — the
             // created sketch must reproduce exactly this geometry (the
@@ -152,7 +169,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 Console.WriteLine("# FATAL: the module could not generate the " +
                     "gate literals' QR geometry — aborting the live run");
-                return 1;
+                return false;
             }
             string sigA = ExpectedSignatureOf(literalA);
             string sigB = ExpectedSignatureOf(literalB);
@@ -189,48 +206,51 @@ namespace SolidWorksQrAddIn.LiveProbe
                 "active configuration's value (config shadows doc); QrSpaced -> whitespace " +
                 "verbatim; QrEmpty -> EMPTY; QrNoSuchProp -> MISSING; no-doc -> NODOC; " +
                 "missing/empty templates refuse the create before any host mutation.");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: the swprops gates require SolidWorks " +
-                    "closed — a SLDWORKS.exe process is already running. Refusing to " +
-                    "attach; the probe never mutates or kills an occupied seat.");
-                return 1;
+            _docFixtures = docFixtures; _cfg1Fixtures = cfg1Fixtures;
+            _cfgBFixtures = cfgBFixtures; _docBFixtures = docBFixtures;
+            _namesCfg1 = namesCfg1; _namesCfgB = namesCfgB; _namesDocB = namesDocB;
+            _sketchA = sketchA; _sketchB = sketchB; _sketchDocB = sketchDocB;
+            _sigA = sigA; _sigB = sigB; _sigDocB = sigDocB;
+            return true;
             }
 
-            ISldWorks? sw = null;
+            /// <summary>
+            /// The revision banner at its legacy position — the first
+            /// visible line after the spawn, ahead of the surface
+            /// discriminator and the reload.
+            /// </summary>
+            public void SessionBanner(ISldWorks sw, IAddInProbe? firstTry)
+            {
+                Console.WriteLine($"# SolidWorks revision {sw.RevisionNumber()} — " +
+                    $"invisible spawned instance, {System.Environment.OSVersion}");
+            }
+
+            /// <summary>
+            /// The watcher + gates 1–9 verbatim, driven against the hosted
+            /// session — the surface predicate and reload are the host's.
+            /// </summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var docFixtures = _docFixtures;
+            var cfg1Fixtures = _cfg1Fixtures;
+            var cfgBFixtures = _cfgBFixtures;
+            var docBFixtures = _docBFixtures;
+            var namesCfg1 = _namesCfg1;
+            var namesCfgB = _namesCfgB;
+            var namesDocB = _namesDocB;
+            var sketchA = _sketchA;
+            var sketchB = _sketchB;
+            var sigA = _sigA;
+            var sigB = _sigB;
+            var sigDocB = _sigDocB;
             IModelDoc2? doc = null;
             IModelDoc2? docB = null;
             IDisposable? watcherBox = null;
             try
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-                Console.WriteLine($"# SolidWorks revision {sw.RevisionNumber()} — " +
-                    $"invisible spawned instance, {System.Environment.OSVersion}");
-
-                var probe = TryGetProbe(sw);
-                bool hasSurface = ProbeHasSwpropsSurface(probe);
-                if (!hasSurface)
-                {
-                    try { sw.UnloadAddIn(dllPath); } catch { }
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
-                    probe = TryGetProbe(sw);
-                    hasSurface = ProbeHasSwpropsSurface(probe);
-                }
-                Check(hasSurface,
-                    "GetAddInObject returns the probe interface with the swprops surface");
-                if (probe == null || !hasSurface) return 1;
 
                 // A harness-side watcher counts the host notifications the
                 // add-in's own watcher consumes — the event-driven evidence
@@ -254,8 +274,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                         "to echo polling");
                 }
 
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
                 Check(File.Exists(template), "default part template exists", template);
                 if (!File.Exists(template)) return 1;
 
@@ -641,13 +660,11 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 try { watcherBox?.Dispose(); } catch { }
                 try { if (docB != null) sw?.CloseDoc(docB.GetTitle()); } catch { }
-                TeardownSpawned(sw);
             }
-
-            Console.WriteLine(_failures == 0
-                ? "ALL CHECKS PASSED"
-                : $"{_failures} CHECK(S) FAILED");
-            return _failures == 0 ? 0 : 1;
+            // The host prints ALL CHECKS PASSED / N CHECK(S) FAILED
+            // (SummaryLine — no `# ` prefix) and derives the exit code.
+            return 0;
+            }
         }
 
         /// <summary>
