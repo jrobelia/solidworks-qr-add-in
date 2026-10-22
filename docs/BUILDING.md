@@ -240,13 +240,17 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe list                # the mode registry — gates vs spikes/diagnostics, no COM
 ```
 
-Modes dispatch through the GateHost registry (ticket #61): a hosted gate
-(`circledims` so far) runs the shared live-session ceremony — expectations
-print, the uniform occupied-seat refusal (a running SLDWORKS.exe is never a
-valid target), launch + startup wait, the visible/open-documents refusal,
-probe acquisition with the LoadAddIn retry, pass/fail summary, and teardown
-that kills only the spawned PID — while unmigrated modes keep their own
-bodies.
+Modes dispatch through the GateHost registry (tickets #61/#62): every
+production gate — the default suite, `circledims`, `circles`, `xsettings`,
+`swprops`, `ringsplit`, `units`, `perf`, and the `circlediag` diagnostic —
+runs the shared live-session ceremony: the mode's expectations print, the
+uniform occupied-seat refusal (a running SLDWORKS.exe is never a valid
+target — `perf`'s legacy body skipped that check and now refuses like the
+rest), launch + startup wait, the visible/open-documents refusal, probe
+acquisition with the per-gate surface predicate and the LoadAddIn retry,
+pass/fail summary, and teardown that kills only the spawned PID. Only the
+`undoapi`, `pattern` and `circleladder` spikes keep their own bodies
+(ticket #63).
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
 gate: session plumbing and state round-trips, the emitted-dot census

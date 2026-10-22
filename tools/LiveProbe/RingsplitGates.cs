@@ -61,17 +61,45 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// </summary>
     public static partial class Program
     {
-        private static int RingsplitMain(string[] args)
+        /// <summary>
+        /// The `ringsplit` gate state across the expectations→run hand-off
+        /// (#62): the verdict fixtures, expected sketches, nesting censuses,
+        /// channel scans and preview signatures the live gates compare
+        /// against. The legacy RingsplitMain split at the ceremony seams —
+        /// every check line, print and gate ordering below is its body
+        /// verbatim; the launch/probe/teardown ceremony, the occupied-seat
+        /// refusal and the spec-51 surface reload are the GateHost's
+        /// uniform policy.
+        /// </summary>
+        private sealed class RingsplitGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            private const double sizeMm = QrSketchSession.InitialSizeMm;              // 25
+            private QrSketchResult _plain = null!, _split = null!,
+                _denseSplit = null!, _invSplit = null!,
+                _eccLRefuse = null!, _smallSplit = null!, _circleSplit = null!;
+            private QrSketch _expectedPlain = null!, _expectedSplit = null!,
+                _expectedDense = null!, _expectedInv = null!;
+            private QrNestingCensus _cenPlain = null!, _cenSplit = null!,
+                _cenDense = null!;
+            private List<QrChannelGap> _chansSplit = null!, _chansDense = null!;
+            private double _chanWidthSplitM, _chanWidthDenseM;
+            private string _sigPlain = "", _sigSplit = "", _denseContent = "";
+            private readonly System.Globalization.CultureInfo _inv =
+                System.Globalization.CultureInfo.InvariantCulture;
+
+            /// <summary>Half the module's minimum light gap, in metres.</summary>
+            private static double MaxGapM(QrSketch s) => s.Info.MinLightGapMm / 2000.0;
+
+            /// <summary>
+            /// The module-side expectations — the full verdict/census/
+            /// channel table, printed ahead of the occupied-seat refusal
+            /// exactly as the legacy head printed it.
+            /// </summary>
+            public bool Expectations()
+            {
+            var inv = _inv;
 
             // ================= module-side expectations =================
-            const double sizeMm = QrSketchSession.InitialSizeMm;                        // 25
             const double growth = QrSketchSession.InitialGrowthFractionPerSide;         // 3 %
             const double denseSizeMm = 40.0, denseGrowth = 0.10;
             string denseContent = new string('K', 200);   // nests beyond the finders
@@ -115,7 +143,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"circle={(circleSplit.Succeeded ? "ok" : circleSplit.Error!.Kind.ToString())} " +
                     $"eccL={(eccLRefuse.Succeeded ? "ACCEPTED(!)" : eccLRefuse.Error!.Kind.ToString())} " +
                     $"small={(smallSplit.Succeeded ? "ACCEPTED(!)" : smallSplit.Error!.Kind.ToString())}");
-                return 1;
+                return false;
             }
             var expectedSplit = split.Sketch!;
             var expectedPlain = plain.Sketch!;
@@ -129,7 +157,6 @@ namespace SolidWorksQrAddIn.LiveProbe
             var cenDense = QrNestingCensus.Of(expectedDense);
             var cenInv = QrNestingCensus.Of(expectedInv);
 
-            double MaxGapM(QrSketch s) => s.Info.MinLightGapMm / 2000.0;
             var chansSplit = QrChannelGaps.Find(expectedSplit.Edges, MaxGapM(expectedSplit));
             var chansDense = QrChannelGaps.Find(expectedDense.Edges, MaxGapM(expectedDense));
             var chansPlain = QrChannelGaps.Find(expectedPlain.Edges, MaxGapM(expectedPlain));
@@ -152,7 +179,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"cenSplit(top={cenSplit.TopLevelRegions} bearing={cenSplit.IslandBearingHoleCount}) " +
                     $"cenDense(dropped={expectedDense.Info.DroppedCellCount}) " +
                     $"chans={chansSplit.Count}/{chansDense.Count}/{chansPlain.Count}");
-                return 1;
+                return false;
             }
 
             string sigPlain = QrPictureRenderer.Render(expectedPlain,
@@ -192,50 +219,55 @@ namespace SolidWorksQrAddIn.LiveProbe
                 $"circle too (L verdict: {(circleSplitL.Succeeded ? "VALID" : circleSplitL.Error!.Kind.ToString())})");
             Console.WriteLine($"# expected refusals: split@ECC=L -> {VerdictName(eccLRefuse)}; " +
                 $"split@10mm -> {VerdictName(smallSplit)}");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: the ringsplit gates require SolidWorks " +
-                    "closed — a SLDWORKS.exe process is already running. Refusing to " +
-                    "attach; the probe never mutates or kills an occupied seat.");
-                return 1;
+            _plain = plain; _split = split; _denseSplit = denseSplit;
+            _invSplit = invSplit; _eccLRefuse = eccLRefuse; _smallSplit = smallSplit;
+            _circleSplit = circleSplit;
+            _expectedPlain = expectedPlain; _expectedSplit = expectedSplit;
+            _expectedDense = expectedDense; _expectedInv = expectedInv;
+            _cenPlain = cenPlain; _cenSplit = cenSplit; _cenDense = cenDense;
+            _chansSplit = chansSplit; _chansDense = chansDense;
+            _chanWidthSplitM = chanWidthSplitM; _chanWidthDenseM = chanWidthDenseM;
+            _sigPlain = sigPlain; _sigSplit = sigSplit; _denseContent = denseContent;
+            return true;
             }
 
-            ISldWorks? sw = null;
-            try
+            /// <summary>
+            /// The revision banner at its legacy position — the first
+            /// visible line after the spawn, ahead of the spec-51
+            /// discriminator and the reload.
+            /// </summary>
+            public void SessionBanner(ISldWorks sw, IAddInProbe? firstTry)
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
                 Console.WriteLine($"# SolidWorks revision {sw.RevisionNumber()} — " +
                     $"invisible spawned instance, {System.Environment.OSVersion}");
+            }
 
-                var probe = TryGetProbe(sw);
-                if (!ProbeHasRingSplitSurface(probe))
-                {
-                    try { sw.UnloadAddIn(dllPath); } catch { }
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
-                    if (loadResult != 0) return 1;
-                    probe = TryGetProbe(sw);
-                }
-                Check(ProbeHasRingSplitSurface(probe),
-                    "the answering build exposes the spec-51 probe surface " +
-                    "(ringsplit= in WindowStateProbe)");
-                if (probe == null || !ProbeHasRingSplitSurface(probe)) return 1;
+            /// <summary>
+            /// The check sequence the legacy body ran after the ceremony —
+            /// gates 1–9 verbatim, driven against the hosted session.
+            /// </summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var plain = _plain; var split = _split; var denseSplit = _denseSplit;
+            var invSplit = _invSplit; var eccLRefuse = _eccLRefuse;
+            var smallSplit = _smallSplit; var circleSplit = _circleSplit;
+            var expectedPlain = _expectedPlain; var expectedSplit = _expectedSplit;
+            var expectedDense = _expectedDense; var expectedInv = _expectedInv;
+            var cenPlain = _cenPlain; var cenSplit = _cenSplit; var cenDense = _cenDense;
+            var chansSplit = _chansSplit; var chansDense = _chansDense;
+            double chanWidthSplitM = _chanWidthSplitM, chanWidthDenseM = _chanWidthDenseM;
+            var sigPlain = _sigPlain; var sigSplit = _sigSplit;
+            var denseContent = _denseContent;
+            var inv = _inv;
+            try
+            {
                 Check(probe.AddinStateProbe().StartsWith("CONNECTED"),
                     "add-in connected", probe.AddinStateProbe());
 
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
                 Check(File.Exists(template), "default part template exists", template);
                 if (!File.Exists(template)) return 1;
 
@@ -309,7 +341,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Console.WriteLine("# ---- gate 3: circle shape leaves the flag inert ----");
                 var cc = probe.SetQrField("shape", "circle");
                 Check(cc.StartsWith("VALID") &&
-                      cc.Contains($"dots={circleSplit.Sketch.CirclePlan.EmittedCount}"),
+                      cc.Contains($"dots={circleSplit.Sketch!.CirclePlan!.EmittedCount}"),
                     "circle output under the flag emits exactly the module's dot plan", cc);
                 string stateC = probe.WindowStateProbe();
                 Check(stateC.Contains("shape=circle") && stateC.Contains("ringsplit=True") &&
@@ -553,19 +585,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                     "docs/ACCEPTANCE.md D21 is the manual click-and-extrude row");
 
                 try { sw.UnloadAddIn(dllPath); } catch { }
-                Console.WriteLine(_failures == 0
-                    ? "# RINGSPLIT ALL CHECKS PASSED"
-                    : $"# {_failures} check(s) failed");
-                return _failures == 0 ? 0 : 1;
+                // The host prints the pass/fail summary (SummaryPass) and
+                // derives the exit code from the failure tally.
+                return 0;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
                 return 1;
             }
-            finally
-            {
-                TeardownSpawned(sw);
             }
         }
 
