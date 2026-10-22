@@ -30,7 +30,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
     /// <summary>
     /// Parses the cell-shape text the UI surfaces accept — the pane's shape
-    /// dropdown and the probe's <c>SetQrCellShapeProbe</c> argument both
+    /// dropdown and the probe's <c>SetQrField("shape", …)</c> argument both
     /// speak the canonical codes below (case-insensitive, surrounding
     /// whitespace ignored) — the same strictness
     /// <see cref="QrEccLevels"/> applies. Anything else is refused by

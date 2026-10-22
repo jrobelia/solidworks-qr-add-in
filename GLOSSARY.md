@@ -115,7 +115,7 @@ moment it is resolved in discussion, not before.
   session-free SolidWorks instance and reports pass/fail checks (the
   `*-GATES.md` records). Distinguished from a **spike** — a
   spike/diagnostic mode that produces evidence rather than verdicts
-  (`pattern`, `circlediag`, `consexp`…).
+  (`pattern`, `circlediag`…).
 - **Occupied-seat refusal** — the invariant every gate enforces before
   launching: a running `SLDWORKS.exe` is never a valid target, because a
   spawned instance still shares per-user state (settings snapshot,

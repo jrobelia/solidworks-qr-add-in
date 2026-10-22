@@ -4,7 +4,7 @@ Harness: `tools/LiveProbe` mode `ringsplit` against the deployed add-in.
 Required environment: SolidWorks closed (no `SLDWORKS.exe` process) so the
 harness can spawn its own session-free invisible instance, plus a deployed
 `SolidWorksQrAddIn.dll` carrying the spec-51 probe surface
-(`SetQrRingSplitProbe`, `ringsplit=` in `WindowStateProbe`).
+(`SetQrField("ringsplit", …)`, `ringsplit=` in `WindowStateProbe`).
 
 ## Status — ALL CHECKS PASSED (0 failures, 1 documented limitation)
 

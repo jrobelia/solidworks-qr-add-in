@@ -74,94 +74,23 @@ namespace SolidWorksQrAddIn.Core
         string WindowStateProbe();
 
         /// <summary>
-        /// Pushes content into the session exactly like the window's text box:
-        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;" or
-        /// "INVALID &lt;kind&gt; &lt;message&gt;".
+        /// Writes one session field by name exactly like the pane's
+        /// controls — the same vocabulary <see cref="WindowStateProbe"/>
+        /// echoes (<see cref="QrProbeFields"/>): "content", "size",
+        /// "growth", "ecc", "invert", "ringsplit", "shape", "param" and
+        /// "preset" (the content-type id), matched case-insensitively; any
+        /// other name is a preset-field key written verbatim. Values are
+        /// field text: the literal text for text fields, the option Value
+        /// for choices, "true"/"false" for toggles and Boolean preset
+        /// fields. Returns "VALID cells=&lt;n&gt; contours=&lt;c&gt;
+        /// segs=&lt;s&gt; size=&lt;finalMm&gt;" — under Circle
+        /// "dots=&lt;n&gt;" replaces the contour/segment counts — or
+        /// "INVALID &lt;kind&gt; &lt;message&gt;" for the revalidated
+        /// request, and a harness-level "ERROR ..." for input that can
+        /// never reach the session (an unknown ECC level, cell shape or
+        /// toggle value, or a missing field name).
         /// </summary>
-        string SetQrContentProbe(string content);
-
-        /// <summary>
-        /// Pushes size text into the session exactly like the window's size
-        /// box: "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
-        /// </summary>
-        string SetQrSizeProbe(string sizeText);
-
-        /// <summary>
-        /// Pushes growth text into the session exactly like the window's
-        /// growth box: "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
-        /// </summary>
-        string SetQrGrowthProbe(string growthText);
-
-        /// <summary>
-        /// Picks the error-correction level exactly like the pane's selector:
-        /// "L", "M", "Q" or "H" (case-insensitive). Returns
-        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;"
-        /// for the revalidated request, and "ERROR unknown ECC level …" for
-        /// anything outside the four levels.
-        /// </summary>
-        string SetQrEccProbe(string level);
-
-        /// <summary>
-        /// Flips the output polarity exactly like the pane's invert checkbox:
-        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
-        /// </summary>
-        string SetQrInvertProbe(bool invert);
-
-        /// <summary>
-        /// Sets the open-nested-rings option exactly like the pane's
-        /// ring-split checkbox (spec #51, ticket #54): under the Square cell
-        /// shape every island-bearing hole is opened so no doubly-nested
-        /// contour survives. Returns "VALID cells=&lt;n&gt; contours=&lt;c&gt;
-        /// segs=&lt;s&gt; size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt;
-        /// &lt;message&gt;" — below error correction M the verdict is
-        /// "INVALID InvalidEccLevel ..." naming the ECC field. Inert under
-        /// Circle (dots emit no contours).
-        /// </summary>
-        string SetQrRingSplitProbe(bool ringSplit);
-
-        /// <summary>
-        /// Picks the per-cell shape exactly like the pane's shape selector:
-        /// "square" or "circle" (case-insensitive). Returns
-        /// "VALID cells=&lt;n&gt; ..." — under Circle
-        /// "dots=&lt;n&gt;" replaces the contour/segment counts, which are
-        /// not meaningful for circle entities — or
-        /// "INVALID &lt;kind&gt; &lt;message&gt;" for the revalidated request,
-        /// and "ERROR unknown cell shape …" for anything outside the two
-        /// codes.
-        /// </summary>
-        string SetQrCellShapeProbe(string shape);
-
-        /// <summary>
-        /// Pushes shape-parameter text into the session exactly like the
-        /// pane's dot-size box — Circle's dot diameter as a percentage of
-        /// cell pitch. Returns "VALID cells=&lt;n&gt; dots=&lt;n&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;".
-        /// The text is stored verbatim under Square too — inert there, but
-        /// never silently dropped.
-        /// </summary>
-        string SetQrShapeParamProbe(string paramText);
-
-        /// <summary>
-        /// Picks the content-type preset exactly like the pane's dropdown:
-        /// "VALID cells=&lt;n&gt; contours=&lt;c&gt; segs=&lt;s&gt;
-        /// size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt; &lt;message&gt;" —
-        /// an unknown id or a preset whose required fields are missing
-        /// reports "INVALID InvalidPayload ...".
-        /// </summary>
-        string SetQrContentTypeProbe(string presetId);
-
-        /// <summary>
-        /// Writes one preset field exactly like the pane's preset inputs —
-        /// the literal text for text kinds, the option Value for Choice,
-        /// "true"/"false" for Boolean. The composed payload lands in the
-        /// content box verbatim: "VALID ..." or
-        /// "INVALID InvalidPayload &lt;message naming the bad field&gt;".
-        /// </summary>
-        string SetQrPresetFieldProbe(string key, string value);
+        string SetQrField(string name, string value);
 
         /// <summary>
         /// The Create Sketch button, probed: builds a fresh host adapter and
@@ -169,17 +98,6 @@ namespace SolidWorksQrAddIn.Core
         /// "ERROR &lt;message&gt;".
         /// </summary>
         string CreateQrFromWindowProbe();
-
-        /// <summary>
-        /// Undo-recording diagnostic (verification-only): creates a fresh
-        /// throwaway part document, creates one small sketch under the
-        /// requested arrangement of StartRecordingUndoObject /
-        /// FinishRecordingUndoObject(2) / InsertSketch / AddToDB, then
-        /// presses EditUndo2 and reports whether the sketch was removed.
-        /// Returns a single-line "ARR …" result string. -1 is a ping that
-        /// reports the executing thread — no document is touched.
-        /// </summary>
-        string UndoArrangementProbe(int arrangement);
 
         /// <summary>
         /// Custom-undo verification (SetApiUndoObject): creates a throwaway
@@ -192,21 +110,6 @@ namespace SolidWorksQrAddIn.Core
         /// sketch names involved. The document is closed afterwards.
         /// </summary>
         string UndoRedoQrProbe();
-
-        /// <summary>
-        /// Sketch-block-instance spike (verification-only): each test number
-        /// creates a fresh throwaway part document on the SolidWorks UI
-        /// thread, runs one block-API experiment, closes the document, and
-        /// returns a one-line "BLK&lt;n&gt; ..." result. -1 is a ping (no
-        /// document touched).
-        ///   1 block-instance geometry as an extrude/cut profile
-        ///   2 driving-dimension rescale + direct instance Scale/Angle
-        ///   3 relations from host-sketch entities to block-instance geometry
-        ///   4 the MakeSketchBlockFromSelected / InsertSketchBlockInstance
-        ///     creation sequence
-        ///   5 AddDimension2 inside the definition travelling into the block
-        /// </summary>
-        string BlockSpikeProbe(int test);
 
         /// <summary>
         /// Fingerprint of the session's current picture:

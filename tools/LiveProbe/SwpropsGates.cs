@@ -19,8 +19,8 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// session-free part — document-level + configuration-specific +
     /// deliberately empty + whitespace values via CustomPropertyManager.Add3,
     /// on TWO configurations of the same part so the config-switch gate is
-    /// meaningful — then drives the pane path (SetQrContentTypeProbe /
-    /// SetQrPresetFieldProbe / the WindowStateProbe view echoes /
+    /// meaningful — then drives the pane path (SetQrField "preset" /
+    /// SetQrField preset-field keys / the WindowStateProbe view echoes /
     /// CreateQrFromWindowProbe) and proves the created sketch encodes exactly
     /// the resolved literal by the established module-identical route
     /// (block-definition census + exploded 1:1 contour match — the same
@@ -399,7 +399,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 string opened = probe.OpenQrWindowProbe();
                 Check(opened.Contains("open=True") && opened.Contains("windows=1"),
                     "pane opened through the command entry — the surface the gate drives", opened);
-                var pick = probe.SetQrContentTypeProbe("swprops");
+                var pick = probe.SetQrField("preset", "swprops");
                 Check(pick.StartsWith("INVALID") && pick.Contains("EmptyContent"),
                     "the SW Properties type opens invalid — the empty template composes " +
                     "to nothing", pick);
@@ -410,7 +410,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"viewTemplateNames={ViewField(st0, "viewTemplateNames")} " +
                     $"vs enumerated {names.Count}");
 
-                var set = probe.SetQrPresetFieldProbe("template", gateTemplate);
+                var set = probe.SetQrField("template", gateTemplate);
                 Check(set.StartsWith("VALID") && set.Contains($"cells={sketchA.Info.CellCount}"),
                     "the template resolves the fixture properties into a valid request — " +
                     $"live verdict matches the module (cells={sketchA.Info.CellCount})", set);
@@ -581,7 +581,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 // ================= GATE 8 — missing/empty refusal =================
                 Console.WriteLine("# ---- gate 8: missing/empty reference refused before mutation ----");
                 int featsRef = FindSketchFeatureNames(doc).Count;
-                var bad1 = probe.SetQrPresetFieldProbe("template", missingTemplate);
+                var bad1 = probe.SetQrField("template", missingTemplate);
                 Check(bad1.StartsWith("INVALID") && bad1.Contains("InvalidPayload") &&
                       bad1.Contains("$PRP:\"QrNoSuchProp\""),
                     "a missing reference fails the request naming it", bad1);
@@ -600,7 +600,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     "the refused create touched neither the feature tree nor the sketch-edit state",
                     $"sketches=[{string.Join(", ", FindSketchFeatureNames(doc))}]");
 
-                var bad2 = probe.SetQrPresetFieldProbe("template", emptyTemplate);
+                var bad2 = probe.SetQrField("template", emptyTemplate);
                 Check(bad2.StartsWith("INVALID") && bad2.Contains("$PRP:\"QrEmpty\"") &&
                       bad2.Contains("empty"),
                     "a present-but-empty reference fails distinctly from missing", bad2);
@@ -611,7 +611,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     "the empty-reference refusal touched neither tree nor sketch state",
                     $"sketches=[{string.Join(", ", FindSketchFeatureNames(doc))}]");
 
-                var good = probe.SetQrPresetFieldProbe("template", gateTemplate);
+                var good = probe.SetQrField("template", gateTemplate);
                 Check(good.StartsWith("VALID"),
                     "the valid template restores the request", good);
                 Check(ViewResolved(probe.WindowStateProbe()) == literalB,
@@ -732,7 +732,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Limit("host-event re-resolution of the template did not land within 3s",
                     $"still showing '{ViewResolved(state)}' — forcing the pane path " +
                     "through a template field rewrite");
-                probe.SetQrPresetFieldProbe("template", template);
+                probe.SetQrField("template", template);
                 state = probe.WindowStateProbe();
             }
             return state;

@@ -4,7 +4,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
 {
     /// <summary>
     /// Parses the error-correction level text the UI surfaces accept —
-    /// the pane's ECC dropdown and the probe's <c>SetQrEccProbe</c> argument
+    /// the pane's ECC dropdown and the probe's <c>SetQrField("ecc", …)</c> argument
     /// both speak "L", "M", "Q" or "H" (case-insensitive, surrounding
     /// whitespace ignored). Anything else is refused by returning false —
     /// an unrecognized level is never silently coerced to another one.

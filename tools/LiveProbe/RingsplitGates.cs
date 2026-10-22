@@ -16,7 +16,7 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// Ticket-#55 live gates for the spec-#51 open-nested-rings option —
     /// the production-path suite over the ticket-#52/#53 geometry and the
     /// ticket-#54 pane surface. A real option-on create driven through the
-    /// pane path (SetQrRingSplitProbe + CreateQrFromWindowProbe) proves the
+    /// pane path (SetQrField "ringsplit" + CreateQrFromWindowProbe) proves the
     /// delivered artefact, not the assumption:
     ///   the emitted block's definition census shows the opened geometry —
     ///   no island-bearing hole, the former islands promoted to top-level
@@ -251,24 +251,24 @@ namespace SolidWorksQrAddIn.LiveProbe
                       state0.Contains("shape=square") && state0.Contains("viewRingSplitVisible=True"),
                     "a fresh session defaults the option OFF with the control visible", state0);
 
-                var pre = probe.SetQrRingSplitProbe(true);
+                var pre = probe.SetQrField("ringsplit", "true");
                 Check(pre.StartsWith("INVALID") && pre.Contains("EmptyContent"),
                     "the toggle applies with no content — INVALID EmptyContent is the contract", pre);
                 string stateT = probe.WindowStateProbe();
                 Check(stateT.Contains("ringsplit=True") && stateT.Contains("viewRingSplit=True"),
                     "the flag and the pane control both landed", stateT);
-                var preOff = probe.SetQrRingSplitProbe(false);
+                var preOff = probe.SetQrField("ringsplit", "false");
                 Check(preOff.StartsWith("INVALID") && preOff.Contains("EmptyContent") &&
                       probe.WindowStateProbe().Contains("ringsplit=False"),
                     "toggle back off pre-content", preOff);
 
-                string c1 = probe.SetQrContentProbe(PayloadA);
+                string c1 = probe.SetQrField("content", PayloadA);
                 Check(ResponseMatchesVerdict(c1, plain),
                     "payload A accepted — the option-off census is the historical baseline", c1);
                 Check(probe.PreviewSignatureProbe().Contains($"sha={sigPlain}"),
                     "the preview renders the module's UNSPLIT sketch", probe.PreviewSignatureProbe());
 
-                var rs = probe.SetQrRingSplitProbe(true);
+                var rs = probe.SetQrField("ringsplit", "true");
                 Check(ResponseMatchesVerdict(rs, split) &&
                       rs.Contains($"contours={expectedSplit.Info.ContourCount}") &&
                       rs.Contains($"segs={expectedSplit.Info.SegmentCount}"),
@@ -282,18 +282,18 @@ namespace SolidWorksQrAddIn.LiveProbe
                     "the inner-edge slit can render sub-pixel at 240px, so the signature may " +
                     "coincide with the unsplit one)",
                     picSplit);
-                var offAgain = probe.SetQrRingSplitProbe(false);
+                var offAgain = probe.SetQrField("ringsplit", "false");
                 Check(offAgain.StartsWith("VALID") &&
                       probe.PreviewSignatureProbe().Contains($"sha={sigPlain}"),
                     "toggling off restores the unsplit picture byte-identically", offAgain);
-                var onAgain = probe.SetQrRingSplitProbe(true);
+                var onAgain = probe.SetQrField("ringsplit", "true");
                 Check(onAgain.StartsWith("VALID") &&
                       probe.PreviewSignatureProbe().Contains($"sha={sigSplit}"),
                     "and on again — left ON for the create gates", onAgain);
 
                 // ================= GATE 2 — ECC refusal verdict =================
                 Console.WriteLine("# ---- gate 2: ECC refusal verdict ----");
-                var eL = probe.SetQrEccProbe("L");
+                var eL = probe.SetQrField("ecc", "L");
                 Check(ResponseMatchesVerdict(eL, eccLRefuse) && eL.Contains("EccLevel"),
                     "ECC L under the option is refused naming the EccLevel field " +
                     $"({VerdictName(eccLRefuse)})", eL);
@@ -301,13 +301,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                       probe.PreviewSignatureProbe() == "NO-PICTURE",
                     "the refused request carries no request and no picture",
                     probe.WindowStateProbe());
-                var eM = probe.SetQrEccProbe("M");
+                var eM = probe.SetQrField("ecc", "M");
                 Check(ResponseMatchesVerdict(eM, split),
                     "raising ECC restores the module's split verdict", eM);
 
                 // ================= GATE 3 — circle inert =================
                 Console.WriteLine("# ---- gate 3: circle shape leaves the flag inert ----");
-                var cc = probe.SetQrCellShapeProbe("circle");
+                var cc = probe.SetQrField("shape", "circle");
                 Check(cc.StartsWith("VALID") &&
                       cc.Contains($"dots={circleSplit.Sketch.CirclePlan.EmittedCount}"),
                     "circle output under the flag emits exactly the module's dot plan", cc);
@@ -315,22 +315,22 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Check(stateC.Contains("shape=circle") && stateC.Contains("ringsplit=True") &&
                       stateC.Contains("viewRingSplitVisible=False"),
                     "the flag stays stored while the control hides under circle", stateC);
-                var cL = probe.SetQrEccProbe("L");
+                var cL = probe.SetQrField("ecc", "L");
                 Check(cL.StartsWith("VALID") && cL.Contains("dots="),
                     "the ECC gate stays inert under circle — dots spend no correction budget", cL);
-                Check(probe.SetQrEccProbe("M").StartsWith("VALID"), "ECC restores to M", "");
-                var back = probe.SetQrCellShapeProbe("square");
+                Check(probe.SetQrField("ecc", "M").StartsWith("VALID"), "ECC restores to M", "");
+                var back = probe.SetQrField("shape", "square");
                 Check(ResponseMatchesVerdict(back, split) &&
                       probe.WindowStateProbe().Contains("viewRingSplitVisible=True"),
                     "back on square the stored flag applies with the control visible", back);
 
                 // ================= GATE 4 — inverted split verdict =================
                 Console.WriteLine("# ---- gate 4: inverted split verdict ----");
-                var iv = probe.SetQrInvertProbe(true);
+                var iv = probe.SetQrField("invert", "true");
                 Check(ResponseMatchesVerdict(iv, invSplit) &&
                       iv.Contains($"contours={expectedInv.Info.ContourCount}"),
                     "invert + split reproduces the module's opened-pocket census", iv);
-                var ivOff = probe.SetQrInvertProbe(false);
+                var ivOff = probe.SetQrField("invert", "false");
                 Check(ResponseMatchesVerdict(ivOff, split),
                     "polarity back to normal — the split census restored", ivOff);
 
@@ -414,7 +414,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                     // ================= GATE 7 — refusals before mutation =================
                     Console.WriteLine("# ---- gate 7: guard + ECC refusals before any mutation ----");
-                    var sz10 = probe.SetQrSizeProbe("10");
+                    var sz10 = probe.SetQrField("size", "10");
                     Check(ResponseMatchesVerdict(sz10, smallSplit),
                         $"the insertion guard still floors the split request ({VerdictName(smallSplit)})",
                         sz10);
@@ -424,10 +424,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Check(FindSketchFeatureNames(doc).Count == featsBefore &&
                           mgr.ActiveSketch == null,
                         "the refused create touched neither the feature tree nor the sketch-edit state");
-                    var sz25 = probe.SetQrSizeProbe(sizeMm.ToString(inv));
+                    var sz25 = probe.SetQrField("size", sizeMm.ToString(inv));
                     Check(ResponseMatchesVerdict(sz25, split), "size restores to the gate fixture", sz25);
 
-                    var eL2 = probe.SetQrEccProbe("L");
+                    var eL2 = probe.SetQrField("ecc", "L");
                     Check(ResponseMatchesVerdict(eL2, eccLRefuse),
                         "the below-M verdict refuses on the live document too", eL2);
                     string refused2 = probe.CreateQrFromWindowProbe();
@@ -435,16 +435,16 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Check(FindSketchFeatureNames(doc).Count == featsBefore &&
                           mgr.ActiveSketch == null,
                         "the ECC refusal also left no partial sketch");
-                    Check(ResponseMatchesVerdict(probe.SetQrEccProbe("M"), split),
-                        "ECC M restores the valid split request", probe.SetQrEccProbe("M"));
+                    Check(ResponseMatchesVerdict(probe.SetQrField("ecc", "M"), split),
+                        "ECC M restores the valid split request", probe.SetQrField("ecc", "M"));
 
                     // ================= GATE 8 — dense cell-drop create =================
                     Console.WriteLine("# ---- gate 8: dense payload — the module-aligned cell-drop path ----");
-                    Check(probe.SetQrGrowthProbe("10").StartsWith("VALID"),
-                        "growth 10% accepted", probe.SetQrGrowthProbe("10"));
-                    Check(probe.SetQrSizeProbe("40").StartsWith("VALID"),
-                        "size 40 mm accepted", probe.SetQrSizeProbe("40"));
-                    var dc = probe.SetQrContentProbe(denseContent);
+                    Check(probe.SetQrField("growth", "10").StartsWith("VALID"),
+                        "growth 10% accepted", probe.SetQrField("growth", "10"));
+                    Check(probe.SetQrField("size", "40").StartsWith("VALID"),
+                        "size 40 mm accepted", probe.SetQrField("size", "40"));
+                    var dc = probe.SetQrField("content", denseContent);
                     Check(ResponseMatchesVerdict(dc, denseSplit),
                         "the dense payload's split verdict matches the module " +
                         $"(opened={expectedDense.Info.OpenedSiteCount} " +
@@ -487,13 +487,13 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                     // ================= GATE 9 — option-off regression =================
                     Console.WriteLine("# ---- gate 9: option-off regression — byte-identical history ----");
-                    Check(probe.SetQrContentProbe(PayloadA).StartsWith("VALID"),
-                        "payload A restored", probe.SetQrContentProbe(PayloadA));
-                    Check(probe.SetQrGrowthProbe("3").StartsWith("VALID"),
-                        "growth back to 3%", probe.SetQrGrowthProbe("3"));
-                    Check(ResponseMatchesVerdict(probe.SetQrSizeProbe("25"), plain),
-                        "the historical 25mm/3% verdict returns", probe.SetQrSizeProbe("25"));
-                    var rsOff = probe.SetQrRingSplitProbe(false);
+                    Check(probe.SetQrField("content", PayloadA).StartsWith("VALID"),
+                        "payload A restored", probe.SetQrField("content", PayloadA));
+                    Check(probe.SetQrField("growth", "3").StartsWith("VALID"),
+                        "growth back to 3%", probe.SetQrField("growth", "3"));
+                    Check(ResponseMatchesVerdict(probe.SetQrField("size", "25"), plain),
+                        "the historical 25mm/3% verdict returns", probe.SetQrField("size", "25"));
+                    var rsOff = probe.SetQrField("ringsplit", "false");
                     Check(ResponseMatchesVerdict(rsOff, plain) &&
                           probe.PreviewSignatureProbe().Contains($"sha={sigPlain}"),
                         "option off restores the module's UNSPLIT census and picture", rsOff);
