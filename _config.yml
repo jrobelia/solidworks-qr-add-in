@@ -1,0 +1,8 @@
+theme: jekyll-theme-cayman
+title: SolidWorks QR Add-In
+description: >-
+  Free open-source SolidWorks add-in that generates native QR code sketches —
+  real extrudable contour geometry, not image traces. Square or dot-pattern
+  output, growth compensation, opt-in ring-split for automatic profile
+  selection.
+show_downloads: true
