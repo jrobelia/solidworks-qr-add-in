@@ -230,6 +230,7 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe ringsplit $deploy   # ticket-#55 ring-split (open nested rings) gates
 ```
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
@@ -297,6 +298,24 @@ create before any host mutation; the no-document case must report NODOC.
 Like `xsettings` it **refuses to run while any `SLDWORKS.exe` process
 exists** and prints its fixture plan before that refusal. Gate results are
 recorded in `docs/SWPROPS-GATES.md`.
+
+The `ringsplit` mode (ticket #55) is the spec-51 open-nested-rings live
+gate. It drives the pane path (`SetQrRingSplitProbe` through
+`CreateQrFromWindowProbe`), proves preview/create parity against
+`QrPictureRenderer`, then verifies the landed sketches module-identically:
+block census, exploded 1:1 contour match, `QrNestingCensus` region totals
+(promoted islands + zero island-bearing holes), `QrChannelGaps` finder-
+channel width/locus checks, `ISketchRegion.Select` object-selection of
+every material region (never bbox-centre picks — a split ring is
+C-shaped), a real boss + cut extrude from the picked regions, the
+named-undo toggle, the guard + ECC refusals before any mutation, a dense
+module-aligned cell-drop create, and the option-off byte-identical
+regression plus circle inertness. Like `xsettings` it **refuses to run
+while any `SLDWORKS.exe` process exists** and prints its module-side
+expectations (baseline/split/dense/inverted censuses, channel widths,
+expected refusals) before that refusal. Automatic profile selection
+itself stays a manual row — `docs/ACCEPTANCE.md` D21. Gate results are
+recorded in `docs/RINGSPLIT-GATES.md`.
 
 The `units` mode uses a session-free instance and checks the native document
 watcher plus the actual pane's rendered size label, input, and cell-size value.
