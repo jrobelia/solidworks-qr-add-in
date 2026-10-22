@@ -262,13 +262,14 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// <summary>
         /// The ring-split option in force (spec #51, ticket #54): when set
         /// under the Square cell shape, the generator opens every
-        /// island-bearing hole — a thin module-aligned channel dropped
-        /// through each enclosing band joins its void to exterior-connected
-        /// space, so no ring → hole → island nesting survives for
-        /// SolidWorks' automatic profile selection to refuse. Default off;
-        /// refused below error correction M (cell drops spend correction
-        /// budget); inert under Circle — dots emit no contours, so the
-        /// stored flag applies to nothing (the pane hides the control via
+        /// island-bearing hole — the three finder rings by thin channels,
+        /// every other site by a minimal module-aligned cell drop whose
+        /// emitted quiet-zone leg vents by the same thin corridor — so no
+        /// ring → hole → island nesting survives for SolidWorks' automatic
+        /// profile selection to refuse. Default off; refused below error
+        /// correction M (cell drops spend correction budget); inert under
+        /// Circle — dots emit no contours, so the stored flag applies to
+        /// nothing (the pane hides the control via
         /// <see cref="RingSplitApplies"/>). Applies to future creates only.
         /// </summary>
         public bool RingSplit => _ringSplit;
@@ -943,8 +944,9 @@ namespace SolidWorksQrAddIn.Core.Interaction
             // the option is in force — the flag set under the shape it
             // applies to, the same conditional-row rule the Dots row
             // follows under Circle: opened sites and dropped cells make the
-            // treatment's price visible rather than silent, and the finder
-            // channel's derived width joins when a channel was cut.
+            // treatment's price visible rather than silent, and the thin
+            // channels' derived width joins when a channel was cut (the
+            // finder slots and the quiet-zone egress corridors share it).
             if (_ringSplit && QrCellShapes.RingSplitApplies(info.CellShape))
             {
                 var ringSplit = info.OpenedSiteCount +
@@ -952,7 +954,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                     info.DroppedCellCount +
                     (info.DroppedCellCount == 1 ? " cell dropped" : " cells dropped");
                 if (info.FinderChannelWidthMm > 0.0)
-                    ringSplit += " · finder channel " + FormatMm(info.FinderChannelWidthMm);
+                    ringSplit += " · thin channel " + FormatMm(info.FinderChannelWidthMm);
                 lines.Add(new QrInfoLine("Ring split", ringSplit));
             }
             return lines;

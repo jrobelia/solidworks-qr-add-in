@@ -58,9 +58,10 @@ moment it is resolved in discussion, not before.
   SolidWorks' automatic profile selection refuses. The ring split opens
   every one, at any nesting depth.
 - **Exterior-connected void** — the un-emitted cells flood-filled from
-  the working-matrix border; under invert (where the border emits) a void
-  also reaches exterior when its channel drops a border cell — it vents
-  past the field edge. A hole joined to it is no longer enclosed.
+  the working-matrix border; under invert (where the border and quiet
+  zone emit) a void instead vents by a thin channel through the emitted
+  margin, past the field edge — the quiet-zone egress corridor. A hole
+  joined to it is no longer enclosed.
 - **Band** — the emitted cells enclosing a void; a ring split's channel
   crosses at least one cell per band, and a deeply nested void's channel
   may legitimately span several cells through stacked bands.
@@ -68,7 +69,10 @@ moment it is resolved in discussion, not before.
   cells (never sub-cell geometry): the channel's walls are the surviving
   neighbours' grown edges, and the flipped modules are the damage shape
   QR error correction is designed to repair (which is why the option
-  requires ECC level M or higher).
+  requires ECC level M or higher). The drop path's emitted cells inside
+  the quiet-zone band are excepted — they keep their emission and vent
+  by a thin corridor at the finder-channel width, so the inverted margin
+  never shows a module-wide removed line.
 - **Cell shape** — the per-cell primitive the generator emits (spec #13,
   ticket #38): **Square** (the grown contour path, default) or **Circle**
   (one true circle dot per emitted cell, delivered as a `QrCirclePlan`

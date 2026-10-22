@@ -358,6 +358,15 @@ corollaries fall out of the run:
   target set is the matrix's *flood-filled exterior light region*
   (flood from the border over un-emitted cells), iterating until no
   doubly-nested hole survives.
+- **Update (user feedback on the shipped feature):** under invert the
+  quiet zone and border are all emitted field, so a drop path's egress
+  leg through the margin showed as a whole-module-wide removed line.
+  The leg now keeps its cells and vents by the same thin channel the
+  finder rings use — the derived `FinderChannelWidthUnits` width — one
+  channel-width corridor along the leg's cells, overhanging a half-cell
+  past the matrix edge like the finder vent slots. Only interior path
+  cells still drop; the treatment is invert-only by construction (no
+  margin cell emits under normal polarity).
 - Since data-site drops spend real ECC budget and finder cuts spend
   detection margin, the option should be **gated on a minimum
   error-correction level** (e.g. refuse at L; the pane already exposes

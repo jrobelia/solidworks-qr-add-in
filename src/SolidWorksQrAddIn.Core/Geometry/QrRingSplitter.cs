@@ -27,9 +27,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///     channel rectangles for the caller to Difference out of the
     ///     grown subject, and claims the void by cell-set identity so the
     ///     mask-side iteration does not loop on it forever.
-    ///   * Every other island-bearing site, at any depth, opens by
-    ///     dropping the minimal module-aligned path of emitted cells that
-    ///     joins the void to exterior-connected space (ticket #52).
+    ///   * Every other island-bearing site, at any depth, opens along the
+    ///     minimal module-aligned path of cells that joins the void to
+    ///     exterior-connected space (ticket #52): interior path cells drop
+    ///     whole (the ECC-repairable damage), while the path's emitted
+    ///     cells inside the quiet-zone band keep their emission and vent
+    ///     by the same thin channel the finder rings use — under invert
+    ///     the margin is all field, so a whole-cell drop there read as a
+    ///     module-wide removed line.
     ///
     /// Cell topology mirrors the grown union exactly (g &lt; U/2): emitted
     /// cells are 8-connected material — grown rects bridge diagonal
@@ -37,11 +42,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// enclosed 4-connected void component is exactly a union hole and its
     /// enclosed 8-connected emitted components are exactly its islands.
     /// The exterior is the un-emitted flood from the working-matrix border;
-    /// under invert the border itself emits, so a channel may instead
-    /// terminate on a border cell — dropping it vents the void past the
-    /// field edge (the field is clipped at the matrix square) — and the
-    /// finder channel vents the same way, a slot through the field to the
-    /// matrix edge.
+    /// under invert the border itself emits, so a channel instead vents
+    /// the void past the field edge (the field is clipped at the matrix
+    /// square) — the finder channel's slot through the field to the
+    /// matrix edge, and the quiet-zone egress corridor the cell-drop path
+    /// emits along the leg's margin cells.
     ///
     /// Square-shape only; under Circle the flag is inert and the pass
     /// never runs (dots emit no contours).
@@ -64,11 +69,14 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// Opens island-bearing holes in <paramref name="emit"/> (mutated in
         /// place for the cell drops) until none remain, iterating the
         /// detect→treat loop: finder-ring voids are claimed by thin channel
-        /// rectangles appended to <paramref name="finderChannels"/> (grid
+        /// rectangles appended to <paramref name="channels"/> (grid
         /// coordinates of the grown subject's space, for a Difference pass
         /// before the union); every other site drops the minimal cell path —
         /// a channel may legitimately span several cells through stacked
-        /// bands. <paramref name="growthUnits"/> is the per-side growth g;
+        /// bands — except the path's emitted quiet-zone-band cells, which
+        /// keep their emission and join <paramref name="channels"/> as the
+        /// same thin corridor instead (the invert-only quiet-zone egress).
+        /// <paramref name="growthUnits"/> is the per-side growth g;
         /// <paramref name="channelWidthUnits"/> the derived channel width
         /// (<see cref="FinderChannelWidthUnits"/>). Returns null on success;
         /// a named <see cref="QrSketchErrorKind.InvalidGeometry"/> error
@@ -78,11 +86,11 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// </summary>
         public static QrSketchError? OpenIslandBearingHoles(
             bool[,] emit, long growthUnits, long channelWidthUnits,
-            out int openedSites, out int droppedCells, out Paths64 finderChannels) =>
+            out int openedSites, out int droppedCells, out Paths64 channels) =>
             OpenIslandBearingHoles(
                 emit, growthUnits, channelWidthUnits,
                 emit.GetLength(0) * emit.GetLength(1) + 8,
-                out openedSites, out droppedCells, out finderChannels);
+                out openedSites, out droppedCells, out channels);
 
         /// <summary>
         /// <paramref name="maxPasses"/> bounds the detect→treat loop (the
@@ -93,18 +101,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// </summary>
         internal static QrSketchError? OpenIslandBearingHoles(
             bool[,] emit, long growthUnits, long channelWidthUnits, int maxPasses,
-            out int openedSites, out int droppedCells, out Paths64 finderChannels)
+            out int openedSites, out int droppedCells, out Paths64 channels)
         {
             openedSites = 0;
             droppedCells = 0;
-            finderChannels = new Paths64();
+            channels = new Paths64();
             int m = emit.GetLength(0);
-            // Finder voids already claimed by a thin channel: the channel is
-            // sub-cell, so the mask goes on reporting the site as
-            // island-bearing — claim it by cell-set identity and let the
-            // post-union tree check prove the opening. A void that later
-            // MERGES into a larger void loses the identity and falls back
-            // under the ordinary cell-drop rule.
+            // Voids already claimed by a thin channel — the finder slots and
+            // the quiet-zone egress corridors alike: a channel is sub-cell,
+            // so the mask goes on reporting the site as island-bearing —
+            // claim it by cell-set identity and let the post-union tree
+            // check prove the opening. A void that later MERGES into a
+            // larger void loses the identity and falls back under the
+            // ordinary cell-drop rule.
             var claimed = new List<HashSet<int>>();
             for (var pass = 0; pass < maxPasses; pass++)
             {
@@ -129,26 +138,29 @@ namespace SolidWorksQrAddIn.Core.Geometry
                                 "corner-locus channel clears the surrounding contours " +
                                 "(islands, deeper bands, disjoint neighbours). The " +
                                 "request is refused rather than partially opened.");
-                        finderChannels.Add(channel);
+                        channels.Add(channel);
                         claimed.Add(new HashSet<int>(voidCells));
                     }
                     else
                     {
-                        var drops = FindChannel(emit, voidCells);
-                        if (drops == null)
+                        var path = FindChannel(emit, voidCells);
+                        if (path == null)
                             return new QrSketchError(QrSketchErrorKind.InvalidGeometry,
                                 "Ring split found an island-bearing hole it cannot open — no " +
                                 "module-aligned cell path joins it to exterior-connected " +
                                 "space. The request is refused rather than partially opened.");
-                        foreach (int cell in drops)
-                        {
-                            int row = cell / m, col = cell % m;
-                            if (emit[row, col])
-                            {
-                                emit[row, col] = false;
-                                droppedCells++;
-                            }
-                        }
+                        var dropError = TreatCellDropPath(
+                            emit, path, growthUnits, channelWidthUnits, channels,
+                            out int siteDrops, out bool channelVented);
+                        if (dropError != null)
+                            return dropError;
+                        droppedCells += siteDrops;
+                        // The egress corridor is sub-cell — the mask still
+                        // reports the void enclosed, so claim its post-drop
+                        // component (the path's drops may have merged other
+                        // voids into it) exactly like a claimed finder void.
+                        if (channelVented)
+                            claimed.Add(CollectVoidComponent(emit, voidCells[0]));
                     }
                     openedSites++;
                 }
@@ -354,14 +366,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
         }
 
         /// <summary>
-        /// The minimal path of emitted cells joining the void component's
-        /// cells to exterior-connected space: 0-1 BFS over the whole matrix
-        /// — an un-emitted cell is free to traverse (a channel may
-        /// legitimately span several cells through stacked bands), each
-        /// emitted cell costs one drop. Terminals are the exterior flood
-        /// recomputed on the CURRENT mask (earlier sites' channels count)
-        /// plus the matrix border — under invert the border emits, and a
-        /// dropped border cell vents the void past the field edge. Null when
+        /// The minimal path of cells joining the void component's cells to
+        /// exterior-connected space: 0-1 BFS over the whole matrix — an
+        /// un-emitted cell is free to traverse (a channel may legitimately
+        /// span several cells through stacked bands), each emitted cell
+        /// costs one drop. Terminals are the exterior flood recomputed on
+        /// the CURRENT mask (earlier sites' openings count) plus the matrix
+        /// border — under invert the border emits, and venting past the
+        /// field edge is how the void escapes the field. Returns the whole
+        /// cell sequence, terminal first — the treatment splits it into
+        /// interior drops and the quiet-zone egress corridor. Null when
         /// unreachable.
         /// </summary>
         private static List<int>? FindChannel(bool[,] emit, List<int> voidCells)
@@ -421,8 +435,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 {
                     var path = new List<int>();
                     for (int cur = cell; cur >= 0; cur = prev[cur / m, cur % m])
-                        if (emit[cur / m, cur % m])
-                            path.Add(cur);
+                        path.Add(cur);
                     return path;
                 }
                 TryRelax(r - 1, c, cell);
@@ -448,6 +461,157 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
         }
 
+        /// <summary>
+        /// The cell-drop treatment (ticket #52) with the inverted
+        /// quiet-zone egress leg as a thin corridor rather than
+        /// whole-module drops — user feedback: under invert the margin is
+        /// all emitted field, so the leg's drops read as a module-wide
+        /// removed line where a finder slot pays only the channel width.
+        /// The path's emitted cells inside the outer
+        /// <see cref="QrSketchInfo.QuietZoneCellsPerSide"/>-cell band keep
+        /// their emission; the corridor is one <paramref name="w"/>-wide
+        /// rectangle per adjacent path pair touching such a cell —
+        /// consecutive pairs share the run axis, so the unioned rects are
+        /// a continuous channel even where the leg turns — plus a stub
+        /// running the terminal's arrival direction a half-cell past the
+        /// matrix edge, the same overhang a finder vent slot uses, so the
+        /// void genuinely vents past the clipped field edge. Interior
+        /// emitted path cells still drop whole — the module-aligned
+        /// damage ECC repairs. Tips land at path-cell centres: the
+        /// corridor's inner ends sit in a void or dropped cell's free
+        /// core and the outer end past the border, so no tip or wall ever
+        /// lands on a contour — the same placement discipline as the
+        /// finder channels, including the shared free-core feasibility
+        /// floor and its named refusal. Under normal polarity no
+        /// quiet-zone cell emits, so no corridor ever exists and the
+        /// treatment is exactly the plain drop.
+        /// <paramref name="channelVented"/> reports whether the site vents
+        /// by corridor — the caller then claims the post-drop void
+        /// component, since a sub-cell corridor cannot exist on the mask.
+        /// </summary>
+        private static QrSketchError? TreatCellDropPath(
+            bool[,] emit, List<int> path, long g, long w,
+            Paths64 channels, out int dropped, out bool channelVented)
+        {
+            dropped = 0;
+            channelVented = false;
+            int m = emit.GetLength(0);
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            long u = QrInsertionGuard.GridUnitsPerCell;
+
+            // A channel cell is an emitted path cell inside the quiet-zone
+            // band. Under invert the whole band emits; under normal
+            // polarity none do — the corridor is invert-only by
+            // construction (a fixture that emits margin cells rides the
+            // same rule).
+            bool ChannelCell(int cell)
+            {
+                int r = cell / m, c = cell % m;
+                return emit[r, c] && (r < q || c < q || r >= m - q || c >= m - q);
+            }
+
+            foreach (int cell in path)
+                channelVented |= ChannelCell(cell);
+
+            // The finder channels' width feasibility: the corridor plus
+            // its margins must fit inside a cell's free core (u−2g) — the
+            // tip sits in the void or dropped cell on the leg's inner end.
+            if (channelVented &&
+                u - 2 * g < 3 * w + QrInsertionGuard.MinGridFeatureUnits)
+                return new QrSketchError(QrSketchErrorKind.InvalidGeometry,
+                    "Ring split found an island-bearing hole it cannot open — " +
+                    "the thin channel its quiet-zone egress needs does not " +
+                    "fit a cell's free core at this growth. The request is " +
+                    "refused rather than partially opened.");
+
+            // Interior emitted path cells drop module-aligned; the channel
+            // cells keep their emission for the Difference pass.
+            foreach (int cell in path)
+            {
+                int r = cell / m, c = cell % m;
+                if (emit[r, c] && !ChannelCell(cell))
+                {
+                    emit[r, c] = false;
+                    dropped++;
+                }
+            }
+            if (!channelVented)
+                return null;
+
+            for (var i = 0; i + 1 < path.Count; i++)
+            {
+                int a = path[i], b = path[i + 1];
+                if (!ChannelCell(a) && !ChannelCell(b))
+                    continue;
+                int ra = a / m, ca = a % m, rb = b / m, cb = b % m;
+                channels.Add(ra == rb
+                    ? ChannelRect(false, ra * u + u / 2,
+                        Math.Min(ca, cb) * u + u / 2,
+                        Math.Max(ca, cb) * u + u / 2, w)
+                    : ChannelRect(true, ca * u + u / 2,
+                        Math.Min(ra, rb) * u + u / 2,
+                        Math.Max(ra, rb) * u + u / 2, w));
+            }
+
+            // The terminal cell sits on the border: run the corridor a
+            // half-cell past the matrix edge along the arrival direction —
+            // the predecessor settled first, so it is never a border cell
+            // and the direction always exits (the face fallback is pure
+            // defence).
+            int t = path[0];
+            if (path.Count > 1 && ChannelCell(t))
+            {
+                int tr = t / m, tc = t % m;
+                int pr = path[1] / m, pc = path[1] % m;
+                int dr = tr - pr, dc = tc - pc;
+                if (InBounds(tr + dr, tc + dc, m))
+                {
+                    dr = tr == 0 ? -1 : tr == m - 1 ? 1 : 0;
+                    dc = tc == 0 ? -1 : tc == m - 1 ? 1 : 0;
+                }
+                channels.Add(dr != 0
+                    ? ChannelRect(true, tc * u + u / 2,
+                        dr < 0 ? -u / 2 : tr * u + u / 2,
+                        dr < 0 ? tr * u + u / 2 : m * u + u / 2, w)
+                    : ChannelRect(false, tr * u + u / 2,
+                        dc < 0 ? -u / 2 : tc * u + u / 2,
+                        dc < 0 ? tc * u + u / 2 : m * u + u / 2, w));
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The 4-connected un-emitted component containing
+        /// <paramref name="seed"/> on the current mask — exactly the void
+        /// set the next pass's <see cref="Analyze"/> reports, so the
+        /// claimed-identity check recognizes a corridor-vented site even
+        /// after its drops merged neighbouring voids into it.
+        /// </summary>
+        private static HashSet<int> CollectVoidComponent(bool[,] emit, int seed)
+        {
+            int m = emit.GetLength(0);
+            var cells = new HashSet<int> { seed };
+            var queue = new Queue<int>();
+            queue.Enqueue(seed);
+            while (queue.Count > 0)
+            {
+                int cell = queue.Dequeue();
+                int r = cell / m, c = cell % m;
+                Try(r - 1, c);
+                Try(r + 1, c);
+                Try(r, c - 1);
+                Try(r, c + 1);
+            }
+            return cells;
+
+            void Try(int r, int c)
+            {
+                if (r < 0 || c < 0 || r >= m || c >= m || emit[r, c]) return;
+                if (cells.Add(r * m + c))
+                    queue.Enqueue(r * m + c);
+            }
+        }
+
         // ----- ticket #53: the thin finder channels -----
 
         /// <summary>
@@ -459,8 +623,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// emitted band ring to the void beyond; <b>Vent</b>: the void IS
         /// the window's edge ring (invert: the dark finder ring, enclosed
         /// by the emitting field), so the channel slots through the field
-        /// to the matrix edge — the same "vent past the field edge" move a
-        /// border-cell drop makes.
+        /// to the matrix edge — the same "vent past the field edge" move
+        /// the quiet-zone egress corridor makes.
         /// </summary>
         private sealed class FinderSite
         {
@@ -663,8 +827,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             {
                 // Vent candidates: a slot from the void's corner cell to the
                 // matrix edge, its end landing a half-cell past the border
-                // so the slot vents past the field edge like a dropped
-                // border cell does. The mirrored edge rule puts the slot
+                // so the slot vents past the field edge like the quiet-zone
+                // egress corridor does. The mirrored edge rule puts the slot
                 // one channel width into the void off the edge ring's inner
                 // grown edge (the emitted interior's edge line) at the
                 // corner: a vertical slot beside the inner-left/right edge,

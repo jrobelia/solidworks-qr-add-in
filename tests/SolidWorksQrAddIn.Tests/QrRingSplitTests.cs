@@ -17,7 +17,10 @@ namespace SolidWorksQrAddIn.Tests
     /// flooded from the working-matrix border mark the exterior-connected
     /// void, and a minimal module-aligned cell path dropped through each
     /// enclosing band joins the hole's void to that flood — iterated to
-    /// any nesting depth, under either polarity. #53 stops the three
+    /// any nesting depth, under either polarity. Under invert the path's
+    /// emitted quiet-zone leg keeps its cells and vents by the same thin
+    /// channel (user feedback — the margin drops read as a module-wide
+    /// removed line). #53 stops the three
     /// finder rings paying whole modules: each opens by a thin
     /// axis-aligned channel cut through the band at a ring corner, hugging
     /// the void's inner edge (off the detection runs' centre-lines; the
@@ -606,7 +609,10 @@ namespace SolidWorksQrAddIn.Tests
             Assert.True(sketch.Info.Inverted);
             Assert.Equal(0, IslandBearingHoles(sketch.Regions));
             Assert.Equal(2, sketch.Info.OpenedSiteCount);
-            Assert.True(sketch.Info.DroppedCellCount >= 2);
+            // The outer void's egress is all quiet-zone — a thin corridor,
+            // no drop; the inner void pays one interior drop crossing the
+            // emitted band into it. The leg's margin cells no longer count.
+            Assert.Equal(1, sketch.Info.DroppedCellCount);
         }
 
         [Fact]
@@ -669,7 +675,12 @@ namespace SolidWorksQrAddIn.Tests
             double matrixBottomY = -14.5 * u * mPerUnit;
 
             var mouths = ChannelMouths(sketch);
-            Assert.Equal(6, mouths.Count);
+            // The quiet-zone egress corridors add mouths of their own on
+            // this payload — count only the mouths on the two finder-locus
+            // ordinates, whose positions are pinned below.
+            Assert.Equal(6, mouths.Count(m =>
+                System.Math.Abs(m.X - leftX) < 1e-9 ||
+                System.Math.Abs(m.X - rightX) < 1e-9));
             foreach (var (x, y) in new[]
                      {
                          (leftX, matrixTopY), (leftX, fieldTopY),        // TL up-slot
@@ -716,6 +727,155 @@ namespace SolidWorksQrAddIn.Tests
                 System.Math.Abs(mouth.Y - 7.5 * u * mPerUnit) < 1e-9);
             Assert.Contains(mouths, mouth =>
                 System.Math.Abs(mouth.Y - (3.5 * u - gUnits) * mPerUnit) < 1e-9);
+        }
+
+        /// <summary>
+        /// The encoded inverted emit mask — the whole working matrix, light
+        /// cells emitting, exactly like <see cref="QrSketchGenerator"/> builds
+        /// it before the ring-split pass. Internal seam for mask-level checks.
+        /// </summary>
+        private static bool[,] EncodedEmit(string content, bool invert)
+        {
+            using (var generator = new QRCodeGenerator())
+            using (var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M))
+            {
+                var encoded = data.ModuleMatrix;
+                int m = encoded.Count;
+                var emit = new bool[m, m];
+                for (var r = 0; r < m; r++)
+                    for (var c = 0; c < m; c++)
+                        emit[r, c] = encoded[r][c] != invert;
+                return emit;
+            }
+        }
+
+        [Fact]
+        public void The_inverted_quiet_zone_leg_vents_by_thin_channel_not_dropped_cells()
+        {
+            // User feedback: under invert the quiet zone is emitted field, so
+            // a cell-drop path through it showed as a whole-module-wide
+            // removed line. The leg must vent like the finder slots instead —
+            // a thin corridor through the emitted margin, the quiet-zone
+            // cells keeping their emission.
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            var emit = EncodedEmit(PayloadA, invert: true);
+            var before = (bool[,])emit.Clone();
+            int m = emit.GetLength(0);
+            long u = QrInsertionGuard.GridUnitsPerCell;
+            long g = (long)System.Math.Round(Growth * u);
+            double mmPerUnit = SizeMm / ((m - 2 * q) * (double)u + 2 * g);
+            long w = QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
+
+            var failure = QrRingSplitter.OpenIslandBearingHoles(
+                emit, g, w, out int openedSites, out int droppedCells,
+                out Clipper2Lib.Paths64 channels);
+
+            Assert.Null(failure);
+            Assert.Equal(5, openedSites);
+
+            // Every flipped cell sits INSIDE the quiet-zone band — the leg's
+            // corridor is sub-cell, so no margin module drops.
+            var dropped = new List<int>();
+            for (var r = 0; r < m; r++)
+                for (var c = 0; c < m; c++)
+                    if (before[r, c] && !emit[r, c])
+                    {
+                        Assert.True(
+                            r >= q && c >= q && r < m - q && c < m - q,
+                            $"drop ({r},{c}) sits in the quiet-zone band");
+                        dropped.Add(r * m + c);
+                    }
+            Assert.Equal(droppedCells, dropped.Count);
+
+            // The egress corridor: thin channel rects running the leg — its
+            // stub vents past the matrix edge like a finder slot (the SW-QR-MVP
+            // leg runs up column 14 through the top quiet zone).
+            Assert.Contains(channels, rect =>
+                rect.Min(p => p.Y) < 0 &&
+                rect.Min(p => p.X) > 14 * u && rect.Max(p => p.X) < 15 * u);
+            Assert.All(channels, rect =>
+                Assert.True(
+                    rect.Max(p => p.X) - rect.Min(p => p.X) == w ||
+                    rect.Max(p => p.Y) - rect.Min(p => p.Y) == w,
+                    "every channel rect is one corridor width thick"));
+        }
+
+        [Fact]
+        public void The_inverted_egress_corridor_registers_as_a_thin_channel()
+        {
+            var split = QrSketchGenerator.Generate(
+                new QrSketchRequest(PayloadA, SizeMm, Growth)
+                { Invert = true, RingSplit = true });
+
+            Assert.True(split.Succeeded, split.Error?.Message);
+            var sketch = split.Sketch!;
+            Assert.Equal(0, IslandBearingHoles(sketch.Regions));
+            Assert.Equal(5, sketch.Info.OpenedSiteCount);
+            // The two non-finder sites vent by corridor — between them only
+            // one interior path cell still drops; every quiet-zone cell of
+            // the legs keeps its emission and no longer counts.
+            Assert.Equal(1, sketch.Info.DroppedCellCount);
+
+            // The corridor reads exactly like a finder channel to the
+            // wall-pair scan — the same derived width — and its outer mouth
+            // sits on the clipped field edge (the keep-out square line).
+            var gaps = QrChannelGaps.Find(
+                sketch.Edges, sketch.Info.MinLightGapMm / 2000.0);
+            double wMm = sketch.Info.FinderChannelWidthMm / 1000.0;
+            Assert.True(gaps.Count >= 4,
+                "three finder vents plus the quiet-zone egress corridor");
+            Assert.All(gaps, gap => Assert.Equal(wMm, gap.GapM, 9));
+            double u = QrInsertionGuard.GridUnitsPerCell;
+            double mPerUnit = (SizeMm / 1000.0) /
+                ((sketch.Info.MatrixCellCount - 2 * QrSketchInfo.QuietZoneCellsPerSide) * u +
+                 2 * System.Math.Round(Growth * u));
+            double matrixHalf = sketch.Info.MatrixCellCount * u / 2.0 * mPerUnit;
+            Assert.Contains(gaps, gap =>
+                System.Math.Abs(gap.MouthA.Y - matrixHalf) < 1e-9 ||
+                System.Math.Abs(gap.MouthB.Y - matrixHalf) < 1e-9);
+        }
+
+        [Fact]
+        public void An_egress_corridor_that_cannot_fit_is_refused()
+        {
+            // The corridor obeys the finder-channel discipline: at 48%
+            // growth a cell's free core (u−2g = 400 units) is narrower than
+            // the channel plus its margins — the inverted quiet-zone leg
+            // cannot vent thin, so the pass refuses by name.
+            var split = QrSketchGenerator.GenerateFromCells(
+                NestedBandsCells(), 40.0, 0.48, invert: true, ringSplit: true);
+
+            Assert.False(split.Succeeded);
+            Assert.Equal(QrSketchErrorKind.InvalidGeometry, split.Error!.Kind);
+            Assert.Contains("channel", split.Error.Message);
+        }
+
+        [Fact]
+        public void The_normal_polarity_drop_path_never_meets_the_quiet_zone()
+        {
+            // Under normal polarity the margin cells are the un-emitted
+            // exterior — the pass mutates no quiet-zone cell and appends no
+            // corridor: the treatment is invert-only by construction.
+            int q = QrSketchInfo.QuietZoneCellsPerSide;
+            var emit = EncodedEmit(PayloadA, invert: false);
+            var before = (bool[,])emit.Clone();
+            int m = emit.GetLength(0);
+            long u = QrInsertionGuard.GridUnitsPerCell;
+            long g = (long)System.Math.Round(Growth * u);
+            double mmPerUnit = SizeMm / ((m - 2 * q) * (double)u + 2 * g);
+            long w = QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
+
+            var failure = QrRingSplitter.OpenIslandBearingHoles(
+                emit, g, w, out int openedSites, out int droppedCells,
+                out Clipper2Lib.Paths64 channels);
+
+            Assert.Null(failure);
+            Assert.Equal(3, openedSites);   // the three finder rings
+            Assert.Equal(0, droppedCells);
+            for (var r = 0; r < m; r++)
+                for (var c = 0; c < m; c++)
+                    if (r < q || c < q || r >= m - q || c >= m - q)
+                        Assert.Equal(before[r, c], emit[r, c]);
         }
 
         [Fact]
@@ -1162,9 +1322,9 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Contains("dropped", row);
 
             // The v1 payload's three finder rings all open by thin channel,
-            // so the derived finder-channel width joins the row.
+            // so the derived channel width joins the row.
             Assert.True(info.FinderChannelWidthMm > 0.0);
-            Assert.Contains("finder channel ", row);
+            Assert.Contains("thin channel ", row);
             Assert.Contains(
                 info.FinderChannelWidthMm.ToString(
                     "G4", System.Globalization.CultureInfo.InvariantCulture) + " mm",

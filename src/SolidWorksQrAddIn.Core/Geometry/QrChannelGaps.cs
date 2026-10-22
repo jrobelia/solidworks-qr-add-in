@@ -24,7 +24,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <summary>
         /// Perpendicular separation of the facing wall pair, metres — the
         /// channel's physical width, which must match
-        /// <see cref="QrSketchInfo.FinderChannelWidthMm"/> for finder sites.
+        /// <see cref="QrSketchInfo.FinderChannelWidthMm"/> for finder sites
+        /// and quiet-zone egress corridors alike.
         /// </summary>
         public double GapM { get; }
 
@@ -46,9 +47,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
     /// axis within <paramref name="toleranceM"/>, and sit
     /// ≤ <paramref name="maxGapM"/> apart. QR grown edges face their
     /// neighbours across the light gap, so a cap of half the module's
-    /// reported minimum light gap keeps the thin finder channels as the
-    /// only possible hits — the module-aligned cell drops are a full light
-    /// gap wide and never register.
+    /// reported minimum light gap keeps the thin channels — the finder
+    /// slots and the quiet-zone egress corridors — as the only possible
+    /// hits: the module-aligned cell drops are a full light gap wide and
+    /// never register.
     /// </summary>
     public static class QrChannelGaps
     {

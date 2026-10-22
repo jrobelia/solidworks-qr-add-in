@@ -192,8 +192,9 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// every island-bearing hole before the union — the finder rings by
         /// a thin channel subtracted from the grown subject at a ring
         /// corner, hugging the void's inner edge, every other site by a
-        /// minimal module-aligned cell drop — Square-shape only, inert
-        /// under Circle.
+        /// minimal module-aligned cell drop whose emitted quiet-zone leg
+        /// keeps its cells and vents by the same thin corridor — Square-shape
+        /// only, inert under Circle.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
@@ -270,18 +271,21 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // rings open by thin finite-width channel rectangles subtracted
             // from the grown subject below (ticket #53); every other
             // island-bearing hole drops the minimal module-aligned cell path
-            // joining it to exterior-connected space (ticket #52) — before
-            // the union pass, so no ring → hole → island nesting survives.
+            // joining it to exterior-connected space (ticket #52), its
+            // emitted quiet-zone cells excepted — they keep their emission
+            // and vent by the same thin channel (the invert-only egress
+            // corridor) — before the union pass, so no ring → hole → island
+            // nesting survives.
             var openedSites = 0;
             var droppedCells = 0;
             var channelWidthUnits = 0L;
-            Paths64? finderChannels = null;
+            Paths64? channels = null;
             if (ringSplit)
             {
                 channelWidthUnits = QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
                 var splitError = QrRingSplitter.OpenIslandBearingHoles(
                     emit, g, channelWidthUnits,
-                    out openedSites, out droppedCells, out finderChannels);
+                    out openedSites, out droppedCells, out channels);
                 if (splitError != null)
                     return QrSketchResult.Fail(splitError.Kind, splitError.Message);
             }
@@ -310,15 +314,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
                         ? "The cell matrix contains no light cells; nothing would be sketched."
                         : "The cell matrix contains no dark cells; nothing would be sketched.");
 
-            // The finder channels ride the same union pass: NonZero fills
+            // The thin channels — the finder slots and the quiet-zone
+            // egress corridors — ride the same union pass: NonZero fills
             // the overlapping grown rects, so subtracting the channel
             // rectangles here removes them from the merged material — the
             // grown subject minus the thin corridors, still in grid space,
             // before the matrix-square clip below (the second Clipper-hook
             // shape of docs/RING-SPLIT-RESEARCH.md §4).
-            if (finderChannels != null && finderChannels.Count > 0)
+            if (channels != null && channels.Count > 0)
             {
-                subject = Clipper.Difference(subject, finderChannels, FillRule.NonZero);
+                subject = Clipper.Difference(subject, channels, FillRule.NonZero);
             }
 
             // ADR 0002: all geometry is clipped to the working-matrix square
@@ -430,7 +435,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 inverted: invert,
                 openedSiteCount: openedSites,
                 droppedCellCount: droppedCells,
-                finderChannelWidthMm: finderChannels != null && finderChannels.Count > 0
+                finderChannelWidthMm: channels != null && channels.Count > 0
                     ? channelWidthUnits * mmPerUnit
                     : 0.0);
 

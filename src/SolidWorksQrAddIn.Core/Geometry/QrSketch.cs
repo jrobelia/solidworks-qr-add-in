@@ -172,9 +172,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// The thin channel width the ring split cut through the three finder
-        /// rings (spec #51, ticket #53), in mm — derived from the integer-grid
-        /// feature floor and the recorded insertion floor, never user-entered.
-        /// 0 when the option is off or no finder ring needed opening.
+        /// rings — and through the emitted quiet zone on an inverted
+        /// cell-drop path's egress leg (spec #51, ticket #53) — in mm:
+        /// derived from the integer-grid feature floor and the recorded
+        /// insertion floor, never user-entered, and shared by every thin
+        /// corridor the pass emits. 0 when the option is off or no channel
+        /// was cut.
         /// </summary>
         public double FinderChannelWidthMm { get; }
     }
