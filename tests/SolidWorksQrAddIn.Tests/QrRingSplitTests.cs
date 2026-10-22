@@ -19,9 +19,10 @@ namespace SolidWorksQrAddIn.Tests
     /// enclosing band joins the hole's void to that flood — iterated to
     /// any nesting depth, under either polarity. #53 stops the three
     /// finder rings paying whole modules: each opens by a thin
-    /// axis-aligned channel cut through the band at a corner locus (off
-    /// the detection runs' centre-lines), while every other site keeps
-    /// the cell drop. The option is refused below ECC M, Circle output
+    /// axis-aligned channel cut through the band at a ring corner, hugging
+    /// the void's inner edge (off the detection runs' centre-lines; the
+    /// inner-edge line reads as continuing into the gap), while every
+    /// other site keeps the cell drop. The option is refused below ECC M, Circle output
     /// ignores it, and with it off the output is byte-identical to the
     /// historical pipeline. #54 carries the option across the
     /// session/pane seam: a fixed toggle beside invert, off by default
@@ -216,8 +217,21 @@ namespace SolidWorksQrAddIn.Tests
                 sketch.Info.FinderChannelWidthMm, 9);
         }
 
+        /// <summary>
+        /// The channel width in integer grid units, derived exactly like
+        /// production's <see cref="QrRingSplitter.FinderChannelWidthUnits"/>.
+        /// </summary>
+        private static long ExpectedChannelWidthUnits(
+            double sizeMm, double growth, int dataCells)
+        {
+            long u = QrInsertionGuard.GridUnitsPerCell;
+            double mmPerUnit = sizeMm /
+                (dataCells * (double)u + 2 * System.Math.Round(growth * u));
+            return QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
+        }
+
         [Fact]
-        public void The_channel_sits_at_a_corner_locus_off_the_centre_lines()
+        public void The_channel_sits_at_the_ring_corner_on_the_voids_inner_edge()
         {
             var split = QrSketchGenerator.GenerateFromCells(
                 FinderCells(), SizeMm, Growth, ringSplit: true);
@@ -227,25 +241,51 @@ namespace SolidWorksQrAddIn.Tests
 
             // 7 data cells in a 15-cell working matrix: the finder centre sits
             // at the sketch origin — detection runs sample x=0 and y=0. The
-            // channel must sit beside the corner: col 5's centre-line, two
-            // cells off the vertical centre-line, crossing the top arm — its
-            // mouths where the walls meet the band's grown outer and inner
-            // edges (row 4's top grown edge 4u−g, bottom grown edge 5u+g;
-            // +y is matrix row 0, so the mouths sit at 3.5u+g and 2.5u−g).
+            // channel must sit at the ring corner, hugging the void's grown
+            // left inner edge: a vertical slit on the top arm whose walls sit
+            // inside the void off the inner-edge line x = 5u+g — the near
+            // wall at 5u+g+w+10 (a wall ON the grown edge would be a
+            // coincident-edge violation; a centred straddle would leave a
+            // sub-floor fin of band material at high growth; and the corner
+            // remnant edge must itself clear the floor, so the inset is one
+            // channel width plus the grid-floor margin). Mouths sit where the
+            // walls meet the band's grown outer and inner edges (row 4's
+            // grown edges 4u−g and 5u+g; +y is matrix row 0, so the mouths
+            // sit at 3.5u+g and 2.5u−g) at the shared midline
+            // x = −2.5u+g+1.5w+10.
             double u = QrInsertionGuard.GridUnitsPerCell;
             double gUnits = System.Math.Round(Growth * u);
             double mPerUnit = (SizeMm / 1000.0) / (7 * u + 2 * gUnits);
+            long wUnits = ExpectedChannelWidthUnits(SizeMm, Growth, 7);
             var mouths = ChannelMouths(sketch);
             Assert.Equal(2, mouths.Count);
             Assert.All(mouths, mouth =>
             {
-                Assert.Equal(-2.0 * u * mPerUnit, mouth.X, 9);
+                Assert.Equal(
+                    (-2.5 * u + gUnits + 1.5 * wUnits +
+                     QrInsertionGuard.MinGridFeatureUnits) * mPerUnit,
+                    mouth.X, 9);
                 Assert.True(mouth.Y > 0.0, "the mouth is on the top arm");
             });
             Assert.Contains(mouths, mouth =>
                 System.Math.Abs(mouth.Y - (3.5 * u + gUnits) * mPerUnit) < 1e-9);
             Assert.Contains(mouths, mouth =>
                 System.Math.Abs(mouth.Y - (2.5 * u - gUnits) * mPerUnit) < 1e-9);
+
+            // The inner edge truly continues into the gap: the void's grown
+            // left edge (x = 5u+g → sketch −2.5u+g) still runs up to the
+            // ring corner beside the mouth, where the w-long jog lands on
+            // the mouth's near wall.
+            double edgeX = (-2.5 * u + gUnits) * mPerUnit;
+            double cornerY = (2.5 * u - gUnits) * mPerUnit;
+            var band = Assert.Single(sketch.Regions,
+                r => r.Boundary.Edges.Any(e =>
+                    System.Math.Abs(e.Start.X - edgeX) < 1e-9));
+            Assert.Contains(band.Boundary.Edges, e =>
+                System.Math.Abs(e.Start.X - edgeX) < 1e-9 &&
+                System.Math.Abs(e.End.X - e.Start.X) < 1e-9 &&
+                (System.Math.Abs(e.End.Y - cornerY) < 1e-9 ||
+                 System.Math.Abs(e.Start.Y - cornerY) < 1e-9));
         }
 
         [Fact]
@@ -256,8 +296,9 @@ namespace SolidWorksQrAddIn.Tests
             // zone — emitting those cells (the internal seam takes the whole
             // matrix) blocks the top-left and left-top cuts, and the emitted
             // cells simply fuse to the band. The next clearing candidate is
-            // the top arm's right end — the mirror column the other side of
-            // the vertical centre-line.
+            // the top arm's right end — the mirror inner-edge locus on the
+            // void's right edge, given the same edge-aligned treatment as
+            // every candidate.
             var emit = new bool[15, 15];
             var finder = FinderCells();
             for (var r = 0; r < 7; r++)
@@ -275,11 +316,12 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(1, openedSites);
             Assert.Equal(0, droppedCells);
             Clipper2Lib.Path64 channel = Assert.Single(channels);
-            // The fallback cut: a vertical channel on col 9's centre-line
-            // (9.5·U), spanning the outer-tip and inner-tip cell centres
+            // The fallback cut: a vertical channel hugging the void's grown
+            // right inner edge (10u−g — its walls at 10u−g−w−10−w and
+            // 10u−g−w−10), spanning the outer-tip and inner-tip cell centres
             // (rows 3.5·U and 5.5·U).
-            Assert.Equal(95000 - 71, channel.Min(p => p.X));
-            Assert.Equal(95000 + 71, channel.Max(p => p.X));
+            Assert.Equal(100000 - 300 - 152 - 142, channel.Min(p => p.X));
+            Assert.Equal(100000 - 300 - 152, channel.Max(p => p.X));
             Assert.Equal(35000, channel.Min(p => p.Y));
             Assert.Equal(55000, channel.Max(p => p.Y));
             Assert.Equal(4, channel.Distinct().Count());
@@ -314,6 +356,109 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(0, openedSites);
             Assert.Equal(0, droppedCells);
             Assert.Empty(channels);
+        }
+
+        [Fact]
+        public void All_three_finder_channels_hug_their_corners_inner_edge()
+        {
+            var split = QrSketchGenerator.Generate(
+                new QrSketchRequest(PayloadA, SizeMm, Growth) { RingSplit = true });
+
+            Assert.True(split.Succeeded, split.Error?.Message);
+            var sketch = split.Sketch!;
+
+            // 21 data cells in a 29-cell working matrix — sketch centre at
+            // 14.5u, +y is matrix row 0. Same corner choice and arm
+            // direction as the centred locus had, but the slit body now
+            // hugs the void's grown inner-edge line inside the void (near
+            // wall w+10 off the edge, so the corner remnant edge clears the
+            // floor): TL (window 4,4) vents the top arm beside the left
+            // inner edge (x = 5u+g, walls [5u+g+w+10, 5u+g+2w+10]), TR
+            // (window 4,18) the top arm beside the right inner edge
+            // (x = 24u−g, walls [24u−g−2w−10, 24u−g−w−10]), BL (window
+            // 18,4) the bottom arm beside the left inner edge (x = 5u+g).
+            // Mouths sit on the band rows' grown outer/inner edges — TL/TR
+            // at matrix y 4u−g and 5u+g, BL at 24u−g and 25u+g.
+            double u = QrInsertionGuard.GridUnitsPerCell;
+            double gUnits = System.Math.Round(Growth * u);
+            double mPerUnit = (SizeMm / 1000.0) / (21 * u + 2 * gUnits);
+            long wUnits = ExpectedChannelWidthUnits(SizeMm, Growth, 21);
+            double inset = wUnits + QrInsertionGuard.MinGridFeatureUnits;
+
+            double leftX = (-9.5 * u + gUnits + inset + 0.5 * wUnits) * mPerUnit;
+            double rightX = (9.5 * u - gUnits - inset - 0.5 * wUnits) * mPerUnit;
+            double topOuterY = (10.5 * u + gUnits) * mPerUnit;
+            double topInnerY = (9.5 * u - gUnits) * mPerUnit;
+            double bottomInnerY = (-9.5 * u + gUnits) * mPerUnit;
+            double bottomOuterY = (-10.5 * u - gUnits) * mPerUnit;
+
+            var mouths = ChannelMouths(sketch);
+            Assert.Equal(6, mouths.Count);
+            foreach (var (x, y) in new[]
+                     {
+                         (leftX, topOuterY), (leftX, topInnerY),      // TL
+                         (rightX, topOuterY), (rightX, topInnerY),    // TR
+                         (leftX, bottomInnerY), (leftX, bottomOuterY) // BL
+                     })
+                Assert.Contains(mouths, m =>
+                    System.Math.Abs(m.X - x) < 1e-9 &&
+                    System.Math.Abs(m.Y - y) < 1e-9);
+        }
+
+        [Theory]
+        [InlineData(0.01)]   // g < w: a cell-line wall would reach the void —
+        [InlineData(0.03)]   // the pinned low-growth case
+        [InlineData(0.10)]
+        [InlineData(0.25)]
+        [InlineData(0.45)]   // g ≫ w: a cell-line wall is buried, and a
+                             // straddle leaves a sub-floor fin
+        public void The_inner_edge_channel_leaves_no_residual_sliver_at_any_growth(
+            double growth)
+        {
+            var split = QrSketchGenerator.GenerateFromCells(
+                FinderCells(), SizeMm, growth, ringSplit: true);
+
+            Assert.True(split.Succeeded, split.Error?.Message);
+            var sketch = split.Sketch!;
+            // A fin stranded between the slit wall and the void interior —
+            // or any piece of band left over — surfaces as an extra region;
+            // the fixture stays exactly band C + promoted island.
+            Assert.Equal(2, sketch.Regions.Count);
+            Assert.Equal(2, sketch.Contours.Count);
+            Assert.Equal(0, IslandBearingHoles(sketch.Regions));
+
+            // The slit hugs the grown inner-edge line at every growth — its
+            // walls at [5u+g+w+10, 5u+g+2w+10] keep the tip inside the
+            // void's free core even when g exceeds w.
+            double u = QrInsertionGuard.GridUnitsPerCell;
+            double gUnits = System.Math.Round(growth * u);
+            double mPerUnit = (SizeMm / 1000.0) / (7 * u + 2 * gUnits);
+            long wUnits = ExpectedChannelWidthUnits(SizeMm, growth, 7);
+            double expectedX = (-2.5 * u + gUnits + 1.5 * wUnits +
+                QrInsertionGuard.MinGridFeatureUnits) * mPerUnit;
+            var mouths = ChannelMouths(sketch);
+            Assert.Equal(2, mouths.Count);
+            Assert.All(mouths, mouth => Assert.Equal(expectedX, mouth.X, 9));
+            Assert.Contains(mouths, mouth =>
+                System.Math.Abs(mouth.Y - (3.5 * u + gUnits) * mPerUnit) < 1e-9);
+            Assert.Contains(mouths, mouth =>
+                System.Math.Abs(mouth.Y - (2.5 * u - gUnits) * mPerUnit) < 1e-9);
+        }
+
+        [Fact]
+        public void A_channel_that_cannot_fit_the_voids_free_core_is_refused()
+        {
+            // The void-side placement needs the remnant-edge inset (w+10)
+            // plus a w of margin past the slit: at 48% growth the finder
+            // void's free core (u−2g = 400 units) is narrower than the
+            // corridor plus its margins (3w+10 > 400) — the all-or-nothing
+            // refusal names the channel.
+            var split = QrSketchGenerator.GenerateFromCells(
+                FinderCells(), SizeMm, 0.48, ringSplit: true);
+
+            Assert.False(split.Succeeded);
+            Assert.Equal(QrSketchErrorKind.InvalidGeometry, split.Error!.Kind);
+            Assert.Contains("channel", split.Error.Message);
         }
 
         [Theory]
@@ -488,6 +633,89 @@ namespace SolidWorksQrAddIn.Tests
             Assert.Equal(2, sketch.Regions.Count);
             var ring = sketch.Regions.Single(r => r.Holes.Count == 1);
             Assert.Equal(0, IslandBearingHoles(new[] { ring }));
+        }
+
+        [Fact]
+        public void Inverted_finder_channels_hug_the_void_rings_inner_edge()
+        {
+            var split = QrSketchGenerator.Generate(
+                new QrSketchRequest(PayloadA, SizeMm, Growth)
+                { Invert = true, RingSplit = true });
+
+            Assert.True(split.Succeeded, split.Error?.Message);
+            var sketch = split.Sketch!;
+            Assert.Equal(0, IslandBearingHoles(sketch.Regions));
+
+            // Mirrored corner/edge rule: each slot hugs the void edge ring's
+            // INNER grown edge (the emitted interior's edge line) at the ring
+            // corner nearest the matrix corner, the same w+10 inset into the
+            // void as the band cuts. TL (window 4,4) vents up beside the
+            // inner-left edge x = 5u−g (walls [5u−g−2w−10, 5u−g−w−10]); TR
+            // (window 4,18) vents up beside the inner-right edge x = 24u+g
+            // (walls [24u+g+w+10, 24u+g+2w+10]); BL (window 18,4) vents down
+            // beside the inner-left edge x = 5u−g. Mouths sit where the walls
+            // meet the field's grown edges and the clipped matrix boundary.
+            double u = QrInsertionGuard.GridUnitsPerCell;
+            double gUnits = System.Math.Round(Growth * u);
+            double mPerUnit = (SizeMm / 1000.0) / (21 * u + 2 * gUnits);
+            long wUnits = ExpectedChannelWidthUnits(SizeMm, Growth, 21);
+            double inset = wUnits + QrInsertionGuard.MinGridFeatureUnits;
+
+            double leftX = (-9.5 * u - gUnits - inset - 0.5 * wUnits) * mPerUnit;
+            double rightX = (9.5 * u + gUnits + inset + 0.5 * wUnits) * mPerUnit;
+            double fieldTopY = (10.5 * u - gUnits) * mPerUnit;
+            double matrixTopY = 14.5 * u * mPerUnit;
+            double fieldBottomY = (-10.5 * u + gUnits) * mPerUnit;
+            double matrixBottomY = -14.5 * u * mPerUnit;
+
+            var mouths = ChannelMouths(sketch);
+            Assert.Equal(6, mouths.Count);
+            foreach (var (x, y) in new[]
+                     {
+                         (leftX, matrixTopY), (leftX, fieldTopY),        // TL up-slot
+                         (rightX, matrixTopY), (rightX, fieldTopY),      // TR up-slot
+                         (leftX, fieldBottomY), (leftX, matrixBottomY)   // BL down-slot
+                     })
+                Assert.Contains(mouths, m =>
+                    System.Math.Abs(m.X - x) < 1e-9 &&
+                    System.Math.Abs(m.Y - y) < 1e-9);
+        }
+
+        [Theory]
+        [InlineData(0.01)]
+        [InlineData(0.03)]
+        [InlineData(0.10)]
+        [InlineData(0.25)]
+        [InlineData(0.45)]
+        public void The_vent_channel_hugs_the_inner_edge_at_any_growth(double growth)
+        {
+            var split = QrSketchGenerator.GenerateFromCells(
+                FinderCells(), SizeMm, growth, invert: true, ringSplit: true);
+
+            Assert.True(split.Succeeded, split.Error?.Message);
+            var sketch = split.Sketch!;
+            Assert.Equal(0, IslandBearingHoles(sketch.Regions));
+            // Field + promoted light ring — a stranded fin would add a region.
+            Assert.Equal(2, sketch.Regions.Count);
+
+            // The slot hugs the ring's grown inner-left edge x = 5u−g with
+            // walls [5u−g−2w−10, 5u−g−w−10] — midline −2.5u−g−1.5w−10 —
+            // venting up through the field; mouths at the matrix edge
+            // (y = 0 → sketch +7.5u) and the field's grown edge above the
+            // ring (4u+g → 3.5u−g).
+            double u = QrInsertionGuard.GridUnitsPerCell;
+            double gUnits = System.Math.Round(growth * u);
+            double mPerUnit = (SizeMm / 1000.0) / (7 * u + 2 * gUnits);
+            long wUnits = ExpectedChannelWidthUnits(SizeMm, growth, 7);
+            double expectedX = (-2.5 * u - gUnits - 1.5 * wUnits -
+                QrInsertionGuard.MinGridFeatureUnits) * mPerUnit;
+            var mouths = ChannelMouths(sketch);
+            Assert.Equal(2, mouths.Count);
+            Assert.All(mouths, mouth => Assert.Equal(expectedX, mouth.X, 9));
+            Assert.Contains(mouths, mouth =>
+                System.Math.Abs(mouth.Y - 7.5 * u * mPerUnit) < 1e-9);
+            Assert.Contains(mouths, mouth =>
+                System.Math.Abs(mouth.Y - (3.5 * u - gUnits) * mPerUnit) < 1e-9);
         }
 
         [Fact]
@@ -767,7 +995,6 @@ namespace SolidWorksQrAddIn.Tests
             var (session, windows) = NewSession();
             session.SetContent(PayloadA);
             session.OpenOrFocusWindow();
-            var unsplitSignature = session.Picture!.Signature();
             var syncs = windows[0].SyncCount;
 
             var result = session.SetRingSplit(true);
@@ -787,7 +1014,17 @@ namespace SolidWorksQrAddIn.Tests
                 QrSketchGenerator.Generate(ExpectedRequest(ringSplit: true)).Sketch!,
                 QrSketchSession.PreviewPixelsAcross).Signature();
             Assert.Equal(expected, session.Picture!.Signature());
-            Assert.NotEqual(unsplitSignature, session.Picture!.Signature());
+            // The 0.05 mm slit is sub-pixel at the window's raster density —
+            // its corridor can miss every 240 px sample column on this
+            // payload — so check the render differs where the raster
+            // actually resolves it (pixel pitch below the channel width).
+            const int resolvingPixels = 4 * QrSketchSession.PreviewPixelsAcross;
+            var splitDense = QrPictureRenderer.Render(
+                session.CurrentResult!.Sketch!, resolvingPixels).Signature();
+            var plainDense = QrPictureRenderer.Render(
+                QrSketchGenerator.Generate(ExpectedRequest(ringSplit: false)).Sketch!,
+                resolvingPixels).Signature();
+            Assert.NotEqual(plainDense, splitDense);
             // The open view re-pulls: session→view sync like any field edit.
             Assert.True(windows[0].SyncCount > syncs);
         }

@@ -190,9 +190,10 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// before any contour machinery into <see cref="BuildCirclePlan"/>.
         /// <paramref name="ringSplit"/> (spec #51, tickets #52/#53) opens
         /// every island-bearing hole before the union — the finder rings by
-        /// a thin corner-locus channel subtracted from the grown subject,
-        /// every other site by a minimal module-aligned cell drop —
-        /// Square-shape only, inert under Circle.
+        /// a thin channel subtracted from the grown subject at a ring
+        /// corner, hugging the void's inner edge, every other site by a
+        /// minimal module-aligned cell drop — Square-shape only, inert
+        /// under Circle.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
