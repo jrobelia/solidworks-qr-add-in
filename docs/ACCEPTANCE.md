@@ -154,15 +154,17 @@ Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 - [ ] **D20** Tools → Add-Ins unload/reload → programmatic round-trip proven
       (single command group, no orphaned window); the interactive dialog path
       is awaiting human verification.
-- [ ] **D21** Ring-split click-and-extrude (spec 51): with **Ring split**
+- [x] **D21** Ring-split click-and-extrude (spec 51): with **Ring split**
       ticked, content `SW-QR-MVP`, 25 mm / 3% / ECC M → Create Sketch →
       exit the sketch → click inside the QR field and **Extruded Boss**:
       SolidWorks' automatic profile selection must resolve the material
       (the thin finder channels and module-aligned drops leave no
       `ring → hole → island` nesting to refuse). Confirm the three finder
       openings are visible as ~0.05 mm slots and the extrusion previews
-      cleanly. *(Awaiting human — automatic profile selection cannot be
-      driven headlessly; the `ringsplit` LiveProbe mode proves the same
+      cleanly. *(Human-verified 2026-10-22 — auto profile selection
+      resolved and extruded cleanly; finder slits sit at the ring corners
+      hugging the inner edge, and the inverted quiet-zone egress reads as
+      the same hairline. The `ringsplit` LiveProbe mode proves the same
       topology via the exploded census + `ISketchRegion.Select`
       object-selection, see docs/RINGSPLIT-GATES.md.)*
 
