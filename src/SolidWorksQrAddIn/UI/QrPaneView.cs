@@ -29,8 +29,10 @@ namespace SolidWorksQrAddIn.UI
     ///     burst of keystrokes coalesces into one regeneration instead of
     ///     regenerating a dense QR synchronously per keystroke — plus the
     ///     discrete controls: the error-correction selector pushes
-    ///     <see cref="QrSketchSession.SetEccLevel"/> and the invert checkbox
-    ///     pushes <see cref="QrSketchSession.SetInvert"/> immediately (a
+    ///     <see cref="QrSketchSession.SetEccLevel"/>, the invert checkbox
+    ///     pushes <see cref="QrSketchSession.SetInvert"/> and the ring-split
+    ///     checkbox pushes <see cref="QrSketchSession.SetRingSplit"/>
+    ///     immediately (a
     ///     committed pick is never debounced),
     ///   - drives the content-type picker (spec #11): a dropdown of
     ///     <see cref="PayloadComposer.Presets"/> selection-changed into
@@ -123,6 +125,7 @@ namespace SolidWorksQrAddIn.UI
         private readonly TextBox _shapeParamBox;
         private readonly ComboBox _eccBox;
         private readonly CheckBox _invertBox;
+        private readonly CheckBox _ringSplitBox;
         private readonly Image _picture;
         private readonly Border _infoSection;
         private readonly Grid _infoGrid;
@@ -306,6 +309,27 @@ namespace SolidWorksQrAddIn.UI
             _invertBox.Unchecked += OnInvertToggled;
             panel.Children.Add(_invertBox);
 
+            // The ring-split toggle (spec #51, ticket #54): a fixed field
+            // beside invert — a geometry treatment orthogonal to the content
+            // presets, not a per-preset input. A committed edit on click like
+            // every checkbox; hidden under Circle — a shape with no contours
+            // never offers a meaningless control. Applies to future creates
+            // only.
+            _ringSplitBox = new CheckBox
+            {
+                Content = "Open nested rings (for automatic profile selection)",
+                ToolTip = "Opens every ring → hole → island nesting with a thin " +
+                          "module-aligned channel, so SolidWorks' automatic " +
+                          "profile selection accepts the sketch for extrusion. " +
+                          "Drops a few cells — requires error correction M or " +
+                          "higher. Applies to the next sketch created — " +
+                          "existing sketches are never changed.",
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            _ringSplitBox.Checked += OnRingSplitToggled;
+            _ringSplitBox.Unchecked += OnRingSplitToggled;
+            panel.Children.Add(_ringSplitBox);
+
             var frame = new Border
             {
                 BorderBrush = SystemColors.ControlDarkBrush,
@@ -443,6 +467,7 @@ namespace SolidWorksQrAddIn.UI
                 _shapeParamBox.Text = _session.ShapeParameterText;
                 _eccBox.SelectedValue = _session.EccLevel.ToString();
                 _invertBox.IsChecked = _session.Invert;
+                _ringSplitBox.IsChecked = _session.RingSplit;
             }
             finally { _suppressFieldEvents = false; }
             RebuildPresetFields();
@@ -495,6 +520,8 @@ namespace SolidWorksQrAddIn.UI
                 // A toggle carries no in-progress state — always re-pull.
                 if (_invertBox.IsChecked != _session.Invert)
                     _invertBox.IsChecked = _session.Invert;
+                if (_ringSplitBox.IsChecked != _session.RingSplit)
+                    _ringSplitBox.IsChecked = _session.RingSplit;
             }
             finally { _suppressFieldEvents = false; }
             RefreshView();
@@ -896,6 +923,18 @@ namespace SolidWorksQrAddIn.UI
             _session.SetInvert(_invertBox.IsChecked == true);
         }
 
+        /// <summary>
+        /// The ring-split toggle is a committed edit on click, exactly like
+        /// invert — no debounce, no dirty flag: it pushes the new option
+        /// into the session at once.
+        /// </summary>
+        private void OnRingSplitToggled(object? sender, RoutedEventArgs e)
+        {
+            if (_suppressFieldEvents)
+                return;
+            _session.SetRingSplit(_ringSplitBox.IsChecked == true);
+        }
+
         private void OnCreateClicked(object? sender, RoutedEventArgs e)
         {
             try
@@ -935,6 +974,11 @@ namespace SolidWorksQrAddIn.UI
                 ? Visibility.Visible : Visibility.Collapsed;
             _shapeParamLabel.Visibility = paramShown;
             _shapeParamBox.Visibility = paramShown;
+            // The ring-split control gets the same inert-field hiding (spec
+            // #51): Circle emits dots — no contours, nothing nests — so the
+            // option is meaningless there. The flag itself is kept verbatim.
+            _ringSplitBox.Visibility = _session.RingSplitApplies
+                ? Visibility.Visible : Visibility.Collapsed;
             FlagPresetFieldError();
             RefreshTemplateRows();
             _picture.Source = _session.Picture == null ? null : ToBitmapSource(_session.Picture);
@@ -1016,9 +1060,11 @@ namespace SolidWorksQrAddIn.UI
                 var resolvedBox = _resolvedRows.Values.FirstOrDefault();
                 return $"viewSize={_sizeBox.Text} viewSizeLabel={_sizeLabel.Text} viewCell={cellText} " +
                        $"viewEcc={_eccBox.SelectedValue} viewInvert={_invertBox.IsChecked == true} " +
+                       $"viewRingSplit={_ringSplitBox.IsChecked == true} " +
                        $"viewShape={_shapeCombo.SelectedValue} viewParam={_shapeParamBox.Text} " +
                        $"viewGrowthVisible={_growthBox.Visibility == Visibility.Visible} " +
                        $"viewParamVisible={_shapeParamBox.Visibility == Visibility.Visible} " +
+                       $"viewRingSplitVisible={_ringSplitBox.Visibility == Visibility.Visible} " +
                        $"viewTemplateNames={(insertCombo == null ? -1 : insertCombo.Items.Count - 1)} " +
                        $"viewResolved={(resolvedBox?.Text ?? string.Empty)}";
             }

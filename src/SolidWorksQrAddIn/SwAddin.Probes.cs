@@ -120,6 +120,7 @@ namespace SolidWorksQrAddIn
                   $"size={_session.SizeText} growth={_session.GrowthText} " +
                   $"preset={_session.ContentPresetId} " +
                   $"ecc={_session.EccLevel} invert={_session.Invert} " +
+                  $"ringsplit={_session.RingSplit} " +
                   $"shape={QrCellShapes.CodeFor(_session.CellShape)} " +
                   $"param={_session.ShapeParameterText} " +
                   $"unit={_session.LengthUnit.Symbol} cell={_session.CellSizeReadout} " +
@@ -162,6 +163,14 @@ namespace SolidWorksQrAddIn
 
         public string SetQrInvertProbe(bool invert) =>
             FieldProbe(s => s.SetInvert(invert));
+
+        /// <summary>
+        /// The pane's open-nested-rings checkbox, probed (spec #51, ticket
+        /// #54): a committed toggle like invert — the below-M ECC refusal
+        /// surfaces as "INVALID InvalidEccLevel …" naming the field.
+        /// </summary>
+        public string SetQrRingSplitProbe(bool ringSplit) =>
+            FieldProbe(s => s.SetRingSplit(ringSplit));
 
         /// <summary>
         /// The pane's cell-shape selector, probed: parse the picked shape

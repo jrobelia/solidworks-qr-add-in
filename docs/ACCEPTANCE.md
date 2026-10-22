@@ -154,6 +154,19 @@ Automated equivalents verified by the 2026-10-09 LiveProbe run are marked
 - [ ] **D20** Tools → Add-Ins unload/reload → programmatic round-trip proven
       (single command group, no orphaned window); the interactive dialog path
       is awaiting human verification.
+- [x] **D21** Ring-split click-and-extrude (spec 51): with **Ring split**
+      ticked, content `SW-QR-MVP`, 25 mm / 3% / ECC M → Create Sketch →
+      exit the sketch → click inside the QR field and **Extruded Boss**:
+      SolidWorks' automatic profile selection must resolve the material
+      (the thin finder channels and module-aligned drops leave no
+      `ring → hole → island` nesting to refuse). Confirm the three finder
+      openings are visible as ~0.05 mm slots and the extrusion previews
+      cleanly. *(Human-verified 2026-10-22 — auto profile selection
+      resolved and extruded cleanly; finder slits sit at the ring corners
+      hugging the inner edge, and the inverted quiet-zone egress reads as
+      the same hairline. The `ringsplit` LiveProbe mode proves the same
+      topology via the exploded census + `ISketchRegion.Select`
+      object-selection, see docs/RINGSPLIT-GATES.md.)*
 
 ## E. Automated live run — LiveProbe (requires a session-free window)
 
@@ -226,6 +239,6 @@ invent a hidden QR-capacity limit.
 | Boss/cut without corner-contact failure | PASS | Boss-Extrude + Cut-Extrude on plate QR and top-face QR succeeded |
 
 **Unrun items:** interactive visual checks (D2 margin, D11 rendered result,
-Tools→Add-Ins dialog, startup auto-load) — need a human at an interactive
-SolidWorks session. The ~30°-datum construction recipe remains unproven
+Tools→Add-Ins dialog, startup auto-load, D21 ring-split click-and-extrude) —
+need a human at an interactive SolidWorks session. The ~30°-datum construction recipe remains unproven
 (probe-side; rotated datum coverage came from Plane5 + Top Plane).

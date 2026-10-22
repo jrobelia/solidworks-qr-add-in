@@ -190,6 +190,9 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (args.Length > 0 &&
                 string.Equals(args[0], "swprops", StringComparison.OrdinalIgnoreCase))
                 return SwpropsMain(args.Skip(1).ToArray());
+            if (args.Length > 0 &&
+                string.Equals(args[0], "ringsplit", StringComparison.OrdinalIgnoreCase))
+                return RingsplitMain(args.Skip(1).ToArray());
 
             string deployDir = args.Length > 0
                 ? args[0]
@@ -7651,6 +7654,7 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string SetQrGrowthProbe(string growthText) => Invoke("SetQrGrowthProbe", growthText);
             public string SetQrEccProbe(string level) => Invoke("SetQrEccProbe", level);
             public string SetQrInvertProbe(bool invert) => Invoke("SetQrInvertProbe", invert);
+            public string SetQrRingSplitProbe(bool ringSplit) => Invoke("SetQrRingSplitProbe", ringSplit);
             public string SetQrCellShapeProbe(string shape) => Invoke("SetQrCellShapeProbe", shape);
             public string SetQrShapeParamProbe(string paramText) => Invoke("SetQrShapeParamProbe", paramText);
             public string SetQrContentTypeProbe(string presetId) => Invoke("SetQrContentTypeProbe", presetId);

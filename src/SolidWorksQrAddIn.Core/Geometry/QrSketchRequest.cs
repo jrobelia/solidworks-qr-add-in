@@ -62,5 +62,20 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// carried, never consulted.
         /// </summary>
         public double CellShapeParameter { get; set; }
+
+        /// <summary>
+        /// Opt-in ring split (spec #51, tickets #52/#53): under the Square
+        /// cell shape, open every island-bearing hole in the emitted set —
+        /// the three finder rings by a thin channel subtracted from the
+        /// grown subject at a ring corner, hugging the void's inner edge,
+        /// every other site by the minimal
+        /// module-aligned cell path joining the hole's void to the
+        /// exterior-connected un-emitted flood — so no ring → hole →
+        /// island nesting survives for SolidWorks' automatic profile
+        /// selection. Default false — option-off output is byte-identical
+        /// to the historical pipeline. Inert under Circle (dots have no
+        /// contours); refused below error-correction level M.
+        /// </summary>
+        public bool RingSplit { get; set; }
     }
 }

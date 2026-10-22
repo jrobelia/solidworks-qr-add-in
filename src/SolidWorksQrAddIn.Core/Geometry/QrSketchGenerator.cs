@@ -69,6 +69,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 return QrSketchResult.Fail(QrSketchErrorKind.EmptyContent,
                     "QR content is empty. Enter the text or URL to encode.");
 
+            // Spec #51, ticket #52 — the ring split spends real correction
+            // budget on dropped cells: refuse below ECC M, naming the field —
+            // never silently bumped. Under Circle the flag is inert (dots
+            // emit no contours, no cells drop), so the gate does not apply.
+            if (request.RingSplit && QrCellShapes.RingSplitApplies(request.CellShape) &&
+                request.EccLevel < QRCodeGenerator.ECCLevel.M)
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidEccLevel,
+                    $"Ring split drops emitted cells — error correction level M or higher " +
+                    $"absorbs them, but the request's EccLevel is {request.EccLevel}. " +
+                    "Raise EccLevel to M, Q or H, or turn ring split off.");
+
             bool[,] matrix;
             int version;
             try
@@ -106,7 +117,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             return Build(matrix, matrix.GetLength(0) - 2 * QrSketchInfo.QuietZoneCellsPerSide,
                 request.SizeMm, request.GrowthFractionPerSide, version, request.Invert,
-                request.CellShape, request.CellShapeParameter);
+                request.CellShape, request.CellShapeParameter, request.RingSplit);
         }
 
         /// <summary>
@@ -118,11 +129,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// <paramref name="invert"/> selects the emitted polarity exactly as in
         /// <see cref="Generate"/>; <paramref name="cellShape"/> and
         /// <paramref name="cellShapeParameter"/> pick the per-cell primitive
-        /// exactly like <see cref="QrSketchRequest.CellShape"/>.
+        /// exactly like <see cref="QrSketchRequest.CellShape"/>;
+        /// <paramref name="ringSplit"/> applies the hybrid treatment like
+        /// <see cref="QrSketchRequest.RingSplit"/> (the fixture seam has no
+        /// error-correction level — the ECC gate lives on the request).
         /// </summary>
         public static QrSketchResult GenerateFromCells(
             bool[,] darkCells, double sizeMm, double growthFractionPerSide, bool invert = false,
-            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0)
+            QrCellShape cellShape = QrCellShape.Square, double cellShapeParameter = 0.0,
+            bool ringSplit = false)
         {
             if (darkCells == null)
                 throw new ArgumentNullException(nameof(darkCells));
@@ -138,7 +153,30 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 for (var col = 0; col < n; col++)
                     matrix[row + q, col + q] = darkCells[row, col];
             return Build(matrix, n, sizeMm, growthFractionPerSide, version: 0, invert,
-                cellShape, cellShapeParameter);
+                cellShape, cellShapeParameter, ringSplit);
+        }
+
+        /// <summary>
+        /// The whole-working-matrix fixture seam — <see cref="GenerateFromCells"/>
+        /// minus the quiet-zone padding: the caller supplies the full
+        /// (N+8)×(N+8) grid, so a fixture may emit inside the fixed light
+        /// margin (blocking a finder-channel locus so the claimed channel
+        /// lands in an enclosed pocket — a mask/union divergence no
+        /// data-cells fixture can express). <paramref name="dataCells"/> is
+        /// the N×N payload extent used for sizing and info reporting.
+        /// Internal for the suite (InternalsVisibleTo); normal polarity,
+        /// Square shape.
+        /// </summary>
+        internal static QrSketchResult GenerateFromWorkingMatrix(
+            bool[,] darkCells, int dataCells, double sizeMm,
+            double growthFractionPerSide, bool ringSplit)
+        {
+            if (darkCells == null)
+                throw new ArgumentNullException(nameof(darkCells));
+            if (darkCells.GetLength(0) != darkCells.GetLength(1))
+                throw new ArgumentException("The QR cell matrix must be square.", nameof(darkCells));
+            return Build(darkCells, dataCells, sizeMm, growthFractionPerSide,
+                version: 0, invert: false, QrCellShape.Square, 0.0, ringSplit);
         }
 
         /// <summary>
@@ -150,10 +188,17 @@ namespace SolidWorksQrAddIn.Core.Geometry
         /// picks the primitive: Square runs the grown-cell union/clip/
         /// validate/convert contour pipeline below; Circle branches away
         /// before any contour machinery into <see cref="BuildCirclePlan"/>.
+        /// <paramref name="ringSplit"/> (spec #51, tickets #52/#53) opens
+        /// every island-bearing hole before the union — the finder rings by
+        /// a thin channel subtracted from the grown subject at a ring
+        /// corner, hugging the void's inner edge, every other site by a
+        /// minimal module-aligned cell drop whose emitted quiet-zone leg
+        /// keeps its cells and vents by the same thin corridor — Square-shape
+        /// only, inert under Circle.
         /// </summary>
         private static QrSketchResult Build(
             bool[,] matrix, int dataCells, double sizeMm, double growthFraction, int version,
-            bool invert, QrCellShape cellShape, double cellShapeParameter)
+            bool invert, QrCellShape cellShape, double cellShapeParameter, bool ringSplit)
         {
             int m = matrix.GetLength(0);
             int n = dataCells;
@@ -216,12 +261,41 @@ namespace SolidWorksQrAddIn.Core.Geometry
             // The polarity select is the only mode switch (ADR 0002): dark
             // cells emit normally, light cells emit under invert — across the
             // WHOLE working matrix, so the quiet zone becomes field.
+            var emit = new bool[m, m];
+            for (var row = 0; row < m; row++)
+                for (var col = 0; col < m; col++)
+                    emit[row, col] = matrix[row, col] != invert;
+
+            // Spec #51 — the opt-in ring split, on the emitted set after the
+            // polarity select (invert rides the same path). The three finder
+            // rings open by thin finite-width channel rectangles subtracted
+            // from the grown subject below (ticket #53); every other
+            // island-bearing hole drops the minimal module-aligned cell path
+            // joining it to exterior-connected space (ticket #52), its
+            // emitted quiet-zone cells excepted — they keep their emission
+            // and vent by the same thin channel (the invert-only egress
+            // corridor) — before the union pass, so no ring → hole → island
+            // nesting survives.
+            var openedSites = 0;
+            var droppedCells = 0;
+            var channelWidthUnits = 0L;
+            Paths64? channels = null;
+            if (ringSplit)
+            {
+                channelWidthUnits = QrRingSplitter.FinderChannelWidthUnits(mmPerUnit);
+                var splitError = QrRingSplitter.OpenIslandBearingHoles(
+                    emit, g, channelWidthUnits,
+                    out openedSites, out droppedCells, out channels);
+                if (splitError != null)
+                    return QrSketchResult.Fail(splitError.Kind, splitError.Message);
+            }
+
             var subject = new Paths64();
             int emittedCount = 0;
             for (var row = 0; row < m; row++)
                 for (var col = 0; col < m; col++)
                 {
-                    if (matrix[row, col] == invert) continue;
+                    if (!emit[row, col]) continue;
                     emittedCount++;
                     long x0 = (long)col * u - g;
                     long y0 = (long)row * u - g;
@@ -239,6 +313,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
                     invert
                         ? "The cell matrix contains no light cells; nothing would be sketched."
                         : "The cell matrix contains no dark cells; nothing would be sketched.");
+
+            // The thin channels — the finder slots and the quiet-zone
+            // egress corridors — ride the same union pass: NonZero fills
+            // the overlapping grown rects, so subtracting the channel
+            // rectangles here removes them from the merged material — the
+            // grown subject minus the thin corridors, still in grid space,
+            // before the matrix-square clip below (the second Clipper-hook
+            // shape of docs/RING-SPLIT-RESEARCH.md §4).
+            if (channels != null && channels.Count > 0)
+            {
+                subject = Clipper.Difference(subject, channels, FillRule.NonZero);
+            }
 
             // ADR 0002: all geometry is clipped to the working-matrix square
             // [0, M·U] — a guaranteed no-op in normal mode (grown dark cells
@@ -274,6 +360,15 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 gridRegions.Add(region);
                 Flatten(region, flatPaths, flatIsHole);
             }
+
+            // All-or-nothing on the delivered set: the union's tree is the
+            // geometry the host consumes — if a hole still bears an island
+            // the cell model diverged from the union, so refuse rather than
+            // deliver a partially opened QR.
+            if (ringSplit && gridRegions.Exists(HasIslandBearingHole))
+                return QrSketchResult.Fail(QrSketchErrorKind.InvalidGeometry,
+                    "Ring split left an island-bearing hole in the unioned contours — " +
+                    "the request is refused rather than partially opened.");
 
             // ---------- segment ceiling (spec-13 ticket #35, ported #38) ----------
             // The delivered segment total is known as soon as the contours
@@ -337,7 +432,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
                 minLightGapMm: (u - 2 * g) * mmPerUnit,
                 contourCount: flatPaths.Count,
                 segmentCount: segmentCount,
-                inverted: invert);
+                inverted: invert,
+                openedSiteCount: openedSites,
+                droppedCellCount: droppedCells,
+                finderChannelWidthMm: channels != null && channels.Count > 0
+                    ? channelWidthUnits * mmPerUnit
+                    : 0.0);
 
             // ---------- construction squares (sketch-space metres) ----------
             // The squares ride INSIDE the block definition as construction
@@ -546,6 +646,24 @@ namespace SolidWorksQrAddIn.Core.Geometry
             };
 
         // ----- grid-space tree -----
+
+        /// <summary>Whether any hole in <paramref name="region"/>'s tree still
+        /// bears a filled island, at any depth — the doubly-nested condition
+        /// (spec #51). The recursion matches <see cref="QrNestingCensus"/>'s
+        /// walk: a residual can sit inside a promoted island's hole too, so
+        /// every hole at every depth is inspected.</summary>
+        private static bool HasIslandBearingHole(GridRegion region)
+        {
+            foreach (var hole in region.Holes)
+            {
+                if (hole.Islands.Count > 0)
+                    return true;
+                foreach (var island in hole.Islands)
+                    if (HasIslandBearingHole(island))
+                        return true;
+            }
+            return false;
+        }
 
         private sealed class GridRegion
         {
