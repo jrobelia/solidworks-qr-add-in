@@ -32,6 +32,13 @@ preview raster so the signatures legitimately coincide. The check was
 corrected to assert only the parity contract (preview == module render);
 re-run: 138 checks, 0 failures, exit 0 — `# RINGSPLIT ALL CHECKS PASSED`.
 
+**Re-verified again 2026-10-22 on the thin quiet-zone egress build**
+(`c6a85f2` — user-requested change replacing the inverted drop path's
+whole-cell egress leg through the quiet zone with the thin derived-width
+corridor): 138 checks, 0 failures, exit 0 — `# RINGSPLIT ALL CHECKS
+PASSED`. The inverted-split census self-adapted (segs 266 → 276) since
+the corridor adds walls instead of removing whole cells.
+
 Module expectations printed before attach (the refusal-tolerant header):
 
 - baseline `SW-QR-MVP` @ 25 mm / 3% ECC M: contours=27 segs=252
