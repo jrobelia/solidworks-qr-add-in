@@ -122,7 +122,13 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   revalidation (no stale cross-document support), create blocked while
   editing, single-surface lifecycle (focus-or-recreate, close, release — the
   task-pane tab) and session→view sync of probe-driven edits via the
-  `IQrSketchWindow` seam.
+  `IQrSketchWindow` seam. Pending edits (ticket #66,
+  `QrPendingEditTests`): staged field text is verbatim session state — a
+  stage never revalidates or syncs, the commit drains preset fields before
+  the content box (the Raw-reverting manual edit lands last) and a preset
+  switch under the old preset, every setter commits the queue before its
+  own edit lands, and `CreateSketch` flushes inside itself so a create can
+  never observe unflushed edits.
 - **Payload composer** (`PayloadComposerTests`, spec #11/ticket #26): the
   nine content-type presets in dropdown order — the eight spec-11 types
   plus spec-21's SW Properties — with unique field keys and declared
