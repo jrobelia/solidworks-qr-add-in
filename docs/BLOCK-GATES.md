@@ -1,5 +1,11 @@
 # Spec 10 — live block-instance gate results
 
+> **Harness retired post-v1.0; code preserved at tag `v1.0.0`.** The
+> `blockqr`/`bindexp`/`dimexp`/`consexp` LiveProbe modes and the
+> `BlockSpikeProbe`/`UndoArrangementProbe` probe members referenced below
+> were removed in the #65 probe-surface reshape; this document remains the
+> design-evidence record.
+
 ## UI/document-unit follow-up — fa5d951
 
 **Accepted build:** `SolidWorksQrAddIn-fa5d951-Setup.exe`.

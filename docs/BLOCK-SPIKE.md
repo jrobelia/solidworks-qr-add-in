@@ -1,5 +1,10 @@
 # Sketch Block Instance spike — can a block carry the QR pattern?
 
+> **Harness retired post-v1.0; code preserved at tag `v1.0.0`.** The
+> `block` mode (`BlockSpikeMain`) and the in-proc `BlockSpikeProbe` member
+> referenced below were removed in the #65 probe-surface reshape; this
+> document remains the design-evidence record.
+
 Live evidence, SolidWorks 2023 SP5 (rev 31.5.0), session-free invisible
 instance (`SldWorks.Application.31`, `Visible=False`). Driver:
 `tools/LiveProbe` **`block` mode** (`BlockSpikeMain`), which runs the five

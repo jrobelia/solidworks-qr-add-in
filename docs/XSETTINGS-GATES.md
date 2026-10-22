@@ -29,19 +29,19 @@ asserted against the module's own computed verdict, never a guessed response.
 | 2 | `AddinStateProbe` | PASS — `CONNECTED group=20906` |
 | 3 | `OpenQrWindowProbe` | PASS — `open=True windows=1` |
 | 4 | Fresh session defaults | PASS — `preset=raw ecc=M invert=False` |
-| 5 | `SetQrEccProbe("bogus")` | PASS — `ERROR unknown ECC level 'bogus'` — parser refuses before the session |
-| 6 | `SetQrContentTypeProbe("bogus")` | PASS — `INVALID InvalidPayload`; `preset=` stays `raw` |
-| 7 | `SetQrPresetFieldProbe("nonesuch","x")` | PASS — `INVALID` naming `nonesuch` |
-| 8 | `SetQrContentTypeProbe("wifi")` | PASS — `INVALID InvalidPayload` (ssid required), `preset=wifi`, `NO-PICTURE` |
+| 5 | `SetQrField("ecc", "bogus")` | PASS — `ERROR unknown ECC level 'bogus'` — parser refuses before the session |
+| 6 | `SetQrField("preset", "bogus")` | PASS — `INVALID InvalidPayload`; `preset=` stays `raw` |
+| 7 | `SetQrField("nonesuch", "x")` | PASS — `INVALID` naming `nonesuch` |
+| 8 | `SetQrField("preset", "wifi")` | PASS — `INVALID InvalidPayload` (ssid required), `preset=wifi`, `NO-PICTURE` |
 | 9 | `ssid` alone | PASS — `INVALID` — password still required for a secured network |
 | 10 | `security=wpa` alone | PASS — `INVALID` — same |
 | 11 | `password` completes the trio | PASS — live `VALID cells=29` == module |
-| 12 | `SetQrSizeProbe(40)` | PASS — live `VALID cells=29` == module |
+| 12 | `SetQrField("size", "40")` | PASS — live `VALID cells=29` == module |
 | 13 | `hidden=true` | PASS — live `VALID cells=33` == module |
-| 14 | `SetQrContentProbe("SW-QR-MVP")` | PASS — manual edit reverts `preset=raw` |
+| 14 | `SetQrField("content", "SW-QR-MVP")` | PASS — manual edit reverts `preset=raw` |
 | 15 | re-pick `wifi` | PASS — remembered fields recompose, `VALID cells=33` |
-| 16 | `SetQrEccProbe("h")` | PASS — `VALID cells=41` — case-insensitive parse lands H |
-| 17 | `SetQrInvertProbe(true)` | PASS — `VALID contours=138` — the module's inverted census |
+| 16 | `SetQrField("ecc", "h")` | PASS — `VALID cells=41` — case-insensitive parse lands H |
+| 17 | `SetQrField("invert", "true")` | PASS — `VALID contours=138` — the module's inverted census |
 | 18 | `WindowStateProbe` after settings | PASS — `preset=wifi ecc=H invert=True` **and** `viewEcc=H viewInvert=True` |
 | 19 | `PreviewSignatureProbe` | PASS — sha `fd961dc3…` == module inverted+H render; differs from normal polarity `02734246…` |
 | 20 | Create on Front Plane | PASS — `OK Sketch1` |
@@ -53,10 +53,10 @@ asserted against the module's own computed verdict, never a guessed response.
 | 26 | Re-enter committed sketch | PASS — still ONE block instance |
 | 27 | Explode | PASS — instance gone; 1242 material segs + 8 construction-flagged host lines |
 | 28 | **Module-identical contours** | PASS — every material `ISketchContour` matched a module contour bbox 1:1 (138/138, inverted field included) |
-| 29 | `SetQrContentProbe(medium-101-char)` | PASS — `INVALID BelowInsertionLimit` == module at gate settings, `preset=raw` |
-| 30 | `SetQrSizeProbe(40)` dense | PASS — `INVALID BelowInsertionLimit` — smallest feature 0.0452 mm vs 0.05 mm floor |
+| 29 | `SetQrField("content", medium-101-char)` | PASS — `INVALID BelowInsertionLimit` == module at gate settings, `preset=raw` |
+| 30 | `SetQrField("size", "40")` dense | PASS — `INVALID BelowInsertionLimit` — smallest feature 0.0452 mm vs 0.05 mm floor |
 | 31 | Refused create | PASS — `ERROR`, feature tree unchanged, no sketch left open |
-| 32 | `SetQrSizeProbe(60)` dense | PASS — `VALID cells=53` — the cleared rung |
+| 32 | `SetQrField("size", "60")` dense | PASS — `VALID cells=53` — the cleared rung |
 | 33 | Dense create | PASS — `OK Sketch2` + full block/def census vs module dense expectation (2062 segs, span 68.979 mm) |
 | 34 | Prior sketch untouched | PASS — `[Sketch1, Sketch2]`, no mutation of the first QR |
 | 35 | Settings persist | PASS — `ecc=H invert=True` still reported after both creates |
@@ -94,8 +94,8 @@ that subkey too, so a post-uninstall re-register is self-healing.
 Headless additions this ticket:
 
 - `QrEccLevels.TryParse` (`Core/Geometry`) — the case-insensitive L/M/Q/H
-  parser the pane and `SetQrEccProbe` share; invalid/empty input rejected.
-  `SwAddin.Probes.SetQrEccProbe` now parses through it instead of its
+  parser the pane and `SetQrField("ecc", …)` share; invalid/empty input
+  rejected. The probe's ECC branch parses through it instead of its
   earlier inline switch — the probe-side text plumbing the live gate drives.
 - The `xsettings` mode itself computes every expectation from the module
   (payload composition, per-rung guard verdicts, render signatures), so its
@@ -108,7 +108,7 @@ Headless additions this ticket:
   explode route to **inverted** output for the first time — the live run
   confirmed `GetSketchContours` enumerates the inverted field's
   hole/island loops identically (138/138 matched).
-- `SetQrSizeProbe` at the dense refused rung re-set the size the session
+- `SetQrField("size", …)` at the dense refused rung re-set the size the session
   already held (the refused rung equals the gate size) — the verdict was
   still asserted against the module, but it was not a distinct edit.
 - The dense create's feature-count check asserts no *new* feature from the

@@ -270,8 +270,8 @@ second `LiveProbe.exe pattern 12` away from the raw-API replication
 the deployed add-in carries the build under test.
 
 The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
-extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
-`SetQrEccProbe`, `SetQrInvertProbe`) through the pane path, performs one create
+extended settings through `SetQrField` (`preset` + preset-field keys, `ecc`,
+`invert`) on the pane path, performs one create
 with a non-default preset + ECC level + inverted polarity, verifies the landed
 block instance module-identically (definition census plus an exploded 1:1
 contour-bounding-box match), and replays the insertion-guard floor on a denser
@@ -288,7 +288,7 @@ live gate. The harness itself writes the fixture — document-level,
 configuration-specific, empty and whitespace-only properties via
 `CustomPropertyManager.Add3` on TWO configurations of the same part (plus a
 second document with its own values) — then drives the pane path
-(`SetQrContentTypeProbe`/`SetQrPresetFieldProbe`/`WindowStateProbe`'s
+(`SetQrField` `preset` + `template`/`WindowStateProbe`'s
 `viewTemplateNames`/`viewResolved` echoes/`CreateQrFromWindowProbe`) and
 proves each created sketch encodes exactly the resolved literal by the
 module-identical route (block census + exploded 1:1 contour match).
@@ -300,7 +300,7 @@ exists** and prints its fixture plan before that refusal. Gate results are
 recorded in `docs/SWPROPS-GATES.md`.
 
 The `ringsplit` mode (ticket #55) is the spec-51 open-nested-rings live
-gate. It drives the pane path (`SetQrRingSplitProbe` through
+gate. It drives the pane path (`SetQrField("ringsplit", …)` through
 `CreateQrFromWindowProbe`), proves preview/create parity against
 `QrPictureRenderer`, then verifies the landed sketches module-identically:
 block census, exploded 1:1 contour match, `QrNestingCensus` region totals
@@ -336,10 +336,12 @@ loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
-`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`, `SetQrEccProbe`,
-`SetQrInvertProbe`, `SetQrRingSplitProbe`, `SetQrContentTypeProbe`,
-`SetQrPresetFieldProbe`,
+`SetQrField(name, value)` — one field-setter carrying the
+`WindowStateProbe` vocabulary: content/size/growth/ecc/invert/ringsplit/
+shape/param, `preset` for the content-type id, and preset-field keys —
 `CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
+`UndoRedoQrProbe`, `PatternCensusProbe`, `PatternDimsProbe`,
+`SetPatternDimProbe`, `SwPropertiesProbe`, `SwPropertyResolveProbe`,
 `RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed

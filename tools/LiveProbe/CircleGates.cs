@@ -170,51 +170,51 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var state0 = probe.WindowStateProbe();
                 Check(state0.Contains("shape=square") && state0.Contains("invert=False"),
                     "fresh session defaults to square cells, normal polarity", state0);
-                Check(probe.SetQrCellShapeProbe("bogus").StartsWith("ERROR"),
+                Check(probe.SetQrField("shape", "bogus").StartsWith("ERROR"),
                     "an unknown cell shape is refused",
-                    probe.SetQrCellShapeProbe("bogus"));
+                    probe.SetQrField("shape", "bogus"));
 
                 // The measured setter contract (circlediag D1): a field
                 // setter applies the value, then reports the SESSION's
                 // aggregate validity — with no content every setter echoes
                 // INVALID EmptyContent; with content it echoes VALID dots=….
-                var nc1 = probe.SetQrCellShapeProbe("circle");
+                var nc1 = probe.SetQrField("shape", "circle");
                 Check(nc1.StartsWith("INVALID") && nc1.Contains("EmptyContent"),
                     "shape edit with no content answers INVALID EmptyContent (contract)",
                     nc1);
                 Check(probe.WindowStateProbe().Contains("shape=circle"),
                     "the field still applied — session echoes shape=circle",
                     probe.WindowStateProbe());
-                var nc2 = probe.SetQrShapeParamProbe("90");
+                var nc2 = probe.SetQrField("param", "90");
                 Check(nc2.StartsWith("INVALID") && nc2.Contains("EmptyContent"),
                     "param edit with no content answers INVALID EmptyContent", nc2);
                 Check(probe.WindowStateProbe().Contains("param=90"),
                     "session echoes param=90", probe.WindowStateProbe());
-                var nc3 = probe.SetQrInvertProbe(true);
+                var nc3 = probe.SetQrField("invert", "true");
                 Check(nc3.StartsWith("INVALID") && nc3.Contains("EmptyContent"),
                     "invert edit with no content answers INVALID EmptyContent", nc3);
-                Check(probe.SetQrInvertProbe(false).Contains("EmptyContent"),
+                Check(probe.SetQrField("invert", "false").Contains("EmptyContent"),
                     "invert=false pre-content echoes EmptyContent too",
                     probe.WindowStateProbe());
 
-                var c1 = probe.SetQrContentProbe(PayloadA);
+                var c1 = probe.SetQrField("content", PayloadA);
                 Check(c1.StartsWith("VALID") && c1.Contains($"dots={plan.EmittedCount}"),
                     "gate payload accepted with the normal-polarity dot count", c1);
-                Check(probe.SetQrCellShapeProbe("circle").StartsWith("VALID"),
+                Check(probe.SetQrField("shape", "circle").StartsWith("VALID"),
                     "circle shape accepted (content present)", probe.WindowStateProbe());
-                Check(probe.SetQrShapeParamProbe("90").StartsWith("VALID") &&
+                Check(probe.SetQrField("param", "90").StartsWith("VALID") &&
                       probe.WindowStateProbe().Contains("param=90"),
                     "dot size 90% accepted", probe.WindowStateProbe());
-                Check(probe.SetQrShapeParamProbe("abc").StartsWith("INVALID"),
-                    "a non-numeric dot size is refused", probe.SetQrShapeParamProbe("abc"));
-                Check(probe.SetQrShapeParamProbe("130").StartsWith("INVALID"),
-                    "an over-100% dot size is refused", probe.SetQrShapeParamProbe("130"));
-                Check(probe.SetQrShapeParamProbe("90").StartsWith("VALID"),
+                Check(probe.SetQrField("param", "abc").StartsWith("INVALID"),
+                    "a non-numeric dot size is refused", probe.SetQrField("param", "abc"));
+                Check(probe.SetQrField("param", "130").StartsWith("INVALID"),
+                    "an over-100% dot size is refused", probe.SetQrField("param", "130"));
+                Check(probe.SetQrField("param", "90").StartsWith("VALID"),
                     "dot size restores to 90%", "");
-                Check(probe.SetQrInvertProbe(true).StartsWith("VALID") &&
+                Check(probe.SetQrField("invert", "true").StartsWith("VALID") &&
                       probe.WindowStateProbe().Contains("invert=True"),
                     "invert=true round-trips", probe.WindowStateProbe());
-                var ivf = probe.SetQrInvertProbe(false);
+                var ivf = probe.SetQrField("invert", "false");
                 Check(ivf.StartsWith("VALID") && ivf.Contains($"dots={plan.EmittedCount}") &&
                       probe.WindowStateProbe().Contains("invert=False"),
                     "invert=false round-trips with the normal dot count", ivf);
@@ -409,7 +409,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     (IFeatureManager)docB.FeatureManager);
                 Check(plate != null, "backing plate created (B)",
                     plate == null ? "null" : plate.Name);
-                string invResp = probe.SetQrInvertProbe(true);
+                string invResp = probe.SetQrField("invert", "true");
                 Check(invResp.StartsWith("VALID") &&
                       invResp.Contains($"dots={planInv.EmittedCount}"),
                     "invert session verdict echoes the module plan", invResp);
@@ -448,7 +448,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Check(cut != null, "inverted dots cut the plate (Dir=true precedent)",
                         cut == null ? "FeatureCut4 returned null" : cut.Name);
                 }
-                _ = probe.SetQrInvertProbe(false);
+                _ = probe.SetQrField("invert", "false");
                 try { sw.CloseDoc(docB.GetTitle()); } catch { }
 
                 // ================= GATE 7 — dimensionless end-state =================
@@ -1332,11 +1332,11 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Console.WriteLine($"#   near-bound rung {under.tag} dots={under.dots} " +
                     $"size={under.cells * 2}mm invert={under.invert}");
                 double sizeMm = under.cells * 2.0;   // pitch pinned at 2 mm
-                double setMs = TimeMs(() => _ = probe.SetQrSizeProbe(sizeMm.ToString(inv)));
+                double setMs = TimeMs(() => _ = probe.SetQrField("size", sizeMm.ToString(inv)));
                 string resp = "";
-                setMs += TimeMs(() => resp = probe.SetQrContentProbe(under.content));
+                setMs += TimeMs(() => resp = probe.SetQrField("content", under.content));
                 if (under.invert)
-                    setMs += TimeMs(() => resp = probe.SetQrInvertProbe(true));
+                    setMs += TimeMs(() => resp = probe.SetQrField("invert", "true"));
                 Check(resp.StartsWith("VALID") && resp.Contains($"dots={under.dots}"),
                     "near-bound payload validates at the module's count", resp);
 
@@ -1425,15 +1425,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"rescale_ms={rescaleMs:F0} enter_ms={enterMs:F0} " +
                     $"edit_regions_ms={editRegionsMs:F0}(r={editRegions}) exit2_ms={exit2Ms:F0}");
                 }
-                if (under.invert) _ = probe.SetQrInvertProbe(false);
+                if (under.invert) _ = probe.SetQrField("invert", "false");
 
                 // ---- over-bound refusal — before ANY host mutation ----
                 if (over.content != null)
                 {
                     Console.WriteLine($"#   over-bound rung {over.tag} dots={over.dots}");
-                    _ = probe.SetQrSizeProbe((over.cells * 2.0).ToString(inv));
-                    resp = probe.SetQrContentProbe(over.content);
-                    if (over.invert) resp = probe.SetQrInvertProbe(true);
+                    _ = probe.SetQrField("size", (over.cells * 2.0).ToString(inv));
+                    resp = probe.SetQrField("content", over.content);
+                    if (over.invert) resp = probe.SetQrField("invert", "true");
                     int featsBefore = FindSketchFeatureNames(doc).Count;
                     Check(resp.StartsWith("INVALID") && resp.Contains("TooManyInstances"),
                         "over-bound payload answers INVALID TooManyInstances on the session",
@@ -1448,13 +1448,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                         "refusal left the feature tree untouched (no sketch created)",
                         $"features={FindSketchFeatureNames(doc).Count} before={featsBefore} " +
                         $"activeSketch={mgr.ActiveSketch != null}");
-                    if (over.invert) _ = probe.SetQrInvertProbe(false);
+                    if (over.invert) _ = probe.SetQrField("invert", "false");
                 }
                 else Limit("over-bound refusal", "no rung over the bound in the scanned range");
 
                 // restore session defaults for the regression gate
-                _ = probe.SetQrSizeProbe("25");
-                _ = probe.SetQrContentProbe(PayloadA);
+                _ = probe.SetQrField("size", "25");
+                _ = probe.SetQrField("content", PayloadA);
             }
             finally
             {
@@ -1527,14 +1527,14 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 // ============ D1: probe verdict shapes ============
                 Console.WriteLine("# ---- D1: session probe verdict shapes ----");
-                Console.WriteLine($"#   shape(circle) noContent: {probe.SetQrCellShapeProbe("circle")}");
-                Console.WriteLine($"#   param(90) noContent:     {probe.SetQrShapeParamProbe("90")}");
-                Console.WriteLine($"#   invert(true) noContent:  {probe.SetQrInvertProbe(true)}");
+                Console.WriteLine($"#   shape(circle) noContent: {probe.SetQrField("shape", "circle")}");
+                Console.WriteLine($"#   param(90) noContent:     {probe.SetQrField("param", "90")}");
+                Console.WriteLine($"#   invert(true) noContent:  {probe.SetQrField("invert", "true")}");
                 Console.WriteLine($"#   state: {probe.WindowStateProbe()}");
-                Console.WriteLine($"#   content(A):              {probe.SetQrContentProbe(PayloadA)}");
-                Console.WriteLine($"#   param(90) withContent:   {probe.SetQrShapeParamProbe("90")}");
-                Console.WriteLine($"#   invert(true) w/content:  {probe.SetQrInvertProbe(true)}");
-                Console.WriteLine($"#   invert(false) w/content: {probe.SetQrInvertProbe(false)}");
+                Console.WriteLine($"#   content(A):              {probe.SetQrField("content", PayloadA)}");
+                Console.WriteLine($"#   param(90) withContent:   {probe.SetQrField("param", "90")}");
+                Console.WriteLine($"#   invert(true) w/content:  {probe.SetQrField("invert", "true")}");
+                Console.WriteLine($"#   invert(false) w/content: {probe.SetQrField("invert", "false")}");
                 Console.WriteLine($"#   state: {probe.WindowStateProbe()}");
 
                 // ============ D2: in-edit vs committed census ============
@@ -1743,7 +1743,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 // ============ D6: block-sketch hostSegs ============
                 Console.WriteLine("# ---- D6: square-mode host sketch ----");
-                _ = probe.SetQrCellShapeProbe("square");
+                _ = probe.SetQrField("shape", "square");
                 // Exit any stale edit session before the next create — a
                 // lingering in-edit sketch makes InsertSketch a no-op whose
                 // ActiveSketch never resolves.
@@ -1819,13 +1819,13 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (doc == null) return;
             try
             {
-                Check(probe.SetQrCellShapeProbe("square").StartsWith("VALID"),
-                    "shape switches back to square", probe.SetQrCellShapeProbe("square"));
+                Check(probe.SetQrField("shape", "square").StartsWith("VALID"),
+                    "shape switches back to square", probe.SetQrField("shape", "square"));
                 var verdict = QrSketchGenerator.Generate(
                     new QrSketchRequest(PayloadA, 25.0, 0.03));
                 Check(verdict.Succeeded && verdict.Sketch!.CirclePlan == null,
                     "square request has no circle plan");
-                string contentResp = probe.SetQrContentProbe(PayloadA);
+                string contentResp = probe.SetQrField("content", PayloadA);
                 Check(contentResp.StartsWith("VALID") &&
                       contentResp.Contains($"segs={verdict.Sketch!.Info.SegmentCount}"),
                     "square payload validates with segment count", contentResp);

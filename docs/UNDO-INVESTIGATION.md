@@ -1,5 +1,10 @@
 # Named-undo investigation — FinishRecordingUndoObject2 refused (D17)
 
+> **Harness retired post-v1.0; code preserved at tag `v1.0.0`.** The `undo`
+> LiveProbe mode and the `UndoArrangementProbe` member referenced below were
+> removed in the #65 probe-surface reshape; this document remains the
+> investigation record.
+
 Status: **open — diagnostic built, live run pending a session-free window.**
 
 Branch `investigate/named-undo`. Baseline: SW 2023 SP5 (rev 31.5.0), all 238
