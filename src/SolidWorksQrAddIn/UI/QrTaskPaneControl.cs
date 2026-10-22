@@ -77,13 +77,14 @@ namespace SolidWorksQrAddIn.UI
         });
 
         /// <summary>
-        /// Hide the pane tab. Any debounced field edit is flushed first so the
-        /// session keeps the real inputs — the next show re-pulls truth anyway.
+        /// Hide the pane tab. Any debounced field edit is committed first so
+        /// the session keeps the real inputs — the next show re-pulls truth
+        /// anyway.
         /// </summary>
         public void Close() => MarshalToUi(() =>
         {
             if (!_isOpen) return;
-            _view.FlushPendingEdits();
+            _view.CommitPendingEdits();
             _isOpen = false;
             try { _hidePane(); }
             catch { /* a hidden-or-stuck pane view must not trap the host */ }
