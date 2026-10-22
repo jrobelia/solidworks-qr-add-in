@@ -8,7 +8,7 @@ Runtime libraries shipped with the add-in (deployed beside SolidWorksQrAddIn.dll
 
 | Package | Version | License | Selected NuGet asset (net48) | Used for |
 |---|---|---|---|---|
-| QRCoder | 1.8.0 (pinned) | MIT | `lib/net40/QRCoder.dll` — no package dependencies | QR encoding → cell matrix (`ModuleMatrix`) |
+| QRCoder | 1.8.1 (pinned) | MIT | `lib/net40/QRCoder.dll` — no package dependencies | QR encoding → cell matrix (`ModuleMatrix`) |
 | Clipper2 | 2.0.0 (pinned) | BSL-1.0 | `lib/netstandard2.0/Clipper2Lib.dll` — no package dependencies | Integer polygon union + nested contours (PolyTree64) |
 
 Full license texts ship in the deployment folder under `licenses\` (and live

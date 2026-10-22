@@ -32,7 +32,7 @@ Runtime libraries shipped with the add-in (deployed beside
 SolidWorksQrAddIn.dll):
 
   Package   Version         License   Selected NuGet asset (net48)   Used for
-  QRCoder   1.8.0 (pinned)  MIT       lib/net40/QRCoder.dll          QR encoding
+  QRCoder   1.8.1 (pinned)  MIT       lib/net40/QRCoder.dll          QR encoding
                                                                      (ModuleMatrix)
   Clipper2  2.0.0 (pinned)  BSL-1.0   lib/netstandard2.0/            Integer polygon
                                       Clipper2Lib.dll                union + nested
