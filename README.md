@@ -38,6 +38,22 @@ geometry the sketch gets, pixel-for-pixel.)*
 | **Inverted polarity** — light cells emit; egress vents through the quiet zone by the same thin channel: | ![inverted QR](docs/images/qr-inverted.png) |
 | **Circle shape** — true-dot modules for marking/engraving: | ![circle-mode QR](docs/images/qr-circle.png) |
 
+## Square vs. circle
+
+The two cell shapes produce different sketch anatomy:
+
+- **Square** — the code is inserted as a single **sketch block instance**.
+  Drag the block to move the code; edit the instance's **Scale** property
+  to resize (a multiplier — 2 doubles it).
+- **Circle** — dots emit as a two-directional **linear sketch pattern**
+  with non-emitting instances skipped. The sketch is **fully dimensioned
+  and equation-driven**: pattern spacing, dot diameter, seed offsets and
+  the quiet-zone square all derive from one driving dimension on the QR
+  square — edit it and the code rescales parametrically.
+
+In both shapes the sketch is left open for editing, and the QR/keep-out
+squares are construction geometry — they never form extrusion profiles.
+
 ## Install
 
 1. Download `SolidWorksQrAddIn-1.0.0-Setup.exe` from
