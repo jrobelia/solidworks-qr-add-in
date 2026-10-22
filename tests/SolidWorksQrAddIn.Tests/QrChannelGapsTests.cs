@@ -70,8 +70,9 @@ namespace SolidWorksQrAddIn.Tests
             var gap = Assert.Single(
                 QrChannelGaps.Find(sketch.Edges, MaxGapFor(sketch)));
             Assert.Equal(sketch.Info.FinderChannelWidthMm / 1000.0, gap.GapM, 9);
-            // The channel crosses the top arm: mouths share the locus x and
-            // sit at the band's outer and inner grown edges.
+            // The channel crosses the top arm hugging the void's left inner
+            // edge: mouths share the locus x and sit at the band's outer and
+            // inner grown edges.
             Assert.Equal(gap.MouthA.X, gap.MouthB.X, 9);
             Assert.NotEqual(gap.MouthA.Y, gap.MouthB.Y);
             Assert.True(gap.MouthA.Y > 0 && gap.MouthB.Y > 0, "the top arm");

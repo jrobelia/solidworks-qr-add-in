@@ -16,9 +16,12 @@ namespace SolidWorksQrAddIn.Core.Geometry
     ///   * The three finder rings — regular, repeatable geometry at fixed
     ///     matrix locations — stop paying whole modules (ticket #53): a
     ///     thin axis-aligned channel rectangle is subtracted from the grown
-    ///     subject at a corner locus of the ring band (off the
-    ///     horizontal/vertical centre-lines the finder detection runs
-    ///     sample), spanning the band's outer and inner boundaries so the
+    ///     subject at a ring corner, hugging the void's inner edge (the
+    ///     grown inner-edge line at the corner the locus faces, the channel
+    ///     one channel width into the void — off the horizontal/vertical
+    ///     centre-lines the finder detection runs sample, and the
+    ///     inner-edge line reads as continuing straight into the gap),
+    ///     spanning the band's outer and inner boundaries so the
     ///     ring's hole joins the surrounding void. The channel is sub-cell —
     ///     it cannot exist on the cell mask — so the pass returns the
     ///     channel rectangles for the caller to Difference out of the
@@ -513,16 +516,19 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// Picks a channel rectangle for a matched finder site: every
-        /// candidate is an axis-aligned channel at a corner locus — one
-        /// cell in from a ring corner, off the detection runs' centre-lines —
-        /// whose ends land at void-cell centres (inside the un-emitted free
-        /// core, so caps and walls can never touch a contour: the grown
-        /// grid keeps material ≥ g from cell borders and the width sits
-        /// strictly inside the core). A candidate clears when the inner end
-        /// lands in the void being opened, the channel crosses emitted band
-        /// material, and — Band style — the outer end lands in a different
-        /// void. The fallback order prefers the corner nearest the matrix
-        /// corner, then the next. Null when nothing clears.
+        /// candidate is an axis-aligned channel at a ring corner, hugging
+        /// the void's inner edge — the grown inner-edge line at the corner
+        /// the locus faces, the channel body one channel width into the
+        /// void (off the detection runs' centre-lines; the inner-edge line
+        /// reads as continuing into the gap) — whose ends land at void-cell
+        /// centres (inside the un-emitted free core, so caps and walls can
+        /// never touch a contour: the grown grid keeps material ≥ g from
+        /// cell borders and the width sits strictly inside the core). A
+        /// candidate clears when the inner end lands in the void being
+        /// opened, the channel crosses emitted band material, and — Band
+        /// style — the outer end lands in a different void. The fallback
+        /// order prefers the corner nearest the matrix corner, then the
+        /// next. Null when nothing clears.
         /// </summary>
         private static Path64? TryPlaceFinderChannel(
             bool[,] emit, List<int> voidCells, FinderSite site, long g, long w)
@@ -530,15 +536,18 @@ namespace SolidWorksQrAddIn.Core.Geometry
             int m = emit.GetLength(0);
             long u = QrInsertionGuard.GridUnitsPerCell;
 
-            // Width feasibility: the channel plus a ≥w sliver margin on each
-            // side must fit inside one cell's free core (u−2g), so no wall
-            // ever grazes a grown edge (Clipper noise is ±1 unit, the floor
-            // is 10 — a coincident wall would be a validator violation).
-            if (u - 2 * g < 3 * w)
+            // Width feasibility: the corner remnant (w + the grid floor
+            // margin, so the mouth's jog edge stays strictly above the
+            // insertion floor), the channel itself, and a ≥w sliver margin
+            // on the far side must fit inside one cell's free core (u−2g),
+            // so no wall ever grazes a grown edge (Clipper noise is ±1
+            // unit, the floor is 10 — a coincident wall would be a
+            // validator violation).
+            if (u - 2 * g < 3 * w + QrInsertionGuard.MinGridFeatureUnits)
                 return null;
 
             var voidSet = new HashSet<int>(voidCells);
-            foreach (var cand in Candidates(site, m, w))
+            foreach (var cand in Candidates(site, m, g, w))
             {
                 // The inner tip must land inside THIS void; the channel must
                 // span emitted band material (Band style); the outer tip must
@@ -592,7 +601,8 @@ namespace SolidWorksQrAddIn.Core.Geometry
             /// <summary>
             /// The secondary fallback-ordering distance: a Vent candidate's
             /// tip-cell distance to the preferred window corner; zero for a
-            /// Band candidate (no tiebreak — the locus is fully pinned).
+            /// Band candidate (no tiebreak — the corner locus is fully
+            /// pinned by its inner-edge line).
             /// </summary>
             public int TiebreakDist;
 
@@ -603,14 +613,20 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// Enumerates the locus candidates in fallback order. Band sites:
-        /// the eight arm-end cuts — each of the four arms, one cell in from
-        /// either adjacent corner — ordered by the band cell's distance to
-        /// the window corner nearest the matrix corner. Vent sites: a slot
-        /// from a void arm cell to the matrix edge, directions ordered by
-        /// edge distance, each direction's two arm-end loci ordered by
-        /// distance to that corner. The order is fully deterministic.
+        /// the eight arm-end cuts — each of the four arms, at the ring
+        /// corner its end faces: the channel hugs the void's grown
+        /// inner-edge line at that corner (see <see cref="ChannelAxisAtEdge"/>),
+        /// top/bottom arms running vertically beside the void's left/right
+        /// edge, left/right arms horizontally beside its top/bottom edge —
+        /// ordered by the band cell's distance to the window corner
+        /// nearest the matrix corner. Vent sites: the mirrored rule — a
+        /// slot from the void edge ring's corner cell to the matrix edge,
+        /// hugging the ring's inner grown edge (the emitted interior's
+        /// edge line) at that corner; directions ordered by edge distance,
+        /// each direction's two corner loci ordered by tip distance to
+        /// that corner. The order is fully deterministic.
         /// </summary>
-        private static List<ChannelCandidate> Candidates(FinderSite site, int m, long w)
+        private static List<ChannelCandidate> Candidates(FinderSite site, int m, long g, long w)
         {
             long u = QrInsertionGuard.GridUnitsPerCell;
             var list = new List<ChannelCandidate>();
@@ -620,44 +636,65 @@ namespace SolidWorksQrAddIn.Core.Geometry
             if (!site.Vent)
             {
                 // The eight band cuts: for the top/bottom arms the channel
-                // runs vertically at the second/sixth column; for the
-                // left/right arms horizontally at the second/sixth row.
+                // runs vertically hugging the void's grown left/right
+                // inner-edge line (the second/sixth column's corner-side
+                // grown edge); for the left/right arms horizontally
+                // hugging the grown top/bottom inner-edge line.
                 foreach (int cb in new[] { c0 + 1, c0 + 5 })
                 {
-                    list.Add(BandCand(r0, cb, r0 + 1, cb, r0 - 1, cb, true));
-                    list.Add(BandCand(r0 + 6, cb, r0 + 5, cb, r0 + 7, cb, true));
+                    bool lowSide = cb == c0 + 1;
+                    long axis = ChannelAxisAtEdge(
+                        (long)(lowSide ? c0 + 1 : c0 + 6) * u + (lowSide ? g : -g),
+                        w, voidOnHighSide: lowSide);
+                    list.Add(BandCand(r0, cb, r0 + 1, cb, r0 - 1, cb, true, axis));
+                    list.Add(BandCand(r0 + 6, cb, r0 + 5, cb, r0 + 7, cb, true, axis));
                 }
                 foreach (int rb in new[] { r0 + 1, r0 + 5 })
                 {
-                    list.Add(BandCand(rb, c0, rb, c0 + 1, rb, c0 - 1, false));
-                    list.Add(BandCand(rb, c0 + 6, rb, c0 + 5, rb, c0 + 7, false));
+                    bool lowSide = rb == r0 + 1;
+                    long axis = ChannelAxisAtEdge(
+                        (long)(lowSide ? r0 + 1 : r0 + 6) * u + (lowSide ? g : -g),
+                        w, voidOnHighSide: lowSide);
+                    list.Add(BandCand(rb, c0, rb, c0 + 1, rb, c0 - 1, false, axis));
+                    list.Add(BandCand(rb, c0 + 6, rb, c0 + 5, rb, c0 + 7, false, axis));
                 }
             }
             else
             {
-                // Vent candidates: a slot from the void's arm cell to the
+                // Vent candidates: a slot from the void's corner cell to the
                 // matrix edge, its end landing a half-cell past the border
                 // so the slot vents past the field edge like a dropped
-                // border cell does.
+                // border cell does. The mirrored edge rule puts the slot
+                // one channel width into the void off the edge ring's inner
+                // grown edge (the emitted interior's edge line) at the
+                // corner: a vertical slot beside the inner-left/right edge,
+                // a horizontal slot beside the inner-top/bottom edge.
                 foreach (var (dr, dc) in new[] { (-1, 0), (1, 0), (0, -1), (0, 1) })
                 {
                     int edgeDist = dr < 0 ? r0 : dr > 0 ? m - r0 - 7
                                  : dc < 0 ? c0 : m - c0 - 7;
                     foreach (int k in new[] { 1, 5 })
                     {
-                        int tipR = dr != 0 ? (dr < 0 ? r0 : r0 + 6) : r0 + k;
-                        int tipC = dc != 0 ? (dc < 0 ? c0 : c0 + 6) : c0 + k;
-                        long axis, lo, hi;
                         bool vertical = dr != 0;
+                        int tipR = vertical ? (dr < 0 ? r0 : r0 + 6)
+                                            : (k == 1 ? r0 : r0 + 6);
+                        int tipC = vertical ? (k == 1 ? c0 : c0 + 6)
+                                            : (dc < 0 ? c0 : c0 + 6);
+                        // k == 1 hugs the inner-left (vertical slot) or
+                        // inner-top (horizontal slot) edge — the void lies
+                        // on the edge's low side; k == 5 mirrors.
+                        long axis = ChannelAxisAtEdge(
+                            (long)((k == 1 ? 1 : 6) + (vertical ? c0 : r0)) * u
+                                + (k == 1 ? -g : g),
+                            w, voidOnHighSide: k != 1);
+                        long lo, hi;
                         if (vertical)
                         {
-                            axis = (long)tipC * u + u / 2;
                             lo = dr < 0 ? -u / 2 : (long)tipR * u + u / 2;
                             hi = dr < 0 ? (long)tipR * u + u / 2 : (long)m * u + u / 2;
                         }
                         else
                         {
-                            axis = (long)tipR * u + u / 2;
                             lo = dc < 0 ? -u / 2 : (long)tipC * u + u / 2;
                             hi = dc < 0 ? (long)tipC * u + u / 2 : (long)m * u + u / 2;
                         }
@@ -680,18 +717,16 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
             ChannelCandidate BandCand(
                 int bandR, int bandC, int inR, int inC, int outR, int outC,
-                bool vertical)
+                bool vertical, long axis)
             {
-                long lo, hi, axis;
+                long lo, hi;
                 if (vertical)
                 {
-                    axis = (long)bandC * u + u / 2;
                     lo = Math.Min(outR, inR) * u + u / 2;
                     hi = Math.Max(outR, inR) * u + u / 2;
                 }
                 else
                 {
-                    axis = (long)bandR * u + u / 2;
                     lo = Math.Min(outC, inC) * u + u / 2;
                     hi = Math.Max(outC, inC) * u + u / 2;
                 }
@@ -711,13 +746,38 @@ namespace SolidWorksQrAddIn.Core.Geometry
             }
         }
 
+        /// <summary>
+        /// The channel axis for a slit hugging a void's grown inner-edge
+        /// line at a ring corner: the w-wide corridor sits into the void
+        /// side of the edge (<paramref name="voidOnHighSide"/> says the
+        /// void lies past the edge in the increasing-ordinate direction)
+        /// with its near wall <c>w + MinGridFeatureUnits</c> off the edge —
+        /// the corner remnant edge the mouth leaves on the ring's inner
+        /// boundary is then (w + the grid floor margin) long, itself
+        /// strictly above the insertion floor rather than exactly on it
+        /// (a w-long remnant lands on 0.05 mm to the unit, which the
+        /// delivered-edge check reads as at-or-below the floor; a wall ON
+        /// the grown edge would be a coincident-edge violation; a centred
+        /// straddle would notch the far side's material and leave a
+        /// sub-floor fin at high growth; a wall on the nominal cell line
+        /// buries the tip in grown band material whenever g &gt; w). At
+        /// this inset the inner-edge line still reads as continuing into
+        /// the gap at 0.05 mm widths.
+        /// </summary>
+        private static long ChannelAxisAtEdge(long edge, long w, bool voidOnHighSide)
+        {
+            long inset = w + QrInsertionGuard.MinGridFeatureUnits;
+            return voidOnHighSide ? edge + inset + w / 2 : edge - inset - w + w / 2;
+        }
+
         private static int Dist(int r, int c, int rr, int cc) =>
             Math.Abs(r - rr) + Math.Abs(c - cc);
 
         /// <summary>
         /// The channel rectangle <paramref name="w"/> units wide:
-        /// <paramref name="vertical"/> channels run along the axis (a cell
-        /// column centre-line), horizontal along a row centre-line.
+        /// <paramref name="vertical"/> channels run along the axis (the
+        /// inner-edge-aligned ordinate from <see cref="ChannelAxisAtEdge"/>),
+        /// horizontal likewise on the y ordinate.
         /// <paramref name="lo"/>/<paramref name="hi"/> are the two tip
         /// ordinates — void-cell centres, or a half-cell past the matrix
         /// edge for a vent slot — so each end lands in void free core and
