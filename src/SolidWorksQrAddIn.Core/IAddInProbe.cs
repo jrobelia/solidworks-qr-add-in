@@ -114,7 +114,7 @@ namespace SolidWorksQrAddIn.Core
         /// <summary>
         /// Sets the open-nested-rings option exactly like the pane's
         /// ring-split checkbox (spec #51, ticket #54): under the Square cell
-        /// shape every island-bearing void is opened so no doubly-nested
+        /// shape every island-bearing hole is opened so no doubly-nested
         /// contour survives. Returns "VALID cells=&lt;n&gt; contours=&lt;c&gt;
         /// segs=&lt;s&gt; size=&lt;finalMm&gt;" or "INVALID &lt;kind&gt;
         /// &lt;message&gt;" — below error correction M the verdict is

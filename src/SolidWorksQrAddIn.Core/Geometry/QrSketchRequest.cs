@@ -65,7 +65,7 @@ namespace SolidWorksQrAddIn.Core.Geometry
 
         /// <summary>
         /// Opt-in ring split (spec #51, tickets #52/#53): under the Square
-        /// cell shape, open every island-bearing void in the emitted set —
+        /// cell shape, open every island-bearing hole in the emitted set —
         /// the three finder rings by a thin corner-locus channel subtracted
         /// from the grown subject, every other site by the minimal
         /// module-aligned cell path joining the hole's void to the
