@@ -1,8 +1,9 @@
 # SolidWorks QR Add-In
 
-Generates a **native SolidWorks sketch** of a QR code from text or a URL —
-real contour geometry on a selected plane or planar face, ready to extrude,
-emboss, or engrave. No image tracing, no imported bitmaps.
+A free, open-source **SolidWorks add-in** that generates a **native QR code
+sketch** — real contour geometry on a selected plane or planar face, ready
+to extrude, emboss, engrave, or laser-mark. No image tracing, no imported
+bitmaps, no macros to babysit.
 
 ![QR sketch in a SolidWorks session — grown contours in the graphics area,
 live preview in the QR Sketch task pane](docs/images/ui-fullwindow-40mm-square-url.png)
