@@ -25,7 +25,12 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// ticket-7 performance mode:
     ///   SolidWorksQrAddIn.LiveProbe.exe &lt;deployDir&gt; [progId]
     ///   SolidWorksQrAddIn.LiveProbe.exe perf [deployDir] [progId]
+    ///   SolidWorksQrAddIn.LiveProbe.exe list
     /// where deployDir contains the registered SolidWorksQrAddIn.dll.
+    /// `list` prints the mode registry without touching COM; named modes
+    /// dispatch through the GateHost registry — hosted gates run the
+    /// shared live-session ceremony (see GateHost.cs), unmigrated modes
+    /// dispatch to their legacy bodies.
     /// `perf` times QR generation (no SolidWorks needed) and — only on a
     /// session-free invisible instance — native sketch insertion for
     /// representative short/medium/dense payloads.
@@ -139,43 +144,29 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         public static int Main(string[] args)
         {
-            // `perf` mode (ticket 7): generation + native-insertion timings
-            // for representative payloads. `perf` consumes args[0]; the rest
-            // keep the usual <deployDir> <progId> shape.
+            // `list` prints the mode registry and exits — it must never
+            // touch COM.
             if (args.Length > 0 &&
-                string.Equals(args[0], "perf", StringComparison.OrdinalIgnoreCase))
-                return PerfMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "undoapi", StringComparison.OrdinalIgnoreCase))
-                return UndoApiMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "units", StringComparison.OrdinalIgnoreCase))
-                return UnitsMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "xsettings", StringComparison.OrdinalIgnoreCase))
-                return XsettingsMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "pattern", StringComparison.OrdinalIgnoreCase))
-                return PatternSpikeMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "circledims", StringComparison.OrdinalIgnoreCase))
-                return CircleDimsMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "circleladder", StringComparison.OrdinalIgnoreCase))
-                return CircleLadderMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "circles", StringComparison.OrdinalIgnoreCase))
-                return CircleGatesMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "circlediag", StringComparison.OrdinalIgnoreCase))
-                return CircleDiagMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "swprops", StringComparison.OrdinalIgnoreCase))
-                return SwpropsMain(args.Skip(1).ToArray());
-            if (args.Length > 0 &&
-                string.Equals(args[0], "ringsplit", StringComparison.OrdinalIgnoreCase))
-                return RingsplitMain(args.Skip(1).ToArray());
+                string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
+                return GateHost.ListModes();
 
+            // The registry is the dispatch table — hosted modes run the
+            // GateHost ceremony; unmigrated modes dispatch to their legacy
+            // bodies. Anything else falls through to the default suite.
+            var mode = FindMode(args.Length > 0 ? args[0] : null);
+            if (mode?.Run != null)
+                return GateHost.Run(mode, args.Skip(1).ToArray());
+            if (mode?.LegacyMain != null)
+                return mode.LegacyMain(args.Skip(1).ToArray());
+            return DefaultMain(args);
+        }
+
+        /// <summary>
+        /// The unnamed default suite (tickets 2–6 checks retained) — runs
+        /// when no registry verb matches; args[0] is the deploy dir.
+        /// </summary>
+        private static int DefaultMain(string[] args)
+        {
             string deployDir = args.Length > 0
                 ? args[0]
                 : Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
@@ -3026,118 +3017,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                 }
             }
             return null;
-        }
-
-        /// <summary>
-        /// `LiveProbe.exe circledims [deployDir] [progId]` — the ticket-#40
-        /// live gate on the REAL add-in path: a circle-mode create through
-        /// the session, the PatternDimsProbe surface, a master-dim rescale
-        /// via SetPatternDimProbe, then re-census. Session-free instance
-        /// only — same attach/refuse discipline as the default mode.
-        /// </summary>
-        private static int CircleDimsMain(string[] args)
-        {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
-
-            Console.WriteLine("# ticket-#40 circle-mode dims/equations live gate");
-            ISldWorks? sw = null;
-            try
-            {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-
-                var probe = TryGetProbe(sw);
-                if (probe == null)
-                {
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
-                    probe = TryGetProbe(sw);
-                }
-                Check(probe != null, "GetAddInObject returns the probe interface",
-                    probe == null ? "null" : "obtained");
-                if (probe == null) return 1;
-
-                Check(probe.SetQrField("content", PayloadA).StartsWith("VALID"),
-                    "probe payload accepted", probe.WindowStateProbe());
-                Check(probe.SetQrField("shape", "circle").StartsWith("VALID"),
-                    "circle shape accepted", probe.WindowStateProbe());
-                Check(probe.SetQrField("param", "90").StartsWith("VALID"),
-                    "dot size 90 accepted", probe.SetQrField("param", "90"));
-
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
-                Check(File.Exists(template), "default part template exists", template);
-                var doc = sw.NewDocument(template, 0, 0, 0) as IModelDoc2;
-                Check(doc != null, "part document created", doc == null ? "null" : "ok");
-                if (doc == null) return 1;
-                var ext = (IModelDocExtension)doc.Extension;
-                var mgr = (ISketchManager)doc.SketchManager;
-                doc.ClearSelection2(true);
-                Check(ext.SelectByID2("Front Plane", "PLANE", 0, 0, 0, false, 0, null,
-                        (int)swSelectOption_e.swSelectOptionDefault),
-                    "Front Plane selected as insertion support");
-
-                string created = probe.CreateQrFromWindowProbe();
-                Check(created.StartsWith("OK"), "circle-mode create succeeds", created);
-                if (!created.StartsWith("OK")) return 1;
-                string skName = created.Split(' ')[1];
-
-                string census = probe.PatternCensusProbe(skName);
-                Check(census.StartsWith("PATCENSUS"), "census on the open sketch", census);
-                string dims = probe.PatternDimsProbe(skName);
-                Check(dims.StartsWith("PATDIMS") && dims.Contains("eqs=8")
-                        && dims.Contains("mode=circle"),
-                    "dim census + 8 equations on the circle sketch", dims);
-
-                // Exit edit mode — committed-state reads are the accurate
-                // ones (in-edit spacing-dim reads can be stale, PAT12).
-                mgr.InsertSketch(false);
-                doc.ClearSelection2(true);
-
-                double boxM = ParseDimMm(dims, "D1");
-                Check(boxM > 0.0, "master dim D1 resolved from census", $"D1={boxM * 1000}mm");
-                if (boxM <= 0.0) return 1;
-                string set = probe.SetPatternDimProbe($"D1@{skName}", boxM * 2.0);
-                Check(set.StartsWith("PATSET") && set.Contains($"{boxM * 2000.0:F4}mm"),
-                    "master dim rescale accepted", set);
-
-                string dims2 = probe.PatternDimsProbe(skName);
-                double pitch1 = ParseDimMm(dims, "D5");    // spacingX — creation order
-                double pitch2 = ParseDimMm(dims2, "D5");
-                Check(dims2.Contains("eqs=8"), "equations intact after rescale", dims2);
-                Check(pitch1 > 0 && Math.Abs(pitch2 - pitch1 * 2.0) < 1e-9,
-                    "spacing dim doubled with the master", dims2);
-
-                string census2 = probe.PatternCensusProbe(skName);
-                Check(census2.StartsWith("PATCENSUS") && census2.Contains("regions="),
-                    "census after rescale", census2);
-
-                Console.WriteLine(_failures == 0 ? "# CIRCLEDIMS ALL PASSED"
-                    : $"# {_failures} check(s) failed");
-                return _failures == 0 ? 0 : 1;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
-                return 1;
-            }
-            finally
-            {
-                TeardownSpawned(sw);
-            }
         }
 
         /// <summary>

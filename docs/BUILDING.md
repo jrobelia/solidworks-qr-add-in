@@ -237,7 +237,16 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe ringsplit $deploy   # ticket-#55 ring-split (open nested rings) gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe list                # the mode registry — gates vs spikes/diagnostics, no COM
 ```
+
+Modes dispatch through the GateHost registry (ticket #61): a hosted gate
+(`circledims` so far) runs the shared live-session ceremony — expectations
+print, the uniform occupied-seat refusal (a running SLDWORKS.exe is never a
+valid target), launch + startup wait, the visible/open-documents refusal,
+probe acquisition with the LoadAddIn retry, pass/fail summary, and teardown
+that kills only the spawned PID — while unmigrated modes keep their own
+bodies.
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
 gate: session plumbing and state round-trips, the emitted-dot census
