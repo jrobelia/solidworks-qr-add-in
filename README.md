@@ -19,8 +19,9 @@ geometry the sketch gets, pixel-for-pixel.)*
 - **Growth compensation and invert** — module edge growth for
   manufacturing/marking, plus inverted (light-cell) polarity
 - **ECC level** L/M/Q/H, automatic version selection
-- **SW Properties content** — resolve the payload from the active part's
-  custom properties (`$PRP` templates)
+- **Content modes** — Raw text, URL, WiFi, Contact (vCard), E-mail, SMS,
+  Phone call, Geolocation, and SW Properties (payload resolved from the
+  active part's custom properties via `$PRP` templates)
 - **Open nested rings** (opt-in) — thin corner slits through the three
   finder rings plus module-aligned cell drops open every island-bearing
   void, so SolidWorks' automatic profile selection can extrude the code
@@ -31,6 +32,7 @@ geometry the sketch gets, pixel-for-pixel.)*
 
 | | |
 |---|---|
+| **Task pane** — live preview renders the exact delivered geometry; the QR details block reports the resolved grid, cell size, and ring-split treatment: | ![QR Sketch task pane](docs/images/ui-40mm-square-url.png) |
 | **Open nested rings** — the split code looks identical at code scale: | ![ring-split QR](docs/images/qr-ringsplit.png) |
 | **Finder slit, zoomed** — a ~0.05 mm channel at the ring corner, hugging the inner edge, opens the nested ring: | ![finder slit close-up](docs/images/qr-ringsplit-zoom.png) |
 | **Inverted polarity** — light cells emit; egress vents through the quiet zone by the same thin channel: | ![inverted QR](docs/images/qr-inverted.png) |
