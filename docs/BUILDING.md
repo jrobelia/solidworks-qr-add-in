@@ -248,8 +248,9 @@ raw args (its arg0 is the deployDir):
 
 Every mode is a row in the GateHost registry (tickets #61–#63), grouped by
 category exactly as `list` prints them: **gates** return pass/fail
-verdicts and keep `*-GATES.md` records — the default suite, `circledims`,
-`circles`, `xsettings`, `swprops`, `ringsplit`, `units`; **spikes** and
+verdicts (the recorded runs live in the `*-GATES.md` files) — the
+default suite, `circledims`, `circles`, `xsettings`, `swprops`,
+`ringsplit`, `units`; **spikes** and
 **diagnostics** produce evidence rather than verdicts — `perf`, `undoapi`,
 `pattern`, `circleladder`, `circlediag`. GateHost (`GateHost.cs` +
 `SessionCeremony.cs`) owns the live-session ceremony once for all of

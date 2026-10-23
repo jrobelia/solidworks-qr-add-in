@@ -561,7 +561,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
             /// <summary>
             /// Staged preset-field text by descriptor key — last write wins
-            /// per key, insertion-ordered like the fixed fields drain.
+            /// per key; the drain order across keys is not significant.
             /// </summary>
             public readonly Dictionary<string, string> PresetFields =
                 new Dictionary<string, string>();
