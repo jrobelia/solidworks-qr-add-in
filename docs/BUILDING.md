@@ -238,7 +238,7 @@ raw args (its arg0 is the deployDir):
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe ringsplit $deploy   # ticket-#55 ring-split (open nested rings) gates
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy     # generation + insertion timings spike
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy     # generation + insertion timings gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe undoapi $deploy  # SetApiUndoObject verification spike
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circleladder $deploy  # circle-mode density-ladder spike ([refuse])
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe pattern          # sketch-pattern spike — [progId] [PAT<n>], probe-free
@@ -250,8 +250,8 @@ Every mode is a row in the GateHost registry (tickets #61–#63), grouped by
 category exactly as `list` prints them: **gates** return pass/fail
 verdicts (the recorded runs live in the `*-GATES.md` files) — the
 default suite, `circledims`, `circles`, `xsettings`, `swprops`,
-`ringsplit`, `units`; **spikes** and
-**diagnostics** produce evidence rather than verdicts — `perf`, `undoapi`,
+`ringsplit`, `units`, `perf`; **spikes** and
+**diagnostics** produce evidence rather than verdicts — `undoapi`,
 `pattern`, `circleladder`, `circlediag`. GateHost (`GateHost.cs` +
 `SessionCeremony.cs`) owns the live-session ceremony once for all of
 them: the mode's expectations print, the occupied-seat refusal, launch +

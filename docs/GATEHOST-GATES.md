@@ -40,9 +40,9 @@ Verified on this branch (Debug|x64 build):
 - `dotnet build tools/LiveProbe` — **clean: 0 warnings, 0 errors**.
 - `dotnet test tests/SolidWorksQrAddIn.Tests` — **765 passed, 0 failed**.
 - `LiveProbe.exe list` — exit 0, prints the registry without touching
-  COM: **12 modes, 12 hosted by GateHost, 0 legacy** — 7 gates
+  COM: **12 modes, 12 hosted by GateHost, 0 legacy** — 8 gates
   (`(default)`, `circledims`, `circles`, `xsettings`, `swprops`,
-  `ringsplit`, `units`), 4 spikes (`perf`, `undoapi`, `pattern`,
+  `ringsplit`, `units`, `perf`), 3 spikes (`undoapi`, `pattern`,
   `circleladder`), 1 diagnostic (`circlediag`).
 
 ## What the smoke run proves — and what it doesn't re-prove

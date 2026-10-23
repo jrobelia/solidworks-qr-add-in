@@ -514,12 +514,10 @@ namespace SolidWorksQrAddIn.LiveProbe
                     : "obtained",
                 Run = UnitsRun,
             },
-
-            // ---- spikes / diagnostics (evidence harnesses) ----
             new LiveMode
             {
                 Name = "perf",
-                Category = GateCategory.Spike,
+                Category = GateCategory.Gate,
                 Summary = "generation + native-insertion timings",
                 SummaryLine = (f, l) => f == 0
                     ? "# PERF DONE"
@@ -528,6 +526,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                 ProbeFirstTry = _perfGate.RevisionBanner,
                 Run = _perfGate.Run,
             },
+
+            // ---- spikes / diagnostics (evidence harnesses) ----
             new LiveMode
             {
                 Name = "undoapi",

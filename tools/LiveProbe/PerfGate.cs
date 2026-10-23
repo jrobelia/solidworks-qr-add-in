@@ -9,7 +9,7 @@ using SolidWorks.Interop.swconst;
 namespace SolidWorksQrAddIn.LiveProbe
 {
     /// <summary>
-    /// The `perf` spike migrated onto GateHost (#62): the generation timing
+    /// The `perf` gate migrated onto GateHost (#62): the generation timing
     /// half is the expectations print (host-independent — it always runs,
     /// ahead of the occupied-seat refusal, and prints the PERF lines a
     /// blocked run would still show); the native-insertion half is the Run
