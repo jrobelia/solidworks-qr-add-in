@@ -649,8 +649,8 @@ namespace SolidWorksQrAddIn.LiveProbe
                 "master dim rescale accepted", set);
 
             string dims2 = probe.PatternDimsProbe(skName);
-            double pitch1 = ParseDimMm(dims, "D5");    // spacingX — creation order
-            double pitch2 = ParseDimMm(dims2, "D5");
+            double pitch1 = ParseDimMm(dims, "D6");    // spacingX — D5 is the between-axes angle (fb18caa)
+            double pitch2 = ParseDimMm(dims2, "D6");
             session.Check(dims2.Contains("eqs=8"), "equations intact after rescale", dims2);
             session.Check(pitch1 > 0 && Math.Abs(pitch2 - pitch1 * 2.0) < 1e-9,
                 "spacing dim doubled with the master", dims2);

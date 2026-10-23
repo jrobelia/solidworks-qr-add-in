@@ -87,7 +87,7 @@ driving dim — is reachable as a transformation, not a second emission:
    single sketch point the closed rectangle's two edges share, so one
    bind constrains both edges meeting there.
 3. Re-point the **two spacing equations only** at the part's driving
-   dim: `"D5" = "D1@PlateSketch"/N`, `"D6" = "D1@PlateSketch"/N`.
+   dim: `"D6" = "D1@PlateSketch"/N`, `"D7" = "D1@PlateSketch"/N`.
    Diameter, seed offsets and both quiet-zone dims all follow through
    the spacing names — nothing else needs editing.
 
