@@ -240,17 +240,20 @@ from its own build output, passing the deployed folder:
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe list                # the mode registry — gates vs spikes/diagnostics, no COM
 ```
 
-Modes dispatch through the GateHost registry (tickets #61/#62): every
-production gate — the default suite, `circledims`, `circles`, `xsettings`,
-`swprops`, `ringsplit`, `units`, `perf`, and the `circlediag` diagnostic —
-runs the shared live-session ceremony: the mode's expectations print, the
-uniform occupied-seat refusal (a running SLDWORKS.exe is never a valid
-target — `perf`'s legacy body skipped that check and now refuses like the
+Modes dispatch through the GateHost registry (tickets #61–#63): every
+mode — the default suite, `circledims`, `circles`, `xsettings`, `swprops`,
+`ringsplit`, `units`, the `perf`, `undoapi`, `pattern` and `circleladder`
+spikes, and the `circlediag` diagnostic — runs the shared live-session
+ceremony: the mode's expectations print, the uniform occupied-seat
+refusal (a running SLDWORKS.exe is never a valid target — `perf` and
+`undoapi`'s legacy bodies skipped that check and now refuse like the
 rest), launch + startup wait, the visible/open-documents refusal, probe
 acquisition with the per-gate surface predicate and the LoadAddIn retry,
-pass/fail summary, and teardown that kills only the spawned PID. Only the
-`undoapi`, `pattern` and `circleladder` spikes keep their own bodies
-(ticket #63).
+pass/fail summary, and teardown that kills only the spawned PID.
+`pattern` is the probe-free exception — it drives raw `ISldWorks` and
+keeps its `[progId] [PAT<n>]` arg shape (`LiveProbe.exe pattern 12`);
+`circleladder` keeps `[deployDir] [progId] [refuse]`. `Program.cs` is the
+registry lookup + execute only — nothing dispatches outside the registry.
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
 gate: session plumbing and state round-trips, the emitted-dot census

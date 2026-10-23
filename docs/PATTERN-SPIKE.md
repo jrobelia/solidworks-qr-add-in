@@ -2,9 +2,10 @@
 
 Live evidence, SolidWorks 2023 SP5 (rev 31.5.0), session-free invisible
 instance (`SldWorks.Application.31`, `Visible=False`), default part template.
-Driver: `tools/LiveProbe` **`pattern` mode** (`PatternSpikeMain` in
-`tools/LiveProbe/PatternSpike.cs`) — runs twelve experiments against
-`ISldWorks` out-of-process on fresh throwaway parts; nothing is saved.
+Driver: `tools/LiveProbe` **`pattern` mode** (`PatternRun` in
+`tools/LiveProbe/PatternSpike.cs`, hosted on GateHost since #63) — runs
+twelve experiments against `ISldWorks` out-of-process on fresh throwaway
+parts; nothing is saved.
 
 **Spike question (from the parent ticket):** can a QR be built as *real
 circle sketch entities* — one seed circle + a two-directional **sketch**
