@@ -22,7 +22,7 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// support/convention probes, the ticket-6 failure-handling block, and
     /// the sketch-census readers the "untouched sketch" checks reuse. The
     /// shared multi-gate helpers (VerifyXsettingsBlock, FeatureChecks,
-    /// CreateBackingPlate, FindTopFace, …) stay in Program.cs.
+    /// CreateBackingPlate, FindTopFace, …) live in SharedVerify.cs (#63).
     /// </summary>
     public static partial class Program
     {

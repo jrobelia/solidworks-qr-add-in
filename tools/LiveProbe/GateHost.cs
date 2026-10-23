@@ -16,18 +16,19 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// is never a valid target — a spawned instance still shares per-user
     /// state with it; no gate opts out), launch + startup wait, the
     /// visible/open-documents refusal, probe acquisition (including the
-    /// LoadAddIn retry and a per-gate capability predicate), teardown
-    /// (restore the captured AddInsStartup flag, close documents, kill the
-    /// spawned process by PID — never ExitApp, never taskkill /IM), and the
-    /// pass/fail summary + exit code.
+    /// LoadAddIn retry and a per-gate capability predicate — skipped
+    /// entirely by a probe-free spike), teardown (restore the captured
+    /// AddInsStartup flag, close documents, kill the spawned process by
+    /// PID — never ExitApp, never taskkill /IM), and the pass/fail summary
+    /// + exit code.
     ///
-    /// A gate is a small <see cref="LiveMode"/> registration: a name, a
+    /// A mode is a small <see cref="LiveMode"/> registration: a name, a
     /// category (gates vs spikes/diagnostics), an expectations print, an
     /// optional probe-surface predicate, and a <see cref="LiveMode.Run"/>
     /// check sequence driven against a <see cref="LiveSession"/>. The
-    /// registry is Main's dispatch table — `list` prints it without
-    /// touching COM, hosted rows run the ceremony here, and unmigrated
-    /// modes keep their <see cref="LiveMode.LegacyMain"/> bodies untouched.
+    /// registry is Main's ONLY dispatch table — `list` prints it without
+    /// touching COM and every row runs the ceremony here (ticket #63
+    /// deleted the last legacy bodies).
     /// </summary>
     public static partial class Program
     {
@@ -40,9 +41,10 @@ namespace SolidWorksQrAddIn.LiveProbe
         private enum GateCategory { Gate, Spike, Diagnostic }
 
         /// <summary>
-        /// One registry row. Hosted rows carry <see cref="Run"/> (the gate
-        /// check sequence); legacy rows carry <see cref="LegacyMain"/> and
-        /// dispatch to the unmigrated body verbatim.
+        /// One registry row — every mode is hosted, carrying
+        /// <see cref="Run"/> (the check sequence the ceremony drives) plus
+        /// the expectations/banner/probe hooks the ceremony calls at their
+        /// positions.
         /// </summary>
         private sealed class LiveMode
         {
@@ -108,13 +110,26 @@ namespace SolidWorksQrAddIn.LiveProbe
             public string ProbeCheckName { get; set; } =
                 "GetAddInObject returns the probe interface";
             /// <summary>
+            /// Parses the post-verb args into (deployDir, progId) — null
+            /// selects the standard `[deployDir] [progId]` shape
+            /// (<see cref="GateHost.StandardArgs"/>). A spike whose args
+            /// don't fit it (`pattern`'s `[progId] [PAT<n>]`) supplies its
+            /// own; extra per-mode arguments still reach the mode verbatim
+            /// through <see cref="LiveSession.Args"/>.
+            /// </summary>
+            public Func<string[], (string deployDir, string progId)>? ParseArgs { get; set; }
+            /// <summary>
+            /// false for the raw-API spikes that never load the add-in
+            /// (`pattern`) — the ceremony skips probe acquisition entirely
+            /// and <see cref="LiveSession.Probe"/> throws if consulted.
+            /// </summary>
+            public bool UsesProbe { get; set; } = true;
+            /// <summary>
             /// The hosted check sequence — return 0 to let the host print
             /// the pass/fail summary, non-zero to abort immediately (the
             /// legacy `return 1` early-outs).
             /// </summary>
             public Func<LiveSession, int>? Run { get; set; }
-            /// <summary>The unmigrated mode body — dispatched verbatim.</summary>
-            public Func<string[], int>? LegacyMain { get; set; }
             /// <summary>true when the mode runs the GateHost ceremony.</summary>
             public bool Hosted => Run != null;
             /// <summary>The probe verdict the capability gate applies.</summary>
@@ -130,20 +145,36 @@ namespace SolidWorksQrAddIn.LiveProbe
         /// </summary>
         private sealed class LiveSession
         {
-            public LiveSession(ISldWorks sw, IAddInProbe probe,
-                string deployDir, string dllPath)
+            private readonly IAddInProbe? _probe;
+
+            public LiveSession(ISldWorks sw, IAddInProbe? probe,
+                string deployDir, string dllPath, string[] args)
             {
                 Sw = sw;
-                Probe = probe;
+                _probe = probe;
                 DeployDir = deployDir;
                 DllPath = dllPath;
+                Args = args;
             }
 
             public ISldWorks Sw { get; }
-            public IAddInProbe Probe { get; }
+            /// <summary>
+            /// The acquired probe surface — throws when a probe-free spike
+            /// (<see cref="LiveMode.UsesProbe"/> = false) is consulted for
+            /// one: its ceremony never acquired a probe.
+            /// </summary>
+            public IAddInProbe Probe => _probe ?? throw new InvalidOperationException(
+                "a probe-free spike's ceremony acquired no IAddInProbe");
             public string DeployDir { get; }
             /// <summary>deployDir + the add-in dll — the LoadAddIn target.</summary>
             public string DllPath { get; }
+            /// <summary>
+            /// The post-verb args verbatim — a mode's own extra arguments
+            /// (`pattern`'s PAT<n> number, `circleladder`'s `refuse` flag)
+            /// parse inside the mode off this, whatever shape
+            /// <see cref="LiveMode.ParseArgs"/> gave the ceremony.
+            /// </summary>
+            public string[] Args { get; }
 
             /// <summary>The run's failure tally — the host summary reads it.</summary>
             public int Failures => Program._failures;
@@ -218,20 +249,21 @@ namespace SolidWorksQrAddIn.LiveProbe
                 }
             }
 
+            /// <summary>The standard `[deployDir] [progId]` arg shape.</summary>
+            private static (string deployDir, string progId) StandardArgs(string[] args) =>
+                (args.Length > 0 ? args[0] : DefaultDeployDir,
+                 args.Length > 1 ? args[1] : "SldWorks.Application.31");
+
             /// <summary>
             /// Runs one hosted mode through the live-session ceremony:
-            /// expectations print → occupied-seat refusal → launch →
-            /// startup wait → visible/open-docs refusal → probe acquisition
-            /// → the gate's Run(session) → pass/fail summary → teardown.
+            /// the mode's arg parse → expectations print → occupied-seat
+            /// refusal → launch → startup wait → visible/open-docs refusal
+            /// → probe acquisition (skipped for a probe-free spike) → the
+            /// mode's Run(session) → pass/fail summary → teardown.
             /// </summary>
             public static int Run(LiveMode mode, string[] args)
             {
-                string deployDir = args.Length > 0
-                    ? args[0]
-                    : Path.Combine(System.Environment.GetFolderPath(
-                            System.Environment.SpecialFolder.LocalApplicationData),
-                        "SolidWorksQrAddIn");
-                string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
+                var (deployDir, progId) = mode.ParseArgs?.Invoke(args) ?? StandardArgs(args);
                 string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
 
                 // Expectations BEFORE the refusal — a run blocked by an
@@ -271,31 +303,36 @@ namespace SolidWorksQrAddIn.LiveProbe
                     }
                     _spawnedFresh = true;
 
-                    // Probe acquisition — an auto-loaded answering build may
-                    // be stale, so the capability predicate decides; a
+                    // Probe acquisition — skipped entirely for a probe-free
+                    // spike (UsesProbe=false). An auto-loaded answering build
+                    // may be stale, so the capability predicate decides; a
                     // failure retries through unload + LoadAddIn. The
                     // ProbeFirstTry hook keeps a gate's own discovery check
                     // at its legacy position (before the retry decides).
-                    var probe = TryGetProbe(sw);
-                    mode.ProbeFirstTry?.Invoke(sw, probe);
-                    if (!mode.SurfaceOk(probe))
+                    IAddInProbe? probe = null;
+                    if (mode.UsesProbe)
                     {
-                        var stale = mode.UnloadCandidates?.Invoke(dllPath)
-                                    ?? new[] { dllPath };
-                        foreach (var p in stale)
-                            try { sw.UnloadAddIn(p); } catch { }
-                        int loadResult = sw.LoadAddIn(dllPath);
-                        Check(loadResult == 0, "LoadAddIn",
-                            $"returned {loadResult} for {dllPath}");
                         probe = TryGetProbe(sw);
+                        mode.ProbeFirstTry?.Invoke(sw, probe);
+                        if (!mode.SurfaceOk(probe))
+                        {
+                            var stale = mode.UnloadCandidates?.Invoke(dllPath)
+                                        ?? new[] { dllPath };
+                            foreach (var p in stale)
+                                try { sw.UnloadAddIn(p); } catch { }
+                            int loadResult = sw.LoadAddIn(dllPath);
+                            Check(loadResult == 0, "LoadAddIn",
+                                $"returned {loadResult} for {dllPath}");
+                            probe = TryGetProbe(sw);
+                        }
+                        bool surfaceOk = mode.SurfaceOk(probe);
+                        Check(surfaceOk, mode.ProbeCheckName,
+                            mode.ProbeCheckDetail?.Invoke(probe)
+                                ?? (probe == null ? "null" : "obtained"));
+                        if (probe == null || !surfaceOk) return 1;
                     }
-                    bool surfaceOk = mode.SurfaceOk(probe);
-                    Check(surfaceOk, mode.ProbeCheckName,
-                        mode.ProbeCheckDetail?.Invoke(probe)
-                            ?? (probe == null ? "null" : "obtained"));
-                    if (probe == null || !surfaceOk) return 1;
 
-                    var session = new LiveSession(sw, probe, deployDir, dllPath);
+                    var session = new LiveSession(sw, probe, deployDir, dllPath, args);
                     int gateExit = mode.Run!(session);
                     if (gateExit != 0) return gateExit;
 
@@ -332,10 +369,11 @@ namespace SolidWorksQrAddIn.LiveProbe
 
         // ============================ the registry ============================
 
-        // The hosted gate instances — one per migrated gate, carrying the
-        // expectations→run state each gate's own file declares (#62). Field
-        // order matters: the gates initialize before DefaultMode/Modes so
-        // the registry's method groups bind to live instances.
+        // The hosted mode instances — one per migrated gate/spike, carrying
+        // the expectations→run state each mode's own file declares
+        // (#62/#63). Field order matters: the modes initialize before
+        // DefaultMode/Modes so the registry's method groups bind to live
+        // instances.
         private static readonly DefaultSuiteGate _defaultGate = new DefaultSuiteGate();
         private static readonly PerfGate _perfGate = new PerfGate();
         private static readonly XsettingsGate _xsettingsGate = new XsettingsGate();
@@ -343,6 +381,8 @@ namespace SolidWorksQrAddIn.LiveProbe
         private static readonly SwpropsGate _swpropsGate = new SwpropsGate();
         private static readonly RingsplitGate _ringsplitGate = new RingsplitGate();
         private static readonly CircleDiagGate _circlediagGate = new CircleDiagGate();
+        private static readonly UndoApiSpike _undoApiSpike = new UndoApiSpike();
+        private static readonly CircleLadderSpike _circleLadderSpike = new CircleLadderSpike();
 
         /// <summary>
         /// The unnamed default-suite row — list-visible only; it runs when
@@ -365,10 +405,9 @@ namespace SolidWorksQrAddIn.LiveProbe
         };
 
         /// <summary>
-        /// Main's dispatch table — every live mode exactly once. Hosted rows
-        /// run the GateHost ceremony; legacy rows dispatch to the unmigrated
-        /// `*Main` bodies (after #62 only the three spikes remain legacy —
-        /// they are #63's job).
+        /// Main's only dispatch table — every live mode exactly once, all
+        /// hosted on the GateHost ceremony (after #63 nothing dispatches
+        /// outside the registry).
         /// </summary>
         private static readonly LiveMode[] Modes =
         {
@@ -494,21 +533,41 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Name = "undoapi",
                 Category = GateCategory.Spike,
                 Summary = "SetApiUndoObject verification spike",
-                LegacyMain = UndoApiMain,
+                SummaryPass = "UNDO-API ALL PASSED",
+                Expectations = _undoApiSpike.Expectations,
+                ProbeFirstTry = _undoApiSpike.RevisionBanner,
+                // The probe-surface test IS the warm-up — the verdict line
+                // is retained so the experiment still runs exactly once.
+                ProbeSurface = _undoApiSpike.ProbeSurface,
+                UnloadCandidates = _undoApiSpike.UnloadCandidates,
+                Run = _undoApiSpike.Run,
             },
             new LiveMode
             {
                 Name = "pattern",
                 Category = GateCategory.Spike,
                 Summary = "sketch-linear-pattern QR-dot spike (PAT<n>)",
-                LegacyMain = PatternSpikeMain,
+                SummaryPass = "PAT DONE",
+                Expectations = PatternExpectations,
+                // `[progId] [PAT<n>]`, not `[deployDir] [progId]` — and the
+                // spike drives raw ISldWorks, so probe acquisition is off.
+                ParseArgs = PatternParseArgs,
+                UsesProbe = false,
+                Run = PatternRun,
             },
             new LiveMode
             {
                 Name = "circleladder",
                 Category = GateCategory.Spike,
                 Summary = "circle-mode instance-bound density ladder",
-                LegacyMain = CircleLadderMain,
+                // The refuse pass prints its own summary shape.
+                SummaryLine = (f, l) => _circleLadderSpike.RefuseOnly
+                    ? (f == 0 ? "# CIRCLELADDER REFUSE ALL PASSED"
+                        : $"# {f} refuse check(s) failed")
+                    : (f == 0 ? "# CIRCLELADDER DONE"
+                        : $"# {f} check(s) failed"),
+                Expectations = _circleLadderSpike.Expectations,
+                Run = _circleLadderSpike.Run,
             },
             new LiveMode
             {
