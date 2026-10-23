@@ -31,7 +31,7 @@ built from this branch (`scripts\sync-dev-deploy.ps1` first).
 
 | Date | Build/commit | SW revision | Mode | Result | Exit |
 |------|--------------|-------------|------|--------|------|
-| _pending_ | _branch `ticket-64-verify-docs`_ | — | `circledims` | — | — |
+| _pending_ | _branch `integration/spec-67-probe-gatehost`_ | — | `circledims` | — | — |
 
 ## Headless verification (done — no SolidWorks)
 
