@@ -2,6 +2,16 @@
 
 Standalone SolidWorks add-in that generates a native QR sketch from text or a URL. Original MVP: GitHub issue #8. Design evidence and rationale: `docs/RESEARCH.md`.
 
+## User Guidelines
+
+### Who is the user?
+
+The user is the engineer and domain expert who is using this add-in to manage parts and assemblies in SolidWorks and InvenTree. They are not a software developer.
+
+### Reporting
+
+When reporting information to me, be extremely concise and sacrifice grammar for the sake of concision.
+
 ## Agent skills
 
 ### Issue tracker

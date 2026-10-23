@@ -98,6 +98,37 @@ Prerequisite gate: the wizard refuses to start on machines without .NET
 Framework 4.8 (NDP `Release` ≥ 528040) — RegAsm itself ships with 4.x, so
 a bare file check would let 4.6/4.7 hosts through and fail mid-install.
 
+**Installer branding.** The setup exe and the generated uninstaller exe carry
+the QR-glyph icon (`SetupIconFile` — Inno re-embeds it into the uninstaller),
+Settings → Apps uses `UninstallDisplayIcon` on the same checked-in
+`qr-addin.ico`, and the wizard's left banner + corner images are PNGs
+rendered from `QrIconGlyph` by `Installer\Generate-InstallerAssets.ps1` at
+Inno's published per-DPI sizes (it also rewrites `qr-addin.ico`; re-run it
+whenever the glyph changes). The glyph encodes the repo URL at ECC L — the
+icon scans to the project page — and sits on an opaque white quiet zone so
+it stays legible on dark themes/taskbars. Renders pick a glyph per size:
+below 64px the 29-module symbol can't resolve, so 32–63px switch to the
+compact glyph — a real, scannable version-1 (21×21) QR that decodes to
+`SOLIDWORKS-QR-ADD-IN` — and below 32px to `QrIconGlyph`'s 17×17 mini
+motif (decorative, not scannable), whose finder eyes draw as QR-target
+rectangles so ring/gap/core proportions hold at fractional cell sizes.
+That covers the tab icon, small toolbar/ico frames, and the smallest
+wizard badge. The product DLLs embed the same
+ico via `<ApplicationIcon>` — takes effect on the next build/pack. If Explorer shows
+a generic icon on a rebuilt same-name exe, that's the Windows icon cache —
+`ie4uinit.exe -ClearIconCache` or a rename clears it.
+
+**Uninstaller name in UAC.** Inno's generated uninstaller is always
+`unins000.exe` — and because it is unsigned, UAC shows that raw filename.
+`CurStepChanged(ssPostInstall)` renames the exe+dat+msg trio to
+`SolidWorks QR Add-In Uninstall.*` (the stub finds its data file via
+`PathChangeExt(ParamStr(0))`, so the pair survives renaming) and repoints
+`UninstallString`/`QuietUninstallString`; any failure reverts to the stock
+names, so uninstall can never be broken by this step. UAC then shows the
+descriptive filename. What it still shows is "Unknown publisher" — the only
+fix for that is Authenticode-signing the installer, which would also let the
+signature's `/d` description name both prompts.
+
 ## Install (per-user, no admin) — dev/fallback route
 
 > Note (verified 2026-10-09): this route registers the add-in so COM

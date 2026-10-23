@@ -22,17 +22,22 @@
 #define AppName "SolidWorks QR Add-In"
 #define DeployDir "..\deploy\SolidWorksQrAddIn"
 #define RegAsm "{win}\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"
+; Freshly generated uninstall identity — deliberately NOT the add-in's COM
+; CLSID {DA932451-66B9-4092-9534-292AD913DEAC} and NOT the InvenTree add-in's
+; GUID. A stable AppId lets Inno recognise previous installs and upgrade
+; them in place; it is also the Uninstall registry key name ({...}_is1).
+#define AppIdGuid "{EFF08964-4543-45AC-9CDC-867500E50276}"
 
 [Setup]
-; Freshly generated uninstall identity ({EFF08964-…}) — deliberately NOT the
-; add-in's COM CLSID {DA932451-66B9-4092-9534-292AD913DEAC} and NOT the
-; InvenTree add-in's GUID. A stable AppId lets Inno recognise previous
-; installs and upgrade them in place.
-AppId={{EFF08964-4543-45AC-9CDC-867500E50276}}
+AppId={{#AppIdGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Jon Robelia
 AppCopyright=Copyright (c) 2026 Jon Robelia
+; Publisher/support/update links surface in Settings > Apps and appwiz.
+AppPublisherURL=https://github.com/jrobelia/solidworks-qr-add-in
+AppSupportURL=https://github.com/jrobelia/solidworks-qr-add-in/issues
+AppUpdatesURL=https://github.com/jrobelia/solidworks-qr-add-in
 DefaultDirName={autopf}\{#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -50,7 +55,15 @@ WizardStyle=modern
 LicenseFile=LICENSE.txt
 ; Installer exe + Settings > Apps icon — a multi-size ICO of the QR glyph,
 ; checked in beside this script (same convention as the InvenTree add-in).
+; Inno re-embeds it into the generated unins000.exe as well.
 SetupIconFile=qr-addin.ico
+; Wizard chrome — the QR glyph rendered by Generate-InstallerAssets.ps1 from the
+; same QrIconGlyph matrix the add-in draws at runtime. Comma lists let Inno
+; pick the closest size per display scale (PNG, no BMP fallback needed on
+; Inno >= 6.5). The banner is an opaque white panel and the small image a
+; white badge, so both stay legible under automatic dark mode.
+WizardImageFile=wizard-image-100.png,wizard-image-150.png,wizard-image-200.png,wizard-image-250.png
+WizardSmallImageFile=wizard-small-100.png,wizard-small-150.png,wizard-small-200.png,wizard-small-250.png
 OutputDir=.
 OutputBaseFilename=SolidWorksQrAddIn-{#AppVersion}-Setup
 UninstallDisplayName={#AppName}
@@ -112,6 +125,57 @@ begin
     Log('RegAsm ' + Switches + ' failed with exit code ' + IntToStr(Result));
 end;
 
+// The generated uninstaller is always named unins000.exe — and because it is
+// unsigned, UAC shows that raw filename. The stub resolves its data/message
+// files via PathChangeExt(ParamStr(0)), so renaming the exe+dat+msg trio
+// keeps the pair intact; the Apps entry is then repointed at the new name.
+// The uninstaller and its registry key exist by ssPostInstall (verified:
+// Inno writes the key before the step fires). Any failure leaves the stock
+// unins000.* names in place rather than breaking uninstall.
+procedure UndoUninstallerRename(const OldExe, NewExe: String);
+begin
+  RenameFile(NewExe, OldExe);
+  if FileExists(ChangeFileExt(NewExe, '.dat')) then
+    RenameFile(ChangeFileExt(NewExe, '.dat'), ChangeFileExt(OldExe, '.dat'));
+  if FileExists(ChangeFileExt(NewExe, '.msg')) then
+    RenameFile(ChangeFileExt(NewExe, '.msg'), ChangeFileExt(OldExe, '.msg'));
+end;
+
+procedure RenameUninstaller;
+var
+  UninstKey, OldExe, NewExe, S: String;
+begin
+  OldExe := ExpandConstant('{uninstallexe}');
+  if not FileExists(OldExe) then Exit;
+  NewExe := ExtractFilePath(OldExe) + '{#AppName} Uninstall.exe';
+  if not RenameFile(OldExe, NewExe) then Exit;
+  if FileExists(ChangeFileExt(OldExe, '.dat')) then
+    RenameFile(ChangeFileExt(OldExe, '.dat'), ChangeFileExt(NewExe, '.dat'));
+  if FileExists(ChangeFileExt(OldExe, '.msg')) then
+    RenameFile(ChangeFileExt(OldExe, '.msg'), ChangeFileExt(NewExe, '.msg'));
+  UninstKey :=
+    'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}_is1';
+  if not RegQueryStringValue(HKLM, UninstKey, 'UninstallString', S) then
+  begin
+    Log('Uninstall key missing - reverting uninstaller rename');
+    UndoUninstallerRename(OldExe, NewExe);
+    Exit;
+  end;
+  StringChangeEx(S, OldExe, NewExe, True);
+  if not RegWriteStringValue(HKLM, UninstKey, 'UninstallString', S) then
+  begin
+    Log('UninstallString rewrite failed - reverting uninstaller rename');
+    UndoUninstallerRename(OldExe, NewExe);
+    Exit;
+  end;
+  if RegQueryStringValue(HKLM, UninstKey, 'QuietUninstallString', S) then
+  begin
+    StringChangeEx(S, OldExe, NewExe, True);
+    RegWriteStringValue(HKLM, UninstKey, 'QuietUninstallString', S);
+  end;
+  Log('Uninstaller renamed to ' + NewExe);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
@@ -128,6 +192,8 @@ begin
         ExpandConstant('{#RegAsm}') + ' ' + RegAsmArgs('/codebase'),
         mbError, MB_OK, IDOK);
   end;
+  if CurStep = ssPostInstall then
+    RenameUninstaller;
 end;
 
 // usUninstall fires before file removal so the DLL still exists when RegAsm

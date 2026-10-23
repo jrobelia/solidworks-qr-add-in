@@ -13,6 +13,9 @@
     <TargetFramework>net48</TargetFramework>
     <AssemblyName>SolidWorksQrAddIn</AssemblyName>
     <RootNamespace>SolidWorksQrAddIn</RootNamespace>
+    <!-- QR glyph on the DLL itself — Explorer shows it when a user browses
+         the install folder (same ico the installer exe uses). -->
+    <ApplicationIcon>..\..\Installer\qr-addin.ico</ApplicationIcon>
 
     <!-- The QR task-pane content is WPF (spec baseline) but code-built — no
          XAML files — hosted in the WinForms control SolidWorks displays via
