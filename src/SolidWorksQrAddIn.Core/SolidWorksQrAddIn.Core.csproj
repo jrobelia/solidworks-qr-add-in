@@ -10,6 +10,9 @@
     <TargetFramework>net48</TargetFramework>
     <AssemblyName>SolidWorksQrAddIn.Core</AssemblyName>
     <RootNamespace>SolidWorksQrAddIn.Core</RootNamespace>
+    <!-- QR glyph on the DLL itself — ships beside the add-in in the install
+         folder (same ico the installer exe uses). -->
+    <ApplicationIcon>..\..\Installer\qr-addin.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

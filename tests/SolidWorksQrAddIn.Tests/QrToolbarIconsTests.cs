@@ -25,9 +25,10 @@ namespace SolidWorksQrAddIn.Tests
         // ---------- glyph ----------
 
         [Fact]
-        public void Glyph_is_a_version1_symbol_21x21()
+        public void Glyph_is_a_version3_symbol_29x29()
         {
-            Assert.Equal(21, QrIconGlyph.Size);
+            // Payload is the repo URL at ECC L — scans to the project page.
+            Assert.Equal(29, QrIconGlyph.Size);
         }
 
         [Fact]
@@ -57,6 +58,108 @@ namespace SolidWorksQrAddIn.Tests
                 && QrIconGlyph.IsDark(n - 2, n - 1) && QrIconGlyph.IsDark(n - 1, n - 7));
         }
 
+        [Fact]
+        public void Mini_glyph_has_finder_eyes_in_three_corners()
+        {
+            // 17x17; eyes use real finder proportions (ring, gap, 3x3 core)
+            // with a 3-module gap between them.
+            int e = QrIconGlyph.MiniEyeOffset; // 10
+            int[][] corners = { new[] { 0, 0 }, new[] { 0, e }, new[] { e, 0 } };
+            foreach (var corner in corners)
+            {
+                int r0 = corner[0], c0 = corner[1];
+                for (int i = 0; i < 7; i++)
+                {
+                    Assert.True(QrIconGlyph.IsDarkMini(r0, c0 + i));
+                    Assert.True(QrIconGlyph.IsDarkMini(r0 + 6, c0 + i));
+                    Assert.True(QrIconGlyph.IsDarkMini(r0 + i, c0));
+                    Assert.True(QrIconGlyph.IsDarkMini(r0 + i, c0 + 6));
+                }
+                Assert.False(QrIconGlyph.IsDarkMini(r0 + 1, c0 + 1));
+                for (int r = 2; r <= 4; r++)
+                    for (int c = 2; c <= 4; c++)
+                        Assert.True(QrIconGlyph.IsDarkMini(r0 + r, c0 + c));
+            }
+            // The band between the eyes stays light — the eyes need
+            // visible separation at tiny sizes.
+            for (int c = 7; c < e; c++) Assert.False(QrIconGlyph.IsDarkMini(0, c));
+        }
+
+        [Fact]
+        public void Compact_glyph_is_a_version1_symbol_21x21()
+        {
+            // The smallest real QR — decodes to the product name.
+            Assert.Equal(21, QrIconGlyph.CompactSize);
+        }
+
+        [Fact]
+        public void Compact_glyph_has_finder_patterns_in_three_corners()
+        {
+            int n = QrIconGlyph.CompactSize; // 21; finders occupy 7x7 at three corners
+            int[][] corners = { new[] { 0, 0 }, new[] { 0, n - 7 }, new[] { n - 7, 0 } };
+            foreach (var corner in corners)
+            {
+                int r0 = corner[0], c0 = corner[1];
+                for (int i = 0; i < 7; i++)
+                {
+                    Assert.True(QrIconGlyph.IsDarkCompact(r0, c0 + i));
+                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + 6, c0 + i));
+                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + i, c0));
+                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + i, c0 + 6));
+                }
+                for (int r = 2; r <= 4; r++)
+                    for (int c = 2; c <= 4; c++)
+                        Assert.True(QrIconGlyph.IsDarkCompact(r0 + r, c0 + c));
+            }
+        }
+
+        [Fact]
+        public void Renders_pick_the_glyph_for_their_size_tier()
+        {
+            // DecodeGrid samples each module's center pixel back out of the
+            // PNG, so a render using the wrong tier mismatches most cells.
+            double mini = Mismatch(
+                DecodeGrid(QrToolbarIcons.RenderPng(20), QrIconGlyph.MiniSize),
+                QrIconGlyph.IsDarkMini);
+            double compact = Mismatch(
+                DecodeGrid(QrToolbarIcons.RenderPng(48), QrIconGlyph.CompactSize),
+                QrIconGlyph.IsDarkCompact);
+            double full = Mismatch(
+                DecodeGrid(QrToolbarIcons.RenderPng(64), QrIconGlyph.Size),
+                QrIconGlyph.IsDark);
+            Assert.True(mini < 0.10, $"20px render not the mini motif: {mini:P0} mismatched");
+            Assert.True(compact < 0.05, $"48px render not the compact glyph: {compact:P0} mismatched");
+            Assert.True(full < 0.05, $"64px render not the full glyph: {full:P0} mismatched");
+        }
+
+        private static bool[,] DecodeGrid(byte[] png, int modules)
+        {
+            using (var bmp = new Bitmap(new MemoryStream(png)))
+            {
+                int size = bmp.Width;
+                int margin = Math.Max(1, (int)Math.Round(size / (double)(modules + 2)));
+                double cell = (size - 2.0 * margin) / modules;
+                var grid = new bool[modules, modules];
+                for (int r = 0; r < modules; r++)
+                    for (int c = 0; c < modules; c++)
+                    {
+                        int x = Math.Min((int)(margin + (c + 0.5) * cell), size - 1);
+                        int y = Math.Min((int)(margin + (r + 0.5) * cell), size - 1);
+                        grid[r, c] = bmp.GetPixel(x, y).ToArgb() == Color.Black.ToArgb();
+                    }
+                return grid;
+            }
+        }
+
+        private static double Mismatch(bool[,] grid, Func<int, int, bool> expected)
+        {
+            int n = grid.GetLength(0), bad = 0;
+            for (int r = 0; r < n; r++)
+                for (int c = 0; c < n; c++)
+                    if (grid[r, c] != expected(r, c)) bad++;
+            return (double)bad / (n * n);
+        }
+
         // ---------- PNG rendering ----------
 
         [Theory]
@@ -75,8 +178,9 @@ namespace SolidWorksQrAddIn.Tests
             {
                 Assert.Equal(size, bmp.Width);
                 Assert.Equal(size, bmp.Height);
-                // Corner pixel is inside the transparent quiet margin.
-                Assert.Equal(0, bmp.GetPixel(0, 0).A);
+                // Corner pixel is inside the white quiet margin — opaque so
+                // the icon stays legible on dark surfaces.
+                Assert.Equal(Color.White.ToArgb(), bmp.GetPixel(0, 0).ToArgb());
                 // The top-left finder pattern leaves dark pixels somewhere
                 // inside the margin.
                 bool anyDark = false;

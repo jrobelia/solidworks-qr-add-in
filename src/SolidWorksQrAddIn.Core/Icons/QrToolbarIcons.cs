@@ -36,20 +36,52 @@ namespace SolidWorksQrAddIn.Core.Icons
         /// <summary>File name of the extracted task-pane tab icon.</summary>
         public const string PaneTabFileName = "qr-tab-18.png";
 
+        /// <summary>
+        /// Below this pixel size even the compact 21-module symbol can't
+        /// resolve — renders switch to <see cref="QrIconGlyph.IsDarkMini"/>'s
+        /// stylized 15-module motif so the icon still reads as a QR code.
+        /// </summary>
+        public const int MiniGlyphThresholdPx = 32;
+
+        /// <summary>
+        /// Below this pixel size the real 29-module symbol can't resolve —
+        /// renders switch to <see cref="QrIconGlyph.IsDarkCompact"/>'s real
+        /// version-1 symbol (21×21), which stays crisp into the mid-30px range.
+        /// </summary>
+        public const int CompactGlyphThresholdPx = 64;
+
         /// <summary>PNG bytes of the QR glyph rendered at <paramref name="sizePx"/>.</summary>
         public static byte[] RenderPng(int sizePx)
         {
             if (sizePx <= 0) throw new ArgumentOutOfRangeException(nameof(sizePx));
 
+            if (sizePx < MiniGlyphThresholdPx)
+                return RenderMiniPng(sizePx);
+
+            Func<int, int, bool> isDark;
+            int modules;
+            if (sizePx < CompactGlyphThresholdPx)
+            {
+                modules = QrIconGlyph.CompactSize;
+                isDark = QrIconGlyph.IsDarkCompact;
+            }
+            else
+            {
+                modules = QrIconGlyph.Size;
+                isDark = QrIconGlyph.IsDark;
+            }
+
             using (var bmp = new Bitmap(sizePx, sizePx, PixelFormat.Format32bppArgb))
             using (var g = Graphics.FromImage(bmp))
             {
-                g.Clear(Color.Transparent);
-
-                int modules = QrIconGlyph.Size;
+                // Opaque white canvas: the QR quiet zone is spec-required
+                // (the glyph must sit on light) and it keeps the icon legible
+                // on dark toolbar/tab themes and dark taskbars — black modules
+                // on a transparent canvas vanish there.
+                g.Clear(Color.White);
                 // A small quiet-zone margin (≈1 module at small sizes) keeps
-                // the finder patterns readable against SolidWorks' toolbar
-                // background; scaled module spans stay pixel-aligned.
+                // the finder patterns readable; scaled module spans stay
+                // pixel-aligned.
                 int margin = Math.Max(1, (int)Math.Round(sizePx / (double)(modules + 2)));
                 double inner = sizePx - 2.0 * margin;
                 double cell = inner / modules;
@@ -62,7 +94,7 @@ namespace SolidWorksQrAddIn.Core.Icons
                         int y1 = (int)Math.Round(margin + (r + 1) * cell);
                         for (int c = 0; c < modules; c++)
                         {
-                            if (!QrIconGlyph.IsDark(r, c)) continue;
+                            if (!isDark(r, c)) continue;
                             int x0 = (int)Math.Round(margin + c * cell);
                             int x1 = (int)Math.Round(margin + (c + 1) * cell);
                             g.FillRectangle(dark, x0, y0, Math.Max(1, x1 - x0), Math.Max(1, y1 - y0));
@@ -76,6 +108,57 @@ namespace SolidWorksQrAddIn.Core.Icons
                     return ms.ToArray();
                 }
             }
+        }
+
+        /// <summary>
+        /// Renders the mini motif. The finder eyes are drawn as QR-target
+        /// rectangles — ring and gap get the same whole-pixel thickness and
+        /// the core is centered by construction — so proportions and
+        /// centering stay exact at fractional cell sizes (24px/17 modules
+        /// etc. made a cell-rendered ring 1px on one side and 2px on the
+        /// other). Data modules draw as uniform squares.
+        /// </summary>
+        private static byte[] RenderMiniPng(int sizePx)
+        {
+            int n = QrIconGlyph.MiniSize;
+            int margin = Math.Max(1, (int)Math.Round(sizePx / (double)(n + 2)));
+            double unit = (sizePx - 2.0 * margin) / n;
+
+            int ring = Math.Max(1, (int)Math.Round(unit));
+            int core = Math.Max(1, (int)Math.Round(3 * unit));
+            int eye = 4 * ring + core;                     // ring-gap-core-gap-ring
+            int dot = Math.Max(1, (int)Math.Round(unit));  // uniform data modules
+
+            using (var bmp = new Bitmap(sizePx, sizePx, PixelFormat.Format32bppArgb))
+            using (var g = Graphics.FromImage(bmp))
+            using (var dark = new SolidBrush(Color.Black))
+            {
+                g.Clear(Color.White);
+                DrawEye(g, dark, margin, margin, eye, ring, core);
+                DrawEye(g, dark, sizePx - margin - eye, margin, eye, ring, core);
+                DrawEye(g, dark, margin, sizePx - margin - eye, eye, ring, core);
+                for (int r = 0; r < n; r++)
+                    for (int c = 0; c < n; c++)
+                    {
+                        if (!QrIconGlyph.IsDarkMini(r, c) || QrIconGlyph.IsMiniEyeCell(r, c)) continue;
+                        g.FillRectangle(dark,
+                            (int)Math.Round(margin + c * unit),
+                            (int)Math.Round(margin + r * unit), dot, dot);
+                    }
+                using (var ms = new MemoryStream())
+                {
+                    bmp.Save(ms, ImageFormat.Png);
+                    return ms.ToArray();
+                }
+            }
+        }
+
+        private static void DrawEye(Graphics g, Brush dark, int x, int y, int w, int ring, int core)
+        {
+            g.FillRectangle(dark, x, y, w, w);
+            g.FillRectangle(Brushes.White, x + ring, y + ring, w - 2 * ring, w - 2 * ring);
+            int cin = 2 * ring; // ring + gap — symmetric on both sides
+            g.FillRectangle(dark, x + cin, y + cin, core, core);
         }
 
         /// <summary>
