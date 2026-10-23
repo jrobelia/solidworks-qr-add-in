@@ -85,79 +85,45 @@ namespace SolidWorksQrAddIn.Tests
             for (int c = 7; c < e; c++) Assert.False(QrIconGlyph.IsDarkMini(0, c));
         }
 
-        [Fact]
-        public void Compact_glyph_is_a_version1_symbol_21x21()
+        [Theory]
+        [InlineData(18)]
+        [InlineData(32)]
+        [InlineData(48)]
+        [InlineData(64)]
+        [InlineData(128)]
+        public void Every_size_renders_the_mini_motif(int px)
         {
-            // The smallest real QR — decodes to the product name.
-            Assert.Equal(21, QrIconGlyph.CompactSize);
-        }
-
-        [Fact]
-        public void Compact_glyph_has_finder_patterns_in_three_corners()
-        {
-            int n = QrIconGlyph.CompactSize; // 21; finders occupy 7x7 at three corners
-            int[][] corners = { new[] { 0, 0 }, new[] { 0, n - 7 }, new[] { n - 7, 0 } };
-            foreach (var corner in corners)
-            {
-                int r0 = corner[0], c0 = corner[1];
-                for (int i = 0; i < 7; i++)
-                {
-                    Assert.True(QrIconGlyph.IsDarkCompact(r0, c0 + i));
-                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + 6, c0 + i));
-                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + i, c0));
-                    Assert.True(QrIconGlyph.IsDarkCompact(r0 + i, c0 + 6));
-                }
-                for (int r = 2; r <= 4; r++)
-                    for (int c = 2; c <= 4; c++)
-                        Assert.True(QrIconGlyph.IsDarkCompact(r0 + r, c0 + c));
-            }
-        }
-
-        [Fact]
-        public void Renders_pick_the_glyph_for_their_size_tier()
-        {
-            // DecodeGrid samples each module's center pixel back out of the
-            // PNG, so a render using the wrong tier mismatches most cells.
-            double mini = Mismatch(
-                DecodeGrid(QrToolbarIcons.RenderPng(20), QrIconGlyph.MiniSize),
-                QrIconGlyph.IsDarkMini);
-            double compact = Mismatch(
-                DecodeGrid(QrToolbarIcons.RenderPng(48), QrIconGlyph.CompactSize),
-                QrIconGlyph.IsDarkCompact);
-            double full = Mismatch(
-                DecodeGrid(QrToolbarIcons.RenderPng(64), QrIconGlyph.Size),
-                QrIconGlyph.IsDark);
-            Assert.True(mini < 0.10, $"20px render not the mini motif: {mini:P0} mismatched");
-            Assert.True(compact < 0.05, $"48px render not the compact glyph: {compact:P0} mismatched");
-            Assert.True(full < 0.05, $"64px render not the full glyph: {full:P0} mismatched");
-        }
-
-        private static bool[,] DecodeGrid(byte[] png, int modules)
-        {
+            // One icon at every size: the light separator band between the
+            // eyes is unique to the motif — a real QR fills it with data.
+            byte[] png = QrToolbarIcons.RenderPng(px);
             using (var bmp = new Bitmap(new MemoryStream(png)))
             {
-                int size = bmp.Width;
-                int margin = Math.Max(1, (int)Math.Round(size / (double)(modules + 2)));
-                double cell = (size - 2.0 * margin) / modules;
-                var grid = new bool[modules, modules];
-                for (int r = 0; r < modules; r++)
-                    for (int c = 0; c < modules; c++)
-                    {
-                        int x = Math.Min((int)(margin + (c + 0.5) * cell), size - 1);
-                        int y = Math.Min((int)(margin + (r + 0.5) * cell), size - 1);
-                        grid[r, c] = bmp.GetPixel(x, y).ToArgb() == Color.Black.ToArgb();
-                    }
-                return grid;
-            }
-        }
+                int n = QrIconGlyph.MiniSize;
+                int margin = Math.Max(1, (int)Math.Round(px / (double)(n + 2)));
+                double unit = (px - 2.0 * margin) / n;
+                int ring = Math.Max(1, (int)Math.Round(unit));
+                int core = Math.Max(1, (int)Math.Round(3 * unit));
+                int eye = (int)Math.Round(margin + QrIconGlyph.MiniEyeSpan * unit) - margin;
+                int c = core;
+                int slack = eye - 2 * ring - c;
+                if ((slack & 1) != 0)
+                    c += Math.Abs(c + 1 - 3 * unit) <= Math.Abs(c - 1 - 3 * unit) ? 1 : -1;
+                int gap = Math.Max(0, (eye - 2 * ring - c) / 2);
 
-        private static double Mismatch(bool[,] grid, Func<int, int, bool> expected)
-        {
-            int n = grid.GetLength(0), bad = 0;
-            for (int r = 0; r < n; r++)
-                for (int c = 0; c < n; c++)
-                    if (grid[r, c] != expected(r, c)) bad++;
-            return (double)bad / (n * n);
+                // TL eye: dark ring, light gap, dark centered core.
+                int mid = margin + eye / 2;
+                Assert.Equal(Color.Black.ToArgb(), bmp.GetPixel(mid, mid).ToArgb());
+                Assert.Equal(Color.Black.ToArgb(),
+                    bmp.GetPixel(margin + ring / 2, mid).ToArgb());
+                Assert.Equal(Color.White.ToArgb(),
+                    bmp.GetPixel(margin + ring + gap / 2, mid).ToArgb());
+
+                // The empty band between the top eyes stays white — a real
+                // symbol would carry timing/data modules through it.
+                int bandY = (int)(margin + 8.0 * unit);
+                for (int x = margin; x < px - margin; x++)
+                    Assert.Equal(Color.White.ToArgb(), bmp.GetPixel(x, bandY).ToArgb());
+            }
         }
 
         // ---------- PNG rendering ----------

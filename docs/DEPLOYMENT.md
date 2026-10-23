@@ -106,14 +106,13 @@ rendered from `QrIconGlyph` by `Installer\Generate-InstallerAssets.ps1` at
 Inno's published per-DPI sizes (it also rewrites `qr-addin.ico`; re-run it
 whenever the glyph changes). The glyph encodes the repo URL at ECC L — the
 icon scans to the project page — and sits on an opaque white quiet zone so
-it stays legible on dark themes/taskbars. Renders pick a glyph per size:
-below 64px the 29-module symbol can't resolve, so 32–63px switch to the
-compact glyph — a real, scannable version-1 (21×21) QR that decodes to
-`SOLIDWORKS-QR-ADD-IN` — and below 32px to `QrIconGlyph`'s 17×17 mini
-motif (decorative, not scannable), whose finder eyes draw as QR-target
-rectangles so ring/gap/core proportions hold at fractional cell sizes.
-That covers the tab icon, small toolbar/ico frames, and the smallest
-wizard badge. The product DLLs embed the same
+it stays legible on dark themes/taskbars. Every icon render — ico frames,
+toolbar strips, the task-pane tab, the small wizard badge — uses
+`QrIconGlyph`'s 17×17 motif (decorative, not scannable): three spaced
+finder eyes drawn as QR-target rectangles so ring/gap/core proportions
+hold at fractional cell sizes, plus uniform data squares. The setup
+wizard's left banner is the exception — large enough to scan, it keeps
+the real repo-URL QR. The product DLLs embed the same
 ico via `<ApplicationIcon>` — takes effect on the next build/pack. If Explorer shows
 a generic icon on a rebuilt same-name exe, that's the Windows icon cache —
 `ie4uinit.exe -ClearIconCache` or a rename clears it.

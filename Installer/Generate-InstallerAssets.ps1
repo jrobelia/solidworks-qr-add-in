@@ -1,7 +1,8 @@
 # Generate-InstallerAssets.ps1  Regenerates every checked-in raster asset
-# Setup.iss references. Renders the add-in's own QrIconGlyph module matrix
-# (the QR encoding the repo URL that the toolbar/menu/tab icons draw at
-# runtime) so installer chrome, the .ico, and product icons never drift.
+# Setup.iss references from the add-in's own QrIconGlyph — the ico and
+# small images reuse RenderPng's 17x17 icon motif (identical to runtime);
+# the left banner draws the real repo-URL QR matrix, large enough to scan —
+# so installer chrome, the .ico, and product icons never drift.
 #
 #   qr-addin.ico                       SetupIconFile + UninstallDisplayIcon +
 #                                    the DLL ApplicationIcon (multi-size ICO)

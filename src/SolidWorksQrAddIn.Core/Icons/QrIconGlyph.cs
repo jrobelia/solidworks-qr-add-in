@@ -5,26 +5,19 @@ using QRCoder;
 namespace SolidWorksQrAddIn.Core.Icons
 {
     /// <summary>
-    /// The module layouts for the add-in's toolbar/menu icons, all
-    /// deterministic — the same glyphs on every build and every machine:
-    /// a real QR code of the repo URL (ECC L → 29×29 version-3) for sizes
-    /// that can resolve it, a real version-1 QR (21×21) that scans to the
-    /// product name for mid sizes, and a stylized 15×15 motif for tiny
-    /// renders. ECC L keeps each symbol one version smaller — damage
-    /// tolerance buys nothing on a screen icon.
+    /// The module layouts for the add-in's QR imagery, all deterministic —
+    /// the same glyphs on every build and every machine: a real QR code of
+    /// the repo URL (ECC L → 29×29 version-3) for surfaces large enough to
+    /// scan (the setup wizard banner), and a stylized 17×17 motif for icon
+    /// renders. ECC L keeps the symbol one version smaller — damage
+    /// tolerance buys nothing on a screen image.
     /// </summary>
     public static class QrIconGlyph
     {
         private const string Payload = "https://github.com/jrobelia/solidworks-qr-add-in";
         private const QRCodeGenerator.ECCLevel Ecc = QRCodeGenerator.ECCLevel.L;
 
-        // Short payload for the mid-size tier: alphanumeric mode keeps it a
-        // version-1 (21x21) symbol — the smallest real, decodable QR — and it
-        // scans to the product name.
-        private const string CompactPayload = "SOLIDWORKS-QR-ADD-IN";
-
         private static readonly Lazy<bool[,]> Modules = new Lazy<bool[,]>(() => Build(Payload));
-        private static readonly Lazy<bool[,]> CompactModules = new Lazy<bool[,]>(() => Build(CompactPayload));
 
         /// <summary>Width and height of the glyph in modules (29 for the repo URL at L).</summary>
         public static int Size => Modules.Value.GetLength(0);
@@ -32,18 +25,12 @@ namespace SolidWorksQrAddIn.Core.Icons
         /// <summary>True when the module at (row, col) is dark.</summary>
         public static bool IsDark(int row, int col) => Modules.Value[row, col];
 
-        /// <summary>Width and height of the compact glyph in modules (21 for a version-1 symbol).</summary>
-        public static int CompactSize => CompactModules.Value.GetLength(0);
-
-        /// <summary>True when the compact glyph's module at (row, col) is dark.</summary>
-        public static bool IsDarkCompact(int row, int col) => CompactModules.Value[row, col];
-
         /// <summary>
-        /// Stylized 17×17 QR motif for renders too small for any real symbol
-        /// to resolve — three spaced finder eyes at real QR proportions
+        /// Stylized 17×17 QR motif — the add-in icon at every render size —
+        /// with three spaced finder eyes at real QR proportions
         /// (ring : gap : core = 1 : 1 : 3) plus a sparse data field in the
-        /// bottom-right quadrant. It is an icon, not a scannable code;
-        /// below ~32px even the compact 21-module glyph blurs into noise.
+        /// bottom-right quadrant. It is an icon, not a scannable code —
+        /// a real symbol dissolves into noise at icon sizes.
         /// The renderer draws the eyes as QR-target rectangles so ring
         /// thickness and centering stay exact at fractional cell sizes.
         /// </summary>
