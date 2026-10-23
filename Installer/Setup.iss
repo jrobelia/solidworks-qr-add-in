@@ -153,8 +153,12 @@ begin
     RenameFile(ChangeFileExt(OldExe, '.dat'), ChangeFileExt(NewExe, '.dat'));
   if FileExists(ChangeFileExt(OldExe, '.msg')) then
     RenameFile(ChangeFileExt(OldExe, '.msg'), ChangeFileExt(NewExe, '.msg'));
+  // AppId renders as {GUID}} — {{...}} in [Setup] yields a literal { and
+  // the trailing }} stays literal — so the real key name ends "}}_is1"
+  // (verified 2026-10-23). Keeping the quirky-but-stable AppId preserves
+  // upgrade identity with 1.0.0 installs.
   UninstKey :=
-    'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}_is1';
+    'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}}_is1';
   if not RegQueryStringValue(HKLM, UninstKey, 'UninstallString', S) then
   begin
     Log('Uninstall key missing - reverting uninstaller rename');
