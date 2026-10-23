@@ -8,13 +8,13 @@ occupied-seat refusal; no mode opts out) so the harness can spawn its own
 session-free invisible instance, plus a deployed `SolidWorksQrAddIn.dll`
 built from this branch (`scripts\sync-dev-deploy.ps1` first).
 
-## Status — AWAITING LIVE RUN
+## Status — LIVE RUN COMPLETE
 
-> **Awaiting live verification — reserved for the human.** The smoke run
-> is one production gate end-to-end on the consolidated harness
-> (`circledims` preferred, `units` the alternative), proving the ceremony
-> — expectations → occupied-seat refusal → launch → probe acquisition →
-> check sequence → pass/fail summary → teardown — on a real seat:
+> The smoke run is one production gate end-to-end on the consolidated
+> harness (`circledims` preferred, `units` the alternative), proving the
+> ceremony — expectations → occupied-seat refusal → launch → probe
+> acquisition → check sequence → pass/fail summary → teardown — on a
+> real seat:
 >
 > ```powershell
 > # SolidWorks closed throughout. Deploy the build under test (Release
@@ -24,14 +24,32 @@ built from this branch (`scripts\sync-dev-deploy.ps1` first).
 > dotnet build tools\LiveProbe -c Release
 > & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims "$env:LOCALAPPDATA\SolidWorksQrAddIn"
 > ```
->
-> Expected: `# CIRCLEDIMS ALL PASSED`, exit 0. Fill in the row below.
 
 ## Smoke run
 
 | Date | Build/commit | SW revision | Mode | Result | Exit |
 |------|--------------|-------------|------|--------|------|
-| _pending_ | _branch `integration/spec-67-probe-gatehost`_ | — | `circledims` | — | — |
+| 2026-10-22 | `1495ee3` (`integration/spec-67-probe-gatehost`) | 31.5.0.0052 | `circledims` | ALL PASSED — 14/14 checks | 0 |
+
+Run notes:
+
+- The first attempt against the freshly deployed dev build returned
+  `LoadAddIn` rc=0 with a null add-in object — the installed copy had
+  repointed HKLM COM registration at `C:\Program Files\...` (an
+  installer-managed pre-#65 build: it answered `IsSwAddin` but failed
+  `SetQrField` with `DISP_E_UNKNOWNNAME`). Recovered per
+  `docs/DEPLOYMENT.md`: uninstall the installed copy, then
+  `scripts/register-addin-dev.ps1` repointed `CodeBase` at the dev
+  folder — the same drift + recovery sequence DEPLOYMENT.md's
+  dev-machine section already documents.
+- The first run on the repaired registration caught a stale check in
+  the harness itself: "spacing dim doubled with the master" indexed
+  spacingX at `D5`, which has been the between-axes angle since
+  `fb18caa` (2026-10-20) — predates this branch, preserved verbatim by
+  the migration as the tickets required. Equations were intact and
+  `D6`/`D7` doubled correctly on rescale, so the check's *semantics*
+  were already being satisfied by the product. Fixed in `1495ee3`
+  (`D5`→`D6`); the recorded run above is the re-run on that fix.
 
 ## Headless verification (done — no SolidWorks)
 
