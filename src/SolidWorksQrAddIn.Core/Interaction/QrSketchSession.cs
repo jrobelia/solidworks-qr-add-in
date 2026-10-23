@@ -63,15 +63,35 @@ namespace SolidWorksQrAddIn.Core.Interaction
     ///      naming it; <c>$PRP</c> text under every other preset stays
     ///      literal because only the Template kind resolves.
     ///
+    ///      PENDING EDITS (spec #67, ticket #66): a debounced text path
+    ///      stages field text VERBATIM (<see cref="StageContent"/>,
+    ///      <see cref="StageSizeText"/>, <see cref="StageGrowthText"/>,
+    ///      <see cref="StageShapeParameterText"/>,
+    ///      <see cref="StagePresetField"/>) without revalidating — a
+    ///      keystroke burst must not regenerate per key.
+    ///      <see cref="CommitPendingEdits"/> drains the queue through the
+    ///      same code the immediate setters use, in the order the
+    ///      verbatim-edit rule needs (preset fields land BEFORE the content
+    ///      box, so a manual edit's Raw-reverting write still wins). The
+    ///      discipline lives HERE, not in a view: every edit entry point —
+    ///      the immediate setters, the preset switch, the discrete picks —
+    ///      commits the queue first, so an explicit edit always lands after
+    ///      everything staged before it and a probe can never bypass the
+    ///      pending state or be silently overwritten by it. The timer that
+    ///      decides WHEN to commit stays a view concern; this class only
+    ///      owns the state.
+    ///
     ///   2. Create. <see cref="CreateSketch"/> runs the insertion command with
     ///      the CURRENT inputs against a freshly-captured host state — the
     ///      command itself revalidates the active part, the selected support,
-    ///      and the no-sketch-being-edited rule at call time. Because every
-    ///      edit re-validates immediately, a failure result is always the
-    ///      current request: an earlier valid request can never be created
-    ///      while the current inputs are invalid. Editing inputs only ever
-    ///      changes the pending request and the picture — existing sketches
-    ///      are never resized or regenerated.
+    ///      and the no-sketch-being-edited rule at call time. Pending edits
+    ///      commit INSIDE the create, so it can never observe an unflushed
+    ///      queue: the request validated is always the one the fields show.
+    ///      Because every edit re-validates on landing, a failure result is
+    ///      always the current request: an earlier valid request can never
+    ///      be created while the current inputs are invalid. Editing inputs
+    ///      only ever changes the pending request and the picture — existing
+    ///      sketches are never resized or regenerated.
     ///
     ///   3. The single surface — the task-pane tab. The command entry is
     ///      <see cref="OpenOrFocusWindow"/>: bring the live pane forward or
@@ -164,6 +184,10 @@ namespace SolidWorksQrAddIn.Core.Interaction
         private QrSketchInfo? _info;
         private IReadOnlyList<QrInfoLine> _infoLines = Array.Empty<QrInfoLine>();
         private HostLengthUnit _lengthUnit = HostLengthUnit.Millimetres;
+        // The pending-edit queue (ticket #66): staged-but-uncommitted field
+        // text, verbatim. Never null — CommitPendingEdits swaps in a fresh
+        // batch so edits staged mid-drain wait for the next commit.
+        private PendingEdits _pending = new PendingEdits();
 
         /// <param name="windowFactory">Builds the surface the session drives.</param>
         /// <param name="hostProvider">
@@ -335,6 +359,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 if (_sizeMm.HasValue)
                     _sizeText = FormatSizeText(_sizeMm.Value, unit);
                 _lengthUnit = unit;
+                // A pending size edit's text was typed in the OLD unit —
+                // commit the queue now: the staged unit converts it, so the
+                // box never carries dead-unit text past a unit change. The
+                // commit's own regeneration rebuilds the info lines.
+                if (_pending.Size != null)
+                {
+                    CommitPendingEdits();
+                    return;
+                }
                 if (_current?.Error?.Kind == QrSketchErrorKind.InvalidSize)
                 {
                     if (TryParseSize(_sizeText, _lengthUnit, out _, out string error))
@@ -379,10 +412,163 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetContent(string content)
         {
+            CommitPendingEdits();
+            return ApplyContent(content);
+        }
+
+        /// <summary><see cref="SetContent"/> minus the pending commit — the commit drain's write.</summary>
+        private QrSketchResult ApplyContent(string content)
+        {
             _preset.ResetToRaw();
             _content = content ?? string.Empty;
             _preset.RawContent = _content;   // raw's memory IS the box text
             return Regenerate();
+        }
+
+        // ---------------- pending edits (ticket #66) ----------------
+        // The debounced keystroke path. A STAGED edit records the field text
+        // verbatim and nothing else — no regeneration, no window sync — so a
+        // keystroke burst coalesces into one commit instead of regenerating
+        // a dense QR per keystroke. CommitPendingEdits applies the queue
+        // through the same code the immediate setters run, and every edit
+        // entry point commits it first: an explicit edit can never be
+        // reordered behind a still-queued stale text, and a probe drives the
+        // same discipline the pane does. The timer that decides WHEN to
+        // commit is the view's — this class owns only the state.
+
+        /// <summary>True while staged-but-uncommitted field text exists.</summary>
+        public bool HasPendingEdits => !_pending.IsEmpty;
+
+        /// <summary>The staged content text — null while no content edit is pending.</summary>
+        public string? PendingContentText => _pending.Content;
+
+        /// <summary>The staged size text — null while no size edit is pending.</summary>
+        public string? PendingSizeText => _pending.Size?.Text;
+
+        /// <summary>The staged growth text — null while no growth edit is pending.</summary>
+        public string? PendingGrowthText => _pending.Growth;
+
+        /// <summary>The staged shape-parameter text — null while no edit is pending.</summary>
+        public string? PendingShapeParameterText => _pending.ShapeParameter;
+
+        /// <summary>True while <paramref name="key"/> has a staged-but-uncommitted preset-field edit.</summary>
+        public bool IsPresetFieldPending(string key) =>
+            _pending.PresetFields.ContainsKey(key ?? string.Empty);
+
+        /// <summary>
+        /// Stages a debounced content edit — the box text VERBATIM, no
+        /// revalidation. The verbatim-edit rule applies at COMMIT time: the
+        /// staged text lands as a Raw/typed edit (reverting the content
+        /// type), after any staged preset-field edits.
+        /// </summary>
+        public void StageContent(string? content) =>
+            _pending.Content = content ?? string.Empty;
+
+        /// <summary>
+        /// Stages a debounced size edit in the document's CURRENT unit —
+        /// the one-arg form of <see cref="StageSizeText(string?, HostLengthUnit)"/>.
+        /// </summary>
+        public void StageSizeText(string? sizeText) =>
+            StageSizeText(sizeText, _lengthUnit);
+
+        /// <summary>
+        /// Stages a debounced size edit — the text verbatim plus the unit it
+        /// was TYPED in. A document-unit change before the commit converts
+        /// through the staged unit, never the unit in force at commit time.
+        /// </summary>
+        public void StageSizeText(string? sizeText, HostLengthUnit inputUnit) =>
+            _pending.Size = (sizeText ?? string.Empty, inputUnit ?? _lengthUnit);
+
+        /// <summary>Stages a debounced growth edit — the text verbatim, no revalidation.</summary>
+        public void StageGrowthText(string? growthText) =>
+            _pending.Growth = growthText ?? string.Empty;
+
+        /// <summary>Stages a debounced shape-parameter edit — the text verbatim, no revalidation.</summary>
+        public void StageShapeParameterText(string? shapeParameterText) =>
+            _pending.ShapeParameter = shapeParameterText ?? string.Empty;
+
+        /// <summary>
+        /// Stages a debounced preset-field edit — keyed by the descriptor's
+        /// <see cref="PayloadFieldDescriptor.Key"/>, verbatim, last write
+        /// wins per key. The edit belongs to the preset in force at stage
+        /// time: the preset can only change through setters that commit the
+        /// queue first, so staged fields always drain under the preset they
+        /// were typed into. Under Raw, "content" is the payload box itself —
+        /// staged as a content edit, exactly like the setter converges.
+        /// </summary>
+        public void StagePresetField(string key, string? value)
+        {
+            if (_preset.Id == PayloadComposer.DefaultPresetId &&
+                string.Equals(key, "content", StringComparison.Ordinal))
+            {
+                StageContent(value);
+                return;
+            }
+            _pending.PresetFields[key ?? string.Empty] = value ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Applies every staged edit now — the commit trigger the view's
+        /// debounce timer (and the pane-hide path) calls, and the flush
+        /// <see cref="CreateSketch"/> runs inside itself so a create can
+        /// never observe unflushed edits. The drain order IS the
+        /// verbatim-edit discipline: preset-field edits land under the
+        /// preset they were typed in BEFORE the content box — a manual
+        /// content edit is the Raw-reverting write, so it must be last for
+        /// the typed text, not a recomposition, to win. A no-op on an empty
+        /// queue (no regeneration, no sync).
+        /// </summary>
+        public void CommitPendingEdits()
+        {
+            // Swap the batch out FIRST — edits staged while the drain runs
+            // (a sync's own keystroke path) queue against the next commit,
+            // keeping the timeline strictly ordered.
+            var batch = _pending;
+            if (batch.IsEmpty)
+                return;
+            _pending = new PendingEdits();
+            if (batch.Size is { } size)
+                ApplySizeText(size.Text, size.Unit);
+            if (batch.Growth != null)
+                ApplyGrowthText(batch.Growth);
+            if (batch.ShapeParameter != null)
+                ApplyShapeParameterText(batch.ShapeParameter);
+            foreach (var field in batch.PresetFields)
+                ApplyPresetField(field.Key, field.Value);
+            if (batch.Content != null)
+                ApplyContent(batch.Content);
+        }
+
+        /// <summary>
+        /// The pending-edit queue — the field text a debounced keystroke
+        /// path has staged but not yet committed, kept verbatim (rejected
+        /// text included; validation is a commit-time concern). The batch
+        /// replaces whole on drain so nothing in-flight aliases the queue.
+        /// </summary>
+        private sealed class PendingEdits
+        {
+            /// <summary>Staged content text, or null while no content edit is pending.</summary>
+            public string? Content;
+
+            /// <summary>Staged size text AND the unit it was typed in — conversion needs both.</summary>
+            public (string Text, HostLengthUnit Unit)? Size;
+
+            /// <summary>Staged growth text, or null.</summary>
+            public string? Growth;
+
+            /// <summary>Staged shape-parameter text, or null.</summary>
+            public string? ShapeParameter;
+
+            /// <summary>
+            /// Staged preset-field text by descriptor key — last write wins
+            /// per key; the drain order across keys is not significant.
+            /// </summary>
+            public readonly Dictionary<string, string> PresetFields =
+                new Dictionary<string, string>();
+
+            public bool IsEmpty =>
+                Content == null && Size == null && Growth == null &&
+                ShapeParameter == null && PresetFields.Count == 0;
         }
 
         // ---------------- content type + preset fields ----------------
@@ -479,6 +665,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetContentType(string? presetId)
         {
+            // Pending edits belong to the CURRENT preset — they drain under
+            // it before the new selection composes.
+            CommitPendingEdits();
+            return ApplyContentType(presetId);
+        }
+
+        /// <summary><see cref="SetContentType"/> minus the pending commit — the drain's write path.</summary>
+        private QrSketchResult ApplyContentType(string? presetId)
+        {
             var preset = FindPreset(presetId);
             if (preset == null)
             {
@@ -506,6 +701,15 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetPresetField(string key, string? value)
         {
+            // A discrete pick applies over the freshest text values — the
+            // queued edits land first, then this one on top.
+            CommitPendingEdits();
+            return ApplyPresetField(key, value);
+        }
+
+        /// <summary><see cref="SetPresetField"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyPresetField(string key, string? value)
+        {
             var preset = CurrentPreset;
             if (!preset.Fields.Any(f => f.Key == key))
             {
@@ -517,7 +721,7 @@ namespace SolidWorksQrAddIn.Core.Interaction
                 return Regenerate();
             }
             if (_preset.Id == PayloadComposer.DefaultPresetId)
-                return SetContent(value ?? string.Empty);   // raw's only field IS the content box
+                return ApplyContent(value ?? string.Empty);   // raw's only field IS the content box
             _preset.FieldsFor(_preset.Id)[key] = value ?? string.Empty;
             return ComposePreset();
         }
@@ -649,6 +853,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         public QrSketchResult SetSizeText(string sizeText, HostLengthUnit inputUnit)
         {
+            CommitPendingEdits();
+            return ApplySizeText(sizeText, inputUnit);
+        }
+
+        /// <summary><see cref="SetSizeText(string, HostLengthUnit)"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplySizeText(string sizeText, HostLengthUnit inputUnit)
+        {
             _sizeText = sizeText ?? string.Empty;
             if (!SameUnit(inputUnit, _lengthUnit) && TryParseSize(_sizeText, inputUnit, out double mm, out _))
                 _sizeText = FormatSizeText(mm, _lengthUnit);
@@ -660,6 +871,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// and re-validates the whole request.
         /// </summary>
         public QrSketchResult SetGrowthText(string growthText)
+        {
+            CommitPendingEdits();
+            return ApplyGrowthText(growthText);
+        }
+
+        /// <summary><see cref="SetGrowthText"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyGrowthText(string growthText)
         {
             _growthText = growthText ?? string.Empty;
             return Regenerate();
@@ -735,6 +953,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetCellShape(QrCellShape cellShape)
         {
+            CommitPendingEdits();
+            return ApplyCellShape(cellShape);
+        }
+
+        /// <summary><see cref="SetCellShape"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyCellShape(QrCellShape cellShape)
+        {
             _cellShape = cellShape;
             return Regenerate();
         }
@@ -748,6 +973,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// </summary>
         public QrSketchResult SetShapeParameterText(string shapeParameterText)
         {
+            CommitPendingEdits();
+            return ApplyShapeParameterText(shapeParameterText);
+        }
+
+        /// <summary><see cref="SetShapeParameterText"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyShapeParameterText(string shapeParameterText)
+        {
             _shapeParameterText = shapeParameterText ?? string.Empty;
             return Regenerate();
         }
@@ -759,6 +991,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// content edit.
         /// </summary>
         public QrSketchResult SetEccLevel(QRCodeGenerator.ECCLevel eccLevel)
+        {
+            CommitPendingEdits();
+            return ApplyEccLevel(eccLevel);
+        }
+
+        /// <summary><see cref="SetEccLevel"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyEccLevel(QRCodeGenerator.ECCLevel eccLevel)
         {
             _eccLevel = eccLevel;
             return Regenerate();
@@ -773,6 +1012,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// are never mutated.
         /// </summary>
         public QrSketchResult SetInvert(bool invert)
+        {
+            CommitPendingEdits();
+            return ApplyInvert(invert);
+        }
+
+        /// <summary><see cref="SetInvert"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyInvert(bool invert)
         {
             _invert = invert;
             return Regenerate();
@@ -789,6 +1035,13 @@ namespace SolidWorksQrAddIn.Core.Interaction
         /// existing sketches are never mutated.
         /// </summary>
         public QrSketchResult SetRingSplit(bool ringSplit)
+        {
+            CommitPendingEdits();
+            return ApplyRingSplit(ringSplit);
+        }
+
+        /// <summary><see cref="SetRingSplit"/> minus the pending commit — the drain's write.</summary>
+        private QrSketchResult ApplyRingSplit(bool ringSplit)
         {
             _ringSplit = ringSplit;
             return Regenerate();
@@ -1126,13 +1379,17 @@ namespace SolidWorksQrAddIn.Core.Interaction
 
         /// <summary>
         /// Creates the QR sketch for the CURRENT inputs through the host
-        /// seam. Invalid inputs fail immediately — the host is never touched,
-        /// so nothing partial or stale can reach the part. Valid requests go
-        /// through the command's fresh eligibility checks (active part,
-        /// current selection, no sketch in edit mode).
+        /// seam. Pending edits commit FIRST, inside the create — the request
+        /// validated is always the one the fields show, never a stale
+        /// still-valid state; the flush is a session guarantee, not a
+        /// caller's precondition. Invalid inputs fail immediately — the host
+        /// is never touched, so nothing partial or stale can reach the part.
+        /// Valid requests go through the command's fresh eligibility checks
+        /// (active part, current selection, no sketch in edit mode).
         /// </summary>
         public CommandResult CreateSketch(ISketchHost host)
         {
+            CommitPendingEdits();
             // A Template-kind payload re-resolves against the LIVE part at
             // create time — property or configuration edits behind the
             // pane's back must land in the encoded literal, never a stale

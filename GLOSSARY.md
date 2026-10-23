@@ -106,5 +106,27 @@ moment it is resolved in discussion, not before.
   picker/extrude works, like a user-made block).
 - **Pane** — the add-in's docked `QR Sketch` task-pane tab (hosts the full
   UI; the retired floating window's role).
+- **Pending edit** — debounced field text staged in `QrSketchSession`
+  verbatim but not yet committed (ticket #66): the session owns the state
+  and the drain order (preset fields before the content box), commits it
+  inside `CreateSketch` and before every explicit edit; the pane owns only
+  the timer that triggers the commit.
 - **Insertion support** — the selected reference plane or planar face the
   sketch is created on; validated at create time.
+
+## Live verification
+
+- **Gate** — a LiveProbe mode that drives the probe surface against a
+  session-free SolidWorks instance and reports pass/fail checks (the
+  `*-GATES.md` records). Distinguished from a **spike** — a
+  spike/diagnostic mode that produces evidence rather than verdicts
+  (`pattern`, `circlediag`…).
+- **Occupied-seat refusal** — the invariant every gate enforces before
+  launching: a running `SLDWORKS.exe` is never a valid target, because a
+  spawned instance still shares per-user state (settings snapshot,
+  AddInsStartup flag, registration, license seat) with the user's session.
+  GateHost owns it uniformly; no gate opts out.
+- **GateHost / LiveSession** — the LiveProbe module that owns the
+  live-session ceremony once (launch → startup wait → probe acquire →
+  teardown by PID) and the context object a gate's check sequence runs
+  against (tickets #61–#64).

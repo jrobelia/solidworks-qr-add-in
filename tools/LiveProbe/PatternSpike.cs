@@ -10,12 +10,19 @@ using SolidWorks.Interop.swconst;
 namespace SolidWorksQrAddIn.LiveProbe
 {
     /// <summary>
-    /// `LiveProbe.exe pattern [progId] [only]` — the sketch-linear-pattern
-    /// QR-dot spike (docs/PATTERN-SPIKE.md). Runs out-of-process against a
-    /// session-free invisible instance; each experiment gets a fresh
+    /// `LiveProbe.exe pattern [progId] [PAT&lt;n&gt;]` — the
+    /// sketch-linear-pattern QR-dot spike (docs/PATTERN-SPIKE.md), hosted
+    /// by GateHost (#63): the occupied-seat refusal, launch, startup wait,
+    /// the visible/open-documents refusal and the teardown are the uniform
+    /// ceremony. The spike is PROBE-FREE — it drives raw `ISldWorks` and
+    /// never loads the add-in (`UsesProbe=false`), and its args don't fit
+    /// `[deployDir] [progId]`: arg0 is a progId only when it isn't a test
+    /// number (<see cref="PatternParseArgs"/>), the PAT number parses
+    /// inside the run off `session.Args`. Each experiment gets a fresh
     /// throwaway part via <see cref="Program.WithSpikeDoc"/> and prints one
-    /// `PAT&lt;n&gt;` evidence line. Optional third arg runs only that
-    /// experiment number.
+    /// `PAT&lt;n&gt;` evidence line. Optional arg runs only that experiment
+    /// (`LiveProbe.exe pattern 12` — PAT12 replicates the production
+    /// emitter order).
     ///
     /// The question under test: can dark QR cells be emitted as REAL circle
     /// sketch entities produced by a 2-directional sketch linear pattern
@@ -25,72 +32,67 @@ namespace SolidWorksQrAddIn.LiveProbe
     /// </summary>
     public static partial class Program
     {
-        private static int PatternSpikeMain(string[] args)
+        /// <summary>The spike banner — printed before the occupied-seat refusal.</summary>
+        private static bool PatternExpectations()
         {
-            string progId = args.Length > 0 && !int.TryParse(args[0], out _)
-                ? args[0] : "SldWorks.Application.31";
+            Console.WriteLine("# sketch-linear-pattern QR-dot spike — " +
+                "evidence for docs/PATTERN-SPIKE.md");
+            return true;
+        }
+
+        /// <summary>
+        /// `pattern`'s arg shape — `[progId] [PAT&lt;n&gt;]` — does not fit
+        /// the standard `[deployDir] [progId]` parse: arg0 is a progId only
+        /// when it is NOT an experiment number, and the spike carries no
+        /// deploy dir (it never loads the add-in — DefaultDeployDir keeps
+        /// <see cref="LiveSession.DeployDir"/> sane regardless).
+        /// </summary>
+        private static (string deployDir, string progId) PatternParseArgs(string[] args) =>
+            (DefaultDeployDir,
+             args.Length > 0 && !int.TryParse(args[0], out _)
+                 ? args[0] : "SldWorks.Application.31");
+
+        /// <summary>
+        /// The run body — the revision banner at its legacy position (first
+        /// line of the live half), then every PAT experiment (or the
+        /// `PAT&lt;n&gt;`-numbered one) against a fresh throwaway part.
+        /// </summary>
+        private static int PatternRun(LiveSession session)
+        {
+            var sw = session.Sw;
+            int openDocs = 0;
+            try { openDocs = sw.GetDocumentCount(); } catch { }
+            Console.WriteLine($"# revision {sw.RevisionNumber()} " +
+                $"visible={sw.Visible} docs={openDocs}");
+
             int? only = null;
-            foreach (var a in args)
+            foreach (var a in session.Args)
                 if (int.TryParse(a, out var n)) { only = n; break; }
 
-            Console.WriteLine("# sketch-linear-pattern QR-dot spike — evidence for docs/PATTERN-SPIKE.md");
-            if (Process.GetProcessesByName("SLDWORKS").Length != 0)
+            var tests = new (int n, string tag, Func<ISldWorks, IModelDoc2, string> f)[]
             {
-                Console.WriteLine("# FATAL: a SLDWORKS.exe process is already running — " +
-                    "refusing to attach; the probe never mutates or kills an occupied seat.");
-                return 1;
-            }
-
-            ISldWorks? sw = null;
-            try
+                (0,  "diag",       PatExp0_Diag),
+                (1,  "create",     PatExp1_Create),
+                (2,  "skip",       PatExp2_Skip),
+                (3,  "perInstance",PatExp3_PerInstance),
+                (4,  "dimDriven",  PatExp4_DimDriven),
+                (5,  "seedDia",    PatExp5_SeedDia),
+                (6,  "dimLess",    PatExp6_Dimensionless),
+                (7,  "quietBox",   PatExp7_QuietBox),
+                (8,  "timing",     PatExp8_Timing),
+                (9,  "undo",       PatExp9_Undo),
+                (10, "invert",     PatExp10_Invert),
+                (11, "fallback",   PatExp11_Fallback),
+                (12, "prodOrder",  PatExp12_ProductionOrder),
+            };
+            foreach (var t in tests)
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Console.WriteLine("# FATAL: SolidWorks launch failed"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                Console.WriteLine($"# revision {sw.RevisionNumber()} visible={sw.Visible} docs={openDocs}");
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: attached session is visible or holds documents — " +
-                        "refusing to mutate an interactive session.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-
-                var tests = new (int n, string tag, Func<ISldWorks, IModelDoc2, string> f)[]
-                {
-                    (0,  "diag",       PatExp0_Diag),
-                    (1,  "create",     PatExp1_Create),
-                    (2,  "skip",       PatExp2_Skip),
-                    (3,  "perInstance",PatExp3_PerInstance),
-                    (4,  "dimDriven",  PatExp4_DimDriven),
-                    (5,  "seedDia",    PatExp5_SeedDia),
-                    (6,  "dimLess",    PatExp6_Dimensionless),
-                    (7,  "quietBox",   PatExp7_QuietBox),
-                    (8,  "timing",     PatExp8_Timing),
-                    (9,  "undo",       PatExp9_Undo),
-                    (10, "invert",     PatExp10_Invert),
-                    (11, "fallback",   PatExp11_Fallback),
-                    (12, "prodOrder",  PatExp12_ProductionOrder),
-                };
-                foreach (var t in tests)
-                {
-                    if (only.HasValue && t.n != only.Value) continue;
-                    Console.WriteLine($"PAT{t.n}({t.tag}) " + WithSpikeDoc(sw, t.f));
-                }
-                Console.WriteLine("# PAT DONE");
-                return 0;
+                if (only.HasValue && t.n != only.Value) continue;
+                Console.WriteLine($"PAT{t.n}({t.tag}) " + WithSpikeDoc(sw, t.f));
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
-                return 1;
-            }
-            finally
-            {
-                TeardownSpawned(sw);
-            }
+            // The host prints `# PAT DONE` (SummaryPass) and derives the
+            // exit code from the failure tally.
+            return 0;
         }
 
         // ================= shared spike context / helpers =================

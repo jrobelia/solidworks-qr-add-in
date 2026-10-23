@@ -60,13 +60,30 @@ namespace SolidWorksQrAddIn.LiveProbe
             Console.WriteLine($"LIMIT  {name}{(detail.Length > 0 ? "  — " + detail : "")}");
         }
 
-        private static int CircleGatesMain(string[] args)
+        /// <summary>
+        /// The `circles` gate state across the expectations→run hand-off
+        /// (#62): the circle plans at both polarities, the density-rung
+        /// picks, and the invariant culture the gate bodies format through.
+        /// The legacy CircleGatesMain split at the ceremony seams — every
+        /// check line, print and gate ordering below is its body verbatim;
+        /// the launch/probe/teardown ceremony and the occupied-seat refusal
+        /// are the GateHost's uniform policy now.
+        /// </summary>
+        private sealed class CirclesGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            private QrCirclePlan _plan = null!, _planInv = null!;
+            private (string tag, string content, bool invert, int cells, int dots)
+                _under, _over;
+            private System.Globalization.CultureInfo _inv =
+                System.Globalization.CultureInfo.InvariantCulture;
+
+            /// <summary>
+            /// The module-side expectations + the density rung table —
+            /// printed ahead of the occupied-seat refusal exactly as the
+            /// legacy head printed them.
+            /// </summary>
+            public bool Expectations()
+            {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
 
             // ================= module-side expectations =================
@@ -77,10 +94,11 @@ namespace SolidWorksQrAddIn.LiveProbe
             {
                 Console.WriteLine("# FATAL: module-side circle plan for the gate payload failed: " +
                     (gate.Error?.Message ?? gateInv.Error?.Message ?? "?"));
-                return 1;
+                return false;
             }
             var plan = gate.Sketch.CirclePlan!;
             var planInv = gateInv.Sketch.CirclePlan!;
+            _plan = plan; _planInv = planInv; _inv = inv;
             Console.WriteLine("# ticket-#42 circle-pattern live gates (spec #13)");
             Console.WriteLine($"# payload '{PayloadA}' @25mm ECC=M dot=90% -> N={plan.DataCells} " +
                 $"M={plan.CellsPerSide} pitch={plan.PitchM * 1000:F4}mm " +
@@ -125,43 +143,28 @@ namespace SolidWorksQrAddIn.LiveProbe
             Console.WriteLine(over.content != null
                 ? $"# over-bound rung: {over.tag} dots={over.dots}"
                 : "# over-bound rung: none below v20 — checked on the refuse path only");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: the circle gates require SolidWorks " +
-                    "closed — a SLDWORKS.exe process is already running. Refusing to " +
-                    "attach; the probe never mutates or kills an occupied seat.");
-                return 1;
+            _under = under; _over = over;
+            return true;
             }
 
-            ISldWorks? sw = null;
+            /// <summary>
+            /// The check sequence the legacy body ran after the ceremony —
+            /// gates 1–10 verbatim, driven against the session the host
+            /// hands over.
+            /// </summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var plan = _plan;
+            var planInv = _planInv;
+            var under = _under;
+            var over = _over;
+            var inv = _inv;
             try
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Check(false, "SolidWorks launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-
-                var probe = TryGetProbe(sw);
-                if (probe == null)
-                {
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Check(loadResult == 0, "LoadAddIn", $"returned {loadResult} for {dllPath}");
-                    probe = TryGetProbe(sw);
-                }
-                Check(probe != null, "GetAddInObject returns the probe interface",
-                    probe == null ? "null" : "obtained");
-                if (probe == null) return 1;
-
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
                 Check(File.Exists(template), "default part template exists", template);
                 if (!File.Exists(template)) return 1;
 
@@ -170,51 +173,51 @@ namespace SolidWorksQrAddIn.LiveProbe
                 var state0 = probe.WindowStateProbe();
                 Check(state0.Contains("shape=square") && state0.Contains("invert=False"),
                     "fresh session defaults to square cells, normal polarity", state0);
-                Check(probe.SetQrCellShapeProbe("bogus").StartsWith("ERROR"),
+                Check(probe.SetQrField("shape", "bogus").StartsWith("ERROR"),
                     "an unknown cell shape is refused",
-                    probe.SetQrCellShapeProbe("bogus"));
+                    probe.SetQrField("shape", "bogus"));
 
                 // The measured setter contract (circlediag D1): a field
                 // setter applies the value, then reports the SESSION's
                 // aggregate validity — with no content every setter echoes
                 // INVALID EmptyContent; with content it echoes VALID dots=….
-                var nc1 = probe.SetQrCellShapeProbe("circle");
+                var nc1 = probe.SetQrField("shape", "circle");
                 Check(nc1.StartsWith("INVALID") && nc1.Contains("EmptyContent"),
                     "shape edit with no content answers INVALID EmptyContent (contract)",
                     nc1);
                 Check(probe.WindowStateProbe().Contains("shape=circle"),
                     "the field still applied — session echoes shape=circle",
                     probe.WindowStateProbe());
-                var nc2 = probe.SetQrShapeParamProbe("90");
+                var nc2 = probe.SetQrField("param", "90");
                 Check(nc2.StartsWith("INVALID") && nc2.Contains("EmptyContent"),
                     "param edit with no content answers INVALID EmptyContent", nc2);
                 Check(probe.WindowStateProbe().Contains("param=90"),
                     "session echoes param=90", probe.WindowStateProbe());
-                var nc3 = probe.SetQrInvertProbe(true);
+                var nc3 = probe.SetQrField("invert", "true");
                 Check(nc3.StartsWith("INVALID") && nc3.Contains("EmptyContent"),
                     "invert edit with no content answers INVALID EmptyContent", nc3);
-                Check(probe.SetQrInvertProbe(false).Contains("EmptyContent"),
+                Check(probe.SetQrField("invert", "false").Contains("EmptyContent"),
                     "invert=false pre-content echoes EmptyContent too",
                     probe.WindowStateProbe());
 
-                var c1 = probe.SetQrContentProbe(PayloadA);
+                var c1 = probe.SetQrField("content", PayloadA);
                 Check(c1.StartsWith("VALID") && c1.Contains($"dots={plan.EmittedCount}"),
                     "gate payload accepted with the normal-polarity dot count", c1);
-                Check(probe.SetQrCellShapeProbe("circle").StartsWith("VALID"),
+                Check(probe.SetQrField("shape", "circle").StartsWith("VALID"),
                     "circle shape accepted (content present)", probe.WindowStateProbe());
-                Check(probe.SetQrShapeParamProbe("90").StartsWith("VALID") &&
+                Check(probe.SetQrField("param", "90").StartsWith("VALID") &&
                       probe.WindowStateProbe().Contains("param=90"),
                     "dot size 90% accepted", probe.WindowStateProbe());
-                Check(probe.SetQrShapeParamProbe("abc").StartsWith("INVALID"),
-                    "a non-numeric dot size is refused", probe.SetQrShapeParamProbe("abc"));
-                Check(probe.SetQrShapeParamProbe("130").StartsWith("INVALID"),
-                    "an over-100% dot size is refused", probe.SetQrShapeParamProbe("130"));
-                Check(probe.SetQrShapeParamProbe("90").StartsWith("VALID"),
+                Check(probe.SetQrField("param", "abc").StartsWith("INVALID"),
+                    "a non-numeric dot size is refused", probe.SetQrField("param", "abc"));
+                Check(probe.SetQrField("param", "130").StartsWith("INVALID"),
+                    "an over-100% dot size is refused", probe.SetQrField("param", "130"));
+                Check(probe.SetQrField("param", "90").StartsWith("VALID"),
                     "dot size restores to 90%", "");
-                Check(probe.SetQrInvertProbe(true).StartsWith("VALID") &&
+                Check(probe.SetQrField("invert", "true").StartsWith("VALID") &&
                       probe.WindowStateProbe().Contains("invert=True"),
                     "invert=true round-trips", probe.WindowStateProbe());
-                var ivf = probe.SetQrInvertProbe(false);
+                var ivf = probe.SetQrField("invert", "false");
                 Check(ivf.StartsWith("VALID") && ivf.Contains($"dots={plan.EmittedCount}") &&
                       probe.WindowStateProbe().Contains("invert=False"),
                     "invert=false round-trips with the normal dot count", ivf);
@@ -409,7 +412,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     (IFeatureManager)docB.FeatureManager);
                 Check(plate != null, "backing plate created (B)",
                     plate == null ? "null" : plate.Name);
-                string invResp = probe.SetQrInvertProbe(true);
+                string invResp = probe.SetQrField("invert", "true");
                 Check(invResp.StartsWith("VALID") &&
                       invResp.Contains($"dots={planInv.EmittedCount}"),
                     "invert session verdict echoes the module plan", invResp);
@@ -448,7 +451,7 @@ namespace SolidWorksQrAddIn.LiveProbe
                     Check(cut != null, "inverted dots cut the plate (Dir=true precedent)",
                         cut == null ? "FeatureCut4 returned null" : cut.Name);
                 }
-                _ = probe.SetQrInvertProbe(false);
+                _ = probe.SetQrField("invert", "false");
                 try { sw.CloseDoc(docB.GetTitle()); } catch { }
 
                 // ================= GATE 7 — dimensionless end-state =================
@@ -468,21 +471,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                 CircleGate10_Square(sw, probe, template);
 
                 try { sw.UnloadAddIn(dllPath); } catch { }
-                Console.WriteLine(_failures == 0
-                    ? (_limitations == 0 ? "# CIRCLES ALL PASSED"
-                        : $"# CIRCLES PASSED with {_limitations} limitation(s)")
-                    : $"# {_failures} check(s) failed" +
-                      (_limitations > 0 ? $" ({_limitations} limitation(s))" : ""));
-                return _failures == 0 ? 0 : 1;
+                // The host prints the pass/limitation/failure summary
+                // (SummaryLine) and derives the exit code from the tallies.
+                return 0;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
                 return 1;
             }
-            finally
-            {
-                TeardownSpawned(sw);
             }
         }
 
@@ -1332,11 +1329,11 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Console.WriteLine($"#   near-bound rung {under.tag} dots={under.dots} " +
                     $"size={under.cells * 2}mm invert={under.invert}");
                 double sizeMm = under.cells * 2.0;   // pitch pinned at 2 mm
-                double setMs = TimeMs(() => _ = probe.SetQrSizeProbe(sizeMm.ToString(inv)));
+                double setMs = TimeMs(() => _ = probe.SetQrField("size", sizeMm.ToString(inv)));
                 string resp = "";
-                setMs += TimeMs(() => resp = probe.SetQrContentProbe(under.content));
+                setMs += TimeMs(() => resp = probe.SetQrField("content", under.content));
                 if (under.invert)
-                    setMs += TimeMs(() => resp = probe.SetQrInvertProbe(true));
+                    setMs += TimeMs(() => resp = probe.SetQrField("invert", "true"));
                 Check(resp.StartsWith("VALID") && resp.Contains($"dots={under.dots}"),
                     "near-bound payload validates at the module's count", resp);
 
@@ -1425,15 +1422,15 @@ namespace SolidWorksQrAddIn.LiveProbe
                     $"rescale_ms={rescaleMs:F0} enter_ms={enterMs:F0} " +
                     $"edit_regions_ms={editRegionsMs:F0}(r={editRegions}) exit2_ms={exit2Ms:F0}");
                 }
-                if (under.invert) _ = probe.SetQrInvertProbe(false);
+                if (under.invert) _ = probe.SetQrField("invert", "false");
 
                 // ---- over-bound refusal — before ANY host mutation ----
                 if (over.content != null)
                 {
                     Console.WriteLine($"#   over-bound rung {over.tag} dots={over.dots}");
-                    _ = probe.SetQrSizeProbe((over.cells * 2.0).ToString(inv));
-                    resp = probe.SetQrContentProbe(over.content);
-                    if (over.invert) resp = probe.SetQrInvertProbe(true);
+                    _ = probe.SetQrField("size", (over.cells * 2.0).ToString(inv));
+                    resp = probe.SetQrField("content", over.content);
+                    if (over.invert) resp = probe.SetQrField("invert", "true");
                     int featsBefore = FindSketchFeatureNames(doc).Count;
                     Check(resp.StartsWith("INVALID") && resp.Contains("TooManyInstances"),
                         "over-bound payload answers INVALID TooManyInstances on the session",
@@ -1448,13 +1445,13 @@ namespace SolidWorksQrAddIn.LiveProbe
                         "refusal left the feature tree untouched (no sketch created)",
                         $"features={FindSketchFeatureNames(doc).Count} before={featsBefore} " +
                         $"activeSketch={mgr.ActiveSketch != null}");
-                    if (over.invert) _ = probe.SetQrInvertProbe(false);
+                    if (over.invert) _ = probe.SetQrField("invert", "false");
                 }
                 else Limit("over-bound refusal", "no rung over the bound in the scanned range");
 
                 // restore session defaults for the regression gate
-                _ = probe.SetQrSizeProbe("25");
-                _ = probe.SetQrContentProbe(PayloadA);
+                _ = probe.SetQrField("size", "25");
+                _ = probe.SetQrField("content", PayloadA);
             }
             finally
             {
@@ -1472,69 +1469,56 @@ namespace SolidWorksQrAddIn.LiveProbe
         // block-sketch segment surface. Session-free instance only, same
         // refusal discipline as `circles`.
 
-        private static int CircleDiagMain(string[] args)
+        /// <summary>
+        /// The `circlediag` diagnostic (#62 — filed under diagnostics in
+        /// the registry): module-side plan + the D1–D6 raw-evidence dumps,
+        /// run against the hosted session. The legacy CircleDiagMain split
+        /// at the ceremony seams; its evidence prints are verbatim.
+        /// </summary>
+        private sealed class CircleDiagGate
         {
-            string deployDir = args.Length > 0 ? args[0] : Path.Combine(
-                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-                "SolidWorksQrAddIn");
-            string progId = args.Length > 1 ? args[1] : "SldWorks.Application.31";
-            string dllPath = Path.Combine(deployDir, "SolidWorksQrAddIn.dll");
+            private QrCirclePlan _plan = null!, _planInv = null!;
 
+            /// <summary>The module-side circle plan + emitted census line.</summary>
+            public bool Expectations()
+            {
             var gate = GateCircleVerdict(PayloadA, 25.0, invert: false);
             var gateInv = GateCircleVerdict(PayloadA, 25.0, invert: true);
             if (!gate.Succeeded || !gateInv.Succeeded ||
                 gate.Sketch!.CirclePlan == null || gateInv.Sketch!.CirclePlan == null)
             {
                 Console.WriteLine("# FATAL: module-side circle plan failed");
-                return 1;
+                return false;
             }
             var plan = gate.Sketch.CirclePlan!;
             var planInv = gateInv.Sketch.CirclePlan!;
+            _plan = plan; _planInv = planInv;
             Console.WriteLine($"# circlediag: emitted={plan.EmittedCount} " +
                 $"skipped={plan.SkippedCount} invEmitted={planInv.EmittedCount}");
-
-            if (System.Diagnostics.Process.GetProcessesByName("SLDWORKS").Length != 0)
-            {
-                Console.WriteLine("# FATAL: a SLDWORKS.exe process is already running — refusing.");
-                return 1;
+            return true;
             }
 
-            ISldWorks? sw = null;
+            /// <summary>The D1–D6 evidence dumps, verbatim.</summary>
+            public int Run(LiveSession session)
+            {
+            var sw = session.Sw;
+            var probe = session.Probe;
+            string dllPath = session.DllPath;
+            var plan = _plan;
             try
             {
-                sw = AttachOrLaunch(progId);
-                if (sw == null) { Console.WriteLine("# FATAL: launch"); return 1; }
-                WaitForStartup(sw);
-                int openDocs = 0;
-                try { openDocs = sw.GetDocumentCount(); } catch { }
-                if (sw.Visible || openDocs > 0)
-                {
-                    Console.WriteLine("# FATAL: session is visible or holds documents — refusing.");
-                    return 1;
-                }
-                _spawnedFresh = true;
-                var probe = TryGetProbe(sw);
-                if (probe == null)
-                {
-                    int loadResult = sw.LoadAddIn(dllPath);
-                    Console.WriteLine($"# LoadAddIn -> {loadResult}");
-                    probe = TryGetProbe(sw);
-                }
-                if (probe == null) { Console.WriteLine("# FATAL: no probe"); return 1; }
-
-                string template = sw.GetUserPreferenceStringValue(
-                    (int)swUserPreferenceStringValue_e.swDefaultTemplatePart);
+                string template = session.DefaultPartTemplate;
 
                 // ============ D1: probe verdict shapes ============
                 Console.WriteLine("# ---- D1: session probe verdict shapes ----");
-                Console.WriteLine($"#   shape(circle) noContent: {probe.SetQrCellShapeProbe("circle")}");
-                Console.WriteLine($"#   param(90) noContent:     {probe.SetQrShapeParamProbe("90")}");
-                Console.WriteLine($"#   invert(true) noContent:  {probe.SetQrInvertProbe(true)}");
+                Console.WriteLine($"#   shape(circle) noContent: {probe.SetQrField("shape", "circle")}");
+                Console.WriteLine($"#   param(90) noContent:     {probe.SetQrField("param", "90")}");
+                Console.WriteLine($"#   invert(true) noContent:  {probe.SetQrField("invert", "true")}");
                 Console.WriteLine($"#   state: {probe.WindowStateProbe()}");
-                Console.WriteLine($"#   content(A):              {probe.SetQrContentProbe(PayloadA)}");
-                Console.WriteLine($"#   param(90) withContent:   {probe.SetQrShapeParamProbe("90")}");
-                Console.WriteLine($"#   invert(true) w/content:  {probe.SetQrInvertProbe(true)}");
-                Console.WriteLine($"#   invert(false) w/content: {probe.SetQrInvertProbe(false)}");
+                Console.WriteLine($"#   content(A):              {probe.SetQrField("content", PayloadA)}");
+                Console.WriteLine($"#   param(90) withContent:   {probe.SetQrField("param", "90")}");
+                Console.WriteLine($"#   invert(true) w/content:  {probe.SetQrField("invert", "true")}");
+                Console.WriteLine($"#   invert(false) w/content: {probe.SetQrField("invert", "false")}");
                 Console.WriteLine($"#   state: {probe.WindowStateProbe()}");
 
                 // ============ D2: in-edit vs committed census ============
@@ -1743,7 +1727,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 // ============ D6: block-sketch hostSegs ============
                 Console.WriteLine("# ---- D6: square-mode host sketch ----");
-                _ = probe.SetQrCellShapeProbe("square");
+                _ = probe.SetQrField("shape", "square");
                 // Exit any stale edit session before the next create — a
                 // lingering in-edit sketch makes InsertSketch a no-op whose
                 // ActiveSketch never resolves.
@@ -1765,7 +1749,7 @@ namespace SolidWorksQrAddIn.LiveProbe
 
                 try { sw.CloseDoc(docB.GetTitle()); } catch { }
                 try { sw.UnloadAddIn(dllPath); } catch { }
-                Console.WriteLine("# circlediag done");
+                // The host prints `# circlediag done` (SummaryPass).
                 return 0;
             }
             catch (Exception ex)
@@ -1773,9 +1757,6 @@ namespace SolidWorksQrAddIn.LiveProbe
                 Console.WriteLine($"# FATAL: {ex.GetType().Name}: {ex.Message}");
                 return 1;
             }
-            finally
-            {
-                TeardownSpawned(sw);
             }
         }
 
@@ -1819,13 +1800,13 @@ namespace SolidWorksQrAddIn.LiveProbe
             if (doc == null) return;
             try
             {
-                Check(probe.SetQrCellShapeProbe("square").StartsWith("VALID"),
-                    "shape switches back to square", probe.SetQrCellShapeProbe("square"));
+                Check(probe.SetQrField("shape", "square").StartsWith("VALID"),
+                    "shape switches back to square", probe.SetQrField("shape", "square"));
                 var verdict = QrSketchGenerator.Generate(
                     new QrSketchRequest(PayloadA, 25.0, 0.03));
                 Check(verdict.Succeeded && verdict.Sketch!.CirclePlan == null,
                     "square request has no circle plan");
-                string contentResp = probe.SetQrContentProbe(PayloadA);
+                string contentResp = probe.SetQrField("content", PayloadA);
                 Check(contentResp.StartsWith("VALID") &&
                       contentResp.Contains($"segs={verdict.Sketch!.Info.SegmentCount}"),
                     "square payload validates with segment count", contentResp);

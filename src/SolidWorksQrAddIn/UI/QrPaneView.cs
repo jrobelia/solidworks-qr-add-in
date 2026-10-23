@@ -23,11 +23,14 @@ namespace SolidWorksQrAddIn.UI
     /// was: all content→picture→create behaviour lives in the session
     /// (headlessly tested); this class only:
     ///
-    ///   - pushes the field texts verbatim into the session
-    ///     (<see cref="QrSketchSession.SetContent"/>, <see cref="QrSketchSession.SetSizeText"/>,
-    ///     <see cref="QrSketchSession.SetGrowthText"/>) — DEBOUNCED, so a
-    ///     burst of keystrokes coalesces into one regeneration instead of
-    ///     regenerating a dense QR synchronously per keystroke — plus the
+    ///   - stages the field texts verbatim into the session's pending edits
+    ///     (<see cref="QrSketchSession.StageContent"/>, <see cref="QrSketchSession.StageSizeText"/>,
+    ///     <see cref="QrSketchSession.StageGrowthText"/>) and fires
+    ///     <see cref="QrSketchSession.CommitPendingEdits"/> off a DEBOUNCE
+    ///     timer, so a burst of keystrokes coalesces into one regeneration
+    ///     instead of regenerating a dense QR synchronously per keystroke.
+    ///     The pending state itself is the session's (ticket #66) — this
+    ///     view owns the TIMER only, never a dirty flag — plus the
     ///     discrete controls: the error-correction selector pushes
     ///     <see cref="QrSketchSession.SetEccLevel"/>, the invert checkbox
     ///     pushes <see cref="QrSketchSession.SetInvert"/> and the ring-split
@@ -47,8 +50,10 @@ namespace SolidWorksQrAddIn.UI
     ///     sketch insertion consumes,
     ///   - calls <see cref="QrSketchSession.CreateSketch"/> with a freshly
     ///     created host adapter (fresh host state every press — no cached
-    ///     support) — only AFTER flushing every pending field edit, so a
-    ///     create can never run on a stale, not-yet-regenerated request,
+    ///     support) — the create commits pending edits INSIDE itself, so a
+    ///     create can never run on a stale, not-yet-regenerated request
+    ///     whoever holds the trigger (the button, a probe, the pane-hide
+    ///     path),
     ///   - lays out <see cref="QrSketchSession.InfoLines"/> as label/value
     ///     text rows — plain facts, deliberately not text boxes — and
     ///     <see cref="QrSketchSession.StatusText"/>,
@@ -60,8 +65,8 @@ namespace SolidWorksQrAddIn.UI
     public sealed class QrPaneView : System.Windows.Controls.UserControl
     {
         /// <summary>
-        /// How long after the last keystroke pending field edits are pushed
-        /// into the session. Dense payloads take seconds to regenerate —
+        /// How long after the last keystroke pending field edits commit in
+        /// the session. Dense payloads take seconds to regenerate —
         /// regenerating per keystroke would make typing unbearable.
         /// </summary>
         private static readonly TimeSpan EditDebounce = TimeSpan.FromMilliseconds(400);
@@ -131,17 +136,13 @@ namespace SolidWorksQrAddIn.UI
         private readonly Grid _infoGrid;
         private readonly TextBlock _status;
         private readonly DispatcherTimer _editDebounce;
-        private bool _contentDirty;
-        private bool _sizeDirty;
-        private bool _growthDirty;
-        private bool _shapeParamDirty;
         private bool _suppressFieldEvents;
-        // Preset-field inputs keyed by the descriptors' contract Key, and the
-        // keys with a pending debounced text edit. Discrete controls
-        // (dropdown, checkbox) apply on change — they are never dirty.
+        // Preset-field inputs keyed by the descriptors' contract Key.
+        // Pending-edit state (which fields hold uncommitted text) is the
+        // session's, queried per pull — never mirrored here. Discrete
+        // controls (dropdown, checkbox) apply on change — never staged.
         private readonly Dictionary<string, Control> _presetInputs =
             new Dictionary<string, Control>();
-        private readonly HashSet<string> _dirtyPresetFields = new HashSet<string>();
         // Template-kind chrome (spec #21): the insert-property dropdown and
         // the read-only Resolved row, keyed by the field they decorate —
         // both refresh from session surfaces on every pull.
@@ -416,11 +417,11 @@ namespace SolidWorksQrAddIn.UI
             };
 
             _editDebounce = new DispatcherTimer { Interval = EditDebounce };
-            _editDebounce.Tick += (_, __) => FlushPendingEdits();
-            _contentBox.TextChanged += (_, __) => MarkEdited(ref _contentDirty);
-            _sizeBox.TextChanged += (_, __) => MarkEdited(ref _sizeDirty);
-            _growthBox.TextChanged += (_, __) => MarkEdited(ref _growthDirty);
-            _shapeParamBox.TextChanged += (_, __) => MarkEdited(ref _shapeParamDirty);
+            _editDebounce.Tick += (_, __) => CommitPendingEdits();
+            _contentBox.TextChanged += (_, __) => StageEdit(() => _session.StageContent(_contentBox.Text));
+            _sizeBox.TextChanged += (_, __) => StageEdit(() => _session.StageSizeText(_sizeBox.Text, _sizeInputUnit));
+            _growthBox.TextChanged += (_, __) => StageEdit(() => _session.StageGrowthText(_growthBox.Text));
+            _shapeParamBox.TextChanged += (_, __) => StageEdit(() => _session.StageShapeParameterText(_shapeParamBox.Text));
             // The cell-shape dropdown is discrete — a committed pick pushes
             // into the session immediately, exactly like the ECC selector;
             // an unrecognised code is refused by the shared parser, never
@@ -478,16 +479,13 @@ namespace SolidWorksQrAddIn.UI
         /// The session changed without this view driving it (a probe edit,
         /// a create outcome): re-pull the field texts, picture and status so
         /// the shown view can never diverge from the session. A field with a
-        /// pending debounced edit keeps the engineer's in-progress text —
-        /// its queued flush will push the newer text back into the session.
+        /// pending session-side edit keeps the engineer's in-progress text —
+        /// its queued commit will push the newer text back into the session.
         /// Callers must already be on this view's dispatcher (the task-pane
         /// adapter marshals).
         /// </summary>
         public void SyncFromSession()
         {
-            if (_sizeDirty && (_sizeInputUnit.MetresPerUnit != _session.LengthUnit.MetresPerUnit ||
-                               _sizeInputUnit.Symbol != _session.LengthUnit.Symbol))
-                FlushPendingEdits();
             _suppressFieldEvents = true;
             try
             {
@@ -500,11 +498,11 @@ namespace SolidWorksQrAddIn.UI
                 if (_shownPresetId != _session.ContentPresetId)
                     RebuildPresetFields();
                 PullPresetFieldValues();
-                if (!_contentDirty && _contentBox.Text != _session.Content)
+                if (_session.PendingContentText == null && _contentBox.Text != _session.Content)
                     _contentBox.Text = _session.Content;
-                if (!_sizeDirty && _sizeBox.Text != _session.SizeText)
+                if (_session.PendingSizeText == null && _sizeBox.Text != _session.SizeText)
                     _sizeBox.Text = _session.SizeText;
-                if (!_growthDirty && _growthBox.Text != _session.GrowthText)
+                if (_session.PendingGrowthText == null && _growthBox.Text != _session.GrowthText)
                     _growthBox.Text = _session.GrowthText;
                 // A selector pick carries no in-progress state — always
                 // re-pull. The shape-parameter text is a debounced field:
@@ -513,7 +511,7 @@ namespace SolidWorksQrAddIn.UI
                 var shapeCode = QrCellShapes.CodeFor(_session.CellShape);
                 if (!Equals(_shapeCombo.SelectedValue, shapeCode))
                     _shapeCombo.SelectedValue = shapeCode;
-                if (!_shapeParamDirty && _shapeParamBox.Text != _session.ShapeParameterText)
+                if (_session.PendingShapeParameterText == null && _shapeParamBox.Text != _session.ShapeParameterText)
                     _shapeParamBox.Text = _session.ShapeParameterText;
                 if (!Equals(_eccBox.SelectedValue, _session.EccLevel.ToString()))
                     _eccBox.SelectedValue = _session.EccLevel.ToString();
@@ -538,9 +536,8 @@ namespace SolidWorksQrAddIn.UI
         {
             if (_suppressFieldEvents)
                 return;
-            // Pending edits belong to the OLD preset — they flush under it
-            // before the new selection composes.
-            FlushPendingEdits();
+            // Pending edits belong to the OLD preset — the setter commits
+            // them under it before the new selection composes.
             _session.SetContentType(_presetCombo.SelectedValue as string);
         }
 
@@ -555,7 +552,6 @@ namespace SolidWorksQrAddIn.UI
         {
             _presetFieldsPanel.Children.Clear();
             _presetInputs.Clear();
-            _dirtyPresetFields.Clear();
             _insertDropdowns.Clear();
             _resolvedRows.Clear();
             _shownPresetId = _session.ContentPresetId;
@@ -629,7 +625,8 @@ namespace SolidWorksQrAddIn.UI
                         box.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
                     }
                     box.Text = value;
-                    box.TextChanged += (_, __) => MarkPresetFieldEdited(field.Key);
+                    box.TextChanged += (_, __) => StageEdit(
+                        () => _session.StagePresetField(field.Key, box.Text));
                     input = box;
                     break;
                 }
@@ -778,47 +775,21 @@ namespace SolidWorksQrAddIn.UI
         }
 
         /// <summary>
-        /// A text-kind preset input keystroke — marks the field dirty and
-        /// restarts the shared debounce, exactly like the fixed fields.
-        /// </summary>
-        private void MarkPresetFieldEdited(string key)
-        {
-            if (_suppressFieldEvents)
-                return;
-            _dirtyPresetFields.Add(key);
-            _editDebounce.Stop();
-            _editDebounce.Start();
-        }
-
-        /// <summary>
         /// A discrete preset input (dropdown pick, checkbox toggle) — no
         /// keystroke burst to debounce, so it applies at once, over the
-        /// freshest text values: pending edits flush first.
+        /// freshest text values: the setter commits pending edits first.
         /// </summary>
         private void OnPresetInputPicked(string key, string value)
         {
             if (_suppressFieldEvents)
                 return;
-            FlushPendingEdits();
             _session.SetPresetField(key, value);
-        }
-
-        /// <summary>The field-map value an input currently holds.</summary>
-        private static string ReadPresetValue(Control input)
-        {
-            switch (input)
-            {
-                case TextBox box: return box.Text;
-                case CheckBox check: return check.IsChecked == true ? "true" : "false";
-                case ComboBox combo: return combo.SelectedValue as string ?? string.Empty;
-                default: return string.Empty;
-            }
         }
 
         /// <summary>
         /// Session→view pull for the preset inputs — the same convention the
-        /// fixed fields follow: a field with a pending debounced edit keeps
-        /// the engineer's in-progress text; everything else shows the
+        /// fixed fields follow: a field with a pending session-side edit
+        /// keeps the engineer's in-progress text; everything else shows the
         /// session's stored value (descriptor default when never entered).
         /// </summary>
         private void PullPresetFieldValues()
@@ -832,7 +803,7 @@ namespace SolidWorksQrAddIn.UI
                     ? v : field.DefaultValue;
                 switch (input)
                 {
-                    case TextBox box when !_dirtyPresetFields.Contains(field.Key):
+                    case TextBox box when !_session.IsPresetFieldPending(field.Key):
                         if (box.Text != value)
                             box.Text = value;
                         break;
@@ -850,63 +821,34 @@ namespace SolidWorksQrAddIn.UI
         }
 
         // ---------------- debounced field edits ----------------
-        // A keystroke only MARKS the field dirty and restarts the timer; the
-        // expensive session regeneration runs once per quiet interval, not
-        // once per keystroke. The dirty flag is also the no-stale-request
-        // guard: Create flushes every pending edit before asking the session
-        // to create, so the request it validates is always the shown one.
+        // A keystroke only STAGES the box text into the session's pending
+        // edits and restarts the timer; the expensive session regeneration
+        // runs once per quiet interval, not once per keystroke. The pending
+        // state is the session's (ticket #66): this view owns the timer that
+        // decides WHEN to commit — never a dirty flag — so probes and the
+        // session's own entry points share the one queue.
 
-        private void MarkEdited(ref bool dirtyFlag)
+        private void StageEdit(System.Action stage)
         {
             if (_suppressFieldEvents)
                 return;   // a session→view text pull is not an edit
-            dirtyFlag = true;
+            stage();
             _editDebounce.Stop();
             _editDebounce.Start();
         }
 
         /// <summary>
-        /// Push every pending field edit into the session now, regenerating
-        /// once per dirty field. The debounce tick and Create both funnel
-        /// here — a create can never run on inputs that have not been
-        /// revalidated yet. Also called by the task-pane adapter when the tab
-        /// is hidden, so a queued edit still lands in the session.
+        /// Hand the session its commit trigger: every staged edit lands now,
+        /// regenerating once per staged field. The debounce tick and the
+        /// task-pane adapter's tab-hide path both funnel here — a queued
+        /// edit still lands in the session when the pane goes away. (Create
+        /// needs no call: <see cref="QrSketchSession.CreateSketch"/>
+        /// commits inside itself.)
         /// </summary>
-        public void FlushPendingEdits()
+        public void CommitPendingEdits()
         {
             _editDebounce.Stop();
-            if (_sizeDirty)
-            {
-                _sizeDirty = false;
-                _session.SetSizeText(_sizeBox.Text, _sizeInputUnit);
-            }
-            if (_growthDirty)
-            {
-                _growthDirty = false;
-                _session.SetGrowthText(_growthBox.Text);
-            }
-            if (_shapeParamDirty)
-            {
-                _shapeParamDirty = false;
-                _session.SetShapeParameterText(_shapeParamBox.Text);
-            }
-            // Preset-field edits flush BEFORE the content box: a direct
-            // content edit under a preset is the Raw-reverting manual edit —
-            // it must land last so the typed text, not a recomposition, wins.
-            // A key stays in the dirty set until ITS push — the same
-            // convention the fixed fields use — so a sync triggered by an
-            // earlier push can never re-pull (wipe) not-yet-flushed inputs.
-            foreach (var key in _dirtyPresetFields.ToArray())
-            {
-                _dirtyPresetFields.Remove(key);
-                if (_presetInputs.TryGetValue(key, out var input))
-                    _session.SetPresetField(key, ReadPresetValue(input));
-            }
-            if (_contentDirty)
-            {
-                _contentDirty = false;
-                _session.SetContent(_contentBox.Text);
-            }
+            _session.CommitPendingEdits();
             RefreshView();
         }
 
@@ -939,9 +881,9 @@ namespace SolidWorksQrAddIn.UI
         {
             try
             {
-                // Flush BEFORE create: the request being created must be the
-                // one the engineer sees, never an earlier still-valid state.
-                FlushPendingEdits();
+                // The flush is INSIDE the create: the request being created
+                // is the one the engineer sees, never an earlier still-valid
+                // state — guaranteed by the session, not by this handler.
                 var result = _session.CreateSketch(_hostProvider());
                 ShowStatus(result.Message, isError: !result.Succeeded);
             }

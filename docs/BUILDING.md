@@ -122,7 +122,13 @@ only to `tests\...\bin` — never over a deployed/registered DLL. The suite cove
   revalidation (no stale cross-document support), create blocked while
   editing, single-surface lifecycle (focus-or-recreate, close, release — the
   task-pane tab) and session→view sync of probe-driven edits via the
-  `IQrSketchWindow` seam.
+  `IQrSketchWindow` seam. Pending edits (ticket #66,
+  `QrPendingEditTests`): staged field text is verbatim session state — a
+  stage never revalidates or syncs, the commit drains preset fields before
+  the content box (the Raw-reverting manual edit lands last) and a preset
+  switch under the old preset, every setter commits the queue before its
+  own edit lands, and `CreateSketch` flushes inside itself so a create can
+  never observe unflushed edits.
 - **Payload composer** (`PayloadComposerTests`, spec #11/ticket #26): the
   nine content-type presets in dropdown order — the eight spec-11 types
   plus spec-21's SW Properties — with unique field keys and declared
@@ -219,19 +225,56 @@ live acceptance checklist is `docs/ACCEPTANCE.md`.
 ## Live verification (requires SolidWorks)
 
 LiveProbe is dev tooling — it never ships in the deployment folder; run it
-from its own build output, passing the deployed folder:
+from its own build output. The invocation contract is unchanged:
+`LiveProbe.exe [<gate> [deployDir] [progId]]` — the first argument is a
+registry verb; when no verb matches, the unnamed default suite runs on the
+raw args (its arg0 is the deployDir):
 
 ```powershell
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy   # timings
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy  # native unit events + rendered pane
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe $deploy          # the default suite (tickets 2–6)
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe units $deploy    # native unit events + rendered pane
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe xsettings $deploy  # spec-11 settings gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circledims $deploy  # ticket-#40 dims/equations gate
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circles $deploy    # ticket-#42 circle-pattern gates
-& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe swprops $deploy     # ticket-#46 SW Properties end-to-end gates
 & tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe ringsplit $deploy   # ticket-#55 ring-split (open nested rings) gates
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe perf $deploy     # generation + insertion timings gate
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe undoapi $deploy  # SetApiUndoObject verification spike
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circleladder $deploy  # circle-mode density-ladder spike ([refuse])
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe pattern          # sketch-pattern spike — [progId] [PAT<n>], probe-free
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe circlediag $deploy  # ticket-#42 diagnostic driver (prints raw evidence, no pass/fail)
+& tools\LiveProbe\bin\x64\Release\net48\SolidWorksQrAddIn.LiveProbe.exe list                # the mode registry — gates vs spikes/diagnostics, no COM
 ```
+
+Every mode is a row in the GateHost registry (tickets #61–#63), grouped by
+category exactly as `list` prints them: **gates** return pass/fail
+verdicts (the recorded runs live in the `*-GATES.md` files) — the
+default suite, `circledims`, `circles`, `xsettings`, `swprops`,
+`ringsplit`, `units`, `perf`; **spikes** and
+**diagnostics** produce evidence rather than verdicts — `undoapi`,
+`pattern`, `circleladder`, `circlediag`. GateHost (`GateHost.cs` +
+`SessionCeremony.cs`) owns the live-session ceremony once for all of
+them: the mode's expectations print, the occupied-seat refusal, launch +
+startup wait, the visible/open-documents refusal, probe acquisition with
+the per-gate surface predicate and the LoadAddIn retry, the mode's check
+sequence against `LiveSession`, the pass/fail summary, and teardown that
+kills only the spawned PID.
+
+The occupied-seat refusal is uniform — **every mode refuses while any
+`SLDWORKS.exe` process exists; none opts out.** A spawned instance still
+shares per-user state (settings snapshot, AddInsStartup flag,
+registration, license seat) with a live session, so a running
+SLDWORKS.exe is never a valid target — `perf`, `undoapi`, `circledims`
+and the default suite ran on only the post-attach backstop (visible /
+open-documents), and now refuse before attaching like the rest.
+Expectations print before the refusal, so a blocked run still shows what
+the live half would check. `pattern` is the probe-free exception — it
+drives raw `ISldWorks`, never loads the add-in, and keeps its
+`[progId] [PAT<n>]` arg shape (`LiveProbe.exe pattern 12`);
+`circleladder` keeps `[deployDir] [progId] [refuse]`. `Program.cs` is
+the registry lookup + execute only — nothing dispatches outside the
+registry. The post-consolidation smoke run is recorded in
+`docs/GATEHOST-GATES.md`.
 
 The `circles` mode (ticket #42) is the spec-13 circle-pattern production
 gate: session plumbing and state round-trips, the emitted-dot census
@@ -266,12 +309,14 @@ and `SetPatternDimProbe` (a `SetSystemValue3` rescale of the QR-square
 master dim), verified against the expected `box/N` law — see
 `docs/CIRCLE-DIMENSIONS.md` for the dim/equation map it asserts. It is a
 second `LiveProbe.exe pattern 12` away from the raw-API replication
-(PAT12 in `docs/PATTERN-SPIKE.md`). Run after `sync-dev-deploy.ps1` so
-the deployed add-in carries the build under test.
+(PAT12 in `docs/PATTERN-SPIKE.md`). It refuses while any `SLDWORKS.exe`
+process exists — the legacy body claimed that discipline but never
+enforced it; the uniform ceremony does. Run after `sync-dev-deploy.ps1`
+so the deployed add-in carries the build under test.
 
 The `xsettings` mode (ticket #28) is the spec-11 live gate — it drives the
-extended-settings probes (`SetQrContentTypeProbe`, `SetQrPresetFieldProbe`,
-`SetQrEccProbe`, `SetQrInvertProbe`) through the pane path, performs one create
+extended settings through `SetQrField` (`preset` + preset-field keys, `ecc`,
+`invert`) on the pane path, performs one create
 with a non-default preset + ECC level + inverted polarity, verifies the landed
 block instance module-identically (definition census plus an exploded 1:1
 contour-bounding-box match), and replays the insertion-guard floor on a denser
@@ -288,7 +333,7 @@ live gate. The harness itself writes the fixture — document-level,
 configuration-specific, empty and whitespace-only properties via
 `CustomPropertyManager.Add3` on TWO configurations of the same part (plus a
 second document with its own values) — then drives the pane path
-(`SetQrContentTypeProbe`/`SetQrPresetFieldProbe`/`WindowStateProbe`'s
+(`SetQrField` `preset` + `template`/`WindowStateProbe`'s
 `viewTemplateNames`/`viewResolved` echoes/`CreateQrFromWindowProbe`) and
 proves each created sketch encodes exactly the resolved literal by the
 module-identical route (block census + exploded 1:1 contour match).
@@ -300,7 +345,7 @@ exists** and prints its fixture plan before that refusal. Gate results are
 recorded in `docs/SWPROPS-GATES.md`.
 
 The `ringsplit` mode (ticket #55) is the spec-51 open-nested-rings live
-gate. It drives the pane path (`SetQrRingSplitProbe` through
+gate. It drives the pane path (`SetQrField("ringsplit", …)` through
 `CreateQrFromWindowProbe`), proves preview/create parity against
 `QrPictureRenderer`, then verifies the landed sketches module-identically:
 block census, exploded 1:1 contour match, `QrNestingCensus` region totals
@@ -322,13 +367,17 @@ watcher plus the actual pane's rendered size label, input, and cell-size value.
 It changes the document unit system, calls `SetUnits`, and switches documents
 without invoking the QR menu command or Create. The pending QR's physical size
 stays fixed while its input and details convert to the active document's unit.
-On SW 2023 SP5, assigning `LengthUnit` directly does not emit
-`UnitsChangeNotify`; the probe reports that API-only route diagnostically,
-not as an interactive event test. Use `SetUnits` or the unit-system preference
-when an API-driven change must notify listeners. Pass the folder actually used
-by COM registration: specifying a different DLL path does not override its
-`CodeBase`. An installer-managed setup uses Program Files, so install the
-updated installer before checking the rendered pane.
+Like every mode it **refuses to run while any `SLDWORKS.exe` process
+exists** — the uniform occupied-seat refusal above — and its probe
+acquisition is the ceremony's ("installed add-in probe available" is the
+host's surface verdict). On SW 2023 SP5, assigning `LengthUnit` directly
+does not emit `UnitsChangeNotify`; the probe reports that API-only route
+diagnostically, not as an interactive event test. Use `SetUnits` or the
+unit-system preference when an API-driven change must notify listeners.
+Pass the folder actually used by COM registration: specifying a different
+DLL path does not override its `CodeBase`. An installer-managed setup
+uses Program Files, so install the updated installer before checking the
+rendered pane.
 
 The probe launches/attaches SolidWorks via `SldWorks.Application.31` +
 `Activator.CreateInstance` (PowerShell late binding does **not** work — verified),
@@ -336,10 +385,12 @@ loads the add-in with `LoadAddIn`, fetches it via `GetAddInObject("{clsid}")`,
 and invokes its public probe methods (`RunQrSketchProbe`,
 `RunFailingQrSketchProbe`, `AddinStateProbe`, plus the session/window
 probes `OpenQrWindowProbe`, `CloseQrWindowProbe`, `WindowStateProbe`,
-`SetQrContentProbe`, `SetQrSizeProbe`, `SetQrGrowthProbe`, `SetQrEccProbe`,
-`SetQrInvertProbe`, `SetQrRingSplitProbe`, `SetQrContentTypeProbe`,
-`SetQrPresetFieldProbe`,
+`SetQrField(name, value)` — one field-setter carrying the
+`WindowStateProbe` vocabulary: content/size/growth/ecc/invert/ringsplit/
+shape/param, `preset` for the content-type id, and preset-field keys —
 `CreateQrFromWindowProbe`, `PreviewSignatureProbe`,
+`UndoRedoQrProbe`, `PatternCensusProbe`, `PatternDimsProbe`,
+`SetPatternDimProbe`, `SwPropertiesProbe`, `SwPropertyResolveProbe`,
 `RunCleanupFailQrSketchProbe`)
 through `IDispatch`/`InvokeMember` — the same mechanism SolidWorks uses for
 command callbacks. (Note: the returned RCW does NOT QI our managed
@@ -412,15 +463,20 @@ only — `taskkill /PID <pid> /F`. `taskkill /IM SLDWORKS.exe /F` kills the
 user's interactive session too; never use it.
 
 **Attached-session guard:** `Activator.CreateInstance` returns the *running*
-instance when one exists — so if the engineer's SolidWorks is already open,
-the probe would attach to their interactive session instead of spawning an
-invisible one. The probe therefore refuses to run when the attached instance
-is visible or already holds documents, and only kills an instance it spawned
-fresh (`TeardownSpawned`). A second ProgID argument selects the version
+instance when one exists — so if the engineer's SolidWorks were already
+open, a bare attach would land on their interactive session instead of
+spawning an invisible one. That is exactly what the uniform occupied-seat
+refusal prevents: every mode checks for a running `SLDWORKS.exe` *before*
+attaching. The post-launch check — the spawned instance must be invisible
+and hold no documents — remains as the backstop against an instance
+launched in between, and the probe only kills an instance it spawned
+fresh (`TeardownSpawned`). The `[progId]` argument selects which
+*installed* release to spawn
 (`SolidWorksQrAddIn.LiveProbe.exe <deployDir> SldWorks.Application.30`) —
-useful when another SolidWorks release is already running. This box has
-only SW 2023 installed — `SldWorks.Application.30`/`.31` both resolve to
-the same server (the unqualified ProgID belongs to the last installed).
+never a way around the refusal: no mode runs while any `SLDWORKS.exe`
+exists. This box has only SW 2023 installed —
+`SldWorks.Application.30`/`.31` both resolve to the same server (the
+unqualified ProgID belongs to the last installed).
 
 `NewDocument` requires an explicit template path — an empty one pops a
 template dialog that hangs a headless run. The probe passes the configured
@@ -430,6 +486,11 @@ template dialog that hangs a headless run. The probe passes the configured
 `Part.PRTDOT`, only `MBD\*.prtdot`.
 
 ### Verified live on this baseline (SW 2023 SP5, rev 31.5.0, invisible instance)
+
+_These records predate the GateHost consolidation (tickets #61–#63); the
+check sequences they describe migrated verbatim, so the recorded
+`*-GATES.md` verdicts stand — the post-consolidation smoke run is
+recorded in `docs/GATEHOST-GATES.md`._
 
 - **Full-suite live run 2026-10-09 — `# ALL CHECKS PASSED`, 185 checks,
   exit 0.** Window lifecycle, modeless host, invalid-input rejections,
